@@ -1,0 +1,14 @@
+# Godot 的缓存（game/.godot/）在 game/.gitignore 里忽略
+
+# Personal docs (each person keeps their own, may be a separate git repo)
+docs/local/
+
+# Personal VS Code settings (contain each person's local Godot path)
+.vscode/settings.json
+
+# 旧 Python 版（archive/python 分支）在本地留下的文件，切回 master 时不显示
+__pycache__/
+.venv/
+build/
+dist/
+uv.lock

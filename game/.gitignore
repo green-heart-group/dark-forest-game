@@ -1,0 +1,5 @@
+# Godot 自动生成的缓存，每台电脑各自生成
+.godot/
+
+# VS Code 个人设置，里面有各自电脑上的 Godot 路径
+.vscode/
