@@ -4,6 +4,7 @@ import random
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 import matplotlib as mpl
 
@@ -18,6 +19,10 @@ mpl.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "PingFang SC", "
 mpl.rcParams["axes.unicode_minus"] = False
 
 # ==================== 常量 ====================
+# 界面字体：按顺序取第一个系统里有的（都要能显示中文）
+UI_FONT_CANDIDATES = ["Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "SimHei"]
+UI_FONT = "TkDefaultFont"  # main() 里会换成实际选中的字体
+
 GRID = 10
 LAYERS = 10
 
@@ -982,32 +987,32 @@ class GameUI:
         dlg.geometry("440x320")
         dlg.configure(bg="#101020")
         tk.Label(dlg, text="自定义你的母星系", fg="#00ffcc", bg="#101020",
-                 font=("Consolas", 14, "bold")).pack(pady=10)
+                 font=(UI_FONT, 14, "bold")).pack(pady=10)
         tk.Label(dlg, text="坐标 (0-9)", fg="#ffcc00", bg="#101020",
-                 font=("Consolas", 11)).pack()
+                 font=(UI_FONT, 11)).pack()
         frame = tk.Frame(dlg, bg="#101020")
         frame.pack(pady=6)
-        ex = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=("Consolas", 12))
-        ey = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=("Consolas", 12))
-        ez = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=("Consolas", 12))
+        ex = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=(UI_FONT, 12))
+        ey = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=(UI_FONT, 12))
+        ez = tk.Entry(frame, width=5, bg="#050510", fg="#00ffcc", font=(UI_FONT, 12))
         for e, lab in [(ex, "x"), (ey, "y"), (ez, "z")]:
             tk.Label(frame, text=lab, fg="#00ffcc", bg="#101020",
-                     font=("Consolas", 12)).pack(side=tk.LEFT)
+                     font=(UI_FONT, 12)).pack(side=tk.LEFT)
             e.pack(side=tk.LEFT, padx=4)
         ex.insert(0, str(random.randint(0, GRID-1)))
         ey.insert(0, str(random.randint(0, GRID-1)))
         ez.insert(0, str(random.randint(0, LAYERS-1)))
         tk.Label(dlg, text="星系类型（可留空由系统决定）", fg="#ffcc00", bg="#101020",
-                 font=("Consolas", 11)).pack(pady=(12, 2))
+                 font=(UI_FONT, 11)).pack(pady=(12, 2))
         star_var = tk.StringVar(value="")
         for st in STAR_TYPES:
             info = STAR_PROD[st]
             tk.Radiobutton(dlg, text=f"{st}（能量+{info['energy']}，矿石+{info['mineral']}）",
                            variable=star_var, value=st, fg="#00ffcc", bg="#101020",
-                           selectcolor="#203040", font=("Consolas", 10)).pack(anchor="w", padx=30)
+                           selectcolor="#203040", font=(UI_FONT, 10)).pack(anchor="w", padx=30)
         tk.Radiobutton(dlg, text="随机", variable=star_var, value="",
                        fg="#00ffcc", bg="#101020", selectcolor="#203040",
-                       font=("Consolas", 10)).pack(anchor="w", padx=30)
+                       font=(UI_FONT, 10)).pack(anchor="w", padx=30)
 
         def confirm():
             try:
@@ -1034,7 +1039,7 @@ class GameUI:
 
         dlg.protocol("WM_DELETE_WINDOW", on_close)
         tk.Button(dlg, text="开始游戏", command=confirm, bg="#203040", fg="#00ffcc",
-                  font=("Consolas", 12, "bold")).pack(pady=14)
+                  font=(UI_FONT, 12, "bold")).pack(pady=14)
 
     def _build_ui(self):
         left_bar = tk.Frame(self.root, bg="#0a0a1a", width=360)
@@ -1043,18 +1048,18 @@ class GameUI:
 
         self.info_top = tk.Label(
             left_bar, text="", fg="#00ffcc", bg="#0a0a1a",
-            font=("Consolas", 11), justify=tk.LEFT, anchor="nw",
+            font=(UI_FONT, 11), justify=tk.LEFT, anchor="nw",
             bd=2, relief=tk.SOLID,
         )
         self.info_top.pack(fill=tk.X, padx=6, pady=6)
 
         tk.Label(left_bar, text="已探知文明坐标", fg="#ffcc00", bg="#0a0a1a",
-                 font=("Consolas", 11, "bold")).pack(anchor="w", padx=6, pady=(12, 2))
+                 font=(UI_FONT, 11, "bold")).pack(anchor="w", padx=6, pady=(12, 2))
         list_frame = tk.Frame(left_bar, bg="#0a0a1a")
         list_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=2)
         self.known_listbox = tk.Listbox(
             list_frame, bg="#050510", fg="#ff8800",
-            font=("Consolas", 10), selectbackground="#203040",
+            font=(UI_FONT, 10), selectbackground="#203040",
         )
         scrollbar = tk.Scrollbar(list_frame, command=self.known_listbox.yview)
         self.known_listbox.config(yscrollcommand=scrollbar.set)
@@ -1075,40 +1080,40 @@ class GameUI:
         right.pack_propagate(False)
 
         f0 = tk.LabelFrame(right, text="打击起点", fg="#ffcc00", bg="#101020",
-                           font=("Consolas", 10, "bold"))
+                           font=(UI_FONT, 10, "bold"))
         f0.pack(fill=tk.X, padx=8, pady=4)
         self.origin_menu = ttk.Combobox(f0, textvariable=self.origin_choice,
                                         values=["母星系"], state="readonly",
-                                        font=("Consolas", 10))
+                                        font=(UI_FONT, 10))
         self.origin_menu.pack(fill=tk.X, padx=6, pady=4)
 
         f1 = tk.LabelFrame(right, text="矢量方向（斜率系数）", fg="#ffcc00", bg="#101020",
-                           font=("Consolas", 10, "bold"))
+                           font=(UI_FONT, 10, "bold"))
         f1.pack(fill=tk.X, padx=8, pady=4)
         for name, var in [("dx", self.slope_x), ("dy", self.slope_y), ("dz", self.slope_z)]:
             row = tk.Frame(f1, bg="#101020")
             row.pack(fill=tk.X, padx=4, pady=1)
             tk.Label(row, text=name, fg="#00ffcc", bg="#101020", width=3,
-                     font=("Consolas", 10)).pack(side=tk.LEFT)
+                     font=(UI_FONT, 10)).pack(side=tk.LEFT)
             tk.Scale(row, from_=-2.0, to=2.0, resolution=0.1, orient=tk.HORIZONTAL,
                      variable=var, bg="#101020", fg="#00ffcc", highlightthickness=0,
                      length=400, command=lambda _: self.refresh()).pack(side=tk.LEFT, padx=4)
 
         f_target = tk.LabelFrame(right, text="目标坐标（二向箔/黑域/广播）",
                                  fg="#ffcc00", bg="#101020",
-                                 font=("Consolas", 10, "bold"))
+                                 font=(UI_FONT, 10, "bold"))
         f_target.pack(fill=tk.X, padx=8, pady=4)
         for name, var in [("x", self.target_x), ("y", self.target_y), ("z", self.target_z)]:
             row = tk.Frame(f_target, bg="#101020")
             row.pack(fill=tk.X, padx=4, pady=1)
             tk.Label(row, text=name, fg="#00ffcc", bg="#101020", width=3,
-                     font=("Consolas", 10)).pack(side=tk.LEFT)
+                     font=(UI_FONT, 10)).pack(side=tk.LEFT)
             tk.Scale(row, from_=0, to=9, resolution=1, orient=tk.HORIZONTAL,
                      variable=var, bg="#101020", fg="#00ffcc", highlightthickness=0,
                      length=400, command=lambda _: self.on_target_change()).pack(side=tk.LEFT, padx=4)
 
         f2 = tk.LabelFrame(right, text="行动", fg="#ffcc00", bg="#101020",
-                           font=("Consolas", 10, "bold"))
+                           font=(UI_FONT, 10, "bold"))
         f2.pack(fill=tk.X, padx=8, pady=4)
         actions = [
             ("探测 (2E)", "scout", "scout", "消耗 2 能量，圆锥探知"),
@@ -1139,7 +1144,7 @@ class GameUI:
         for i, (label, val, kind, tip) in enumerate(actions):
             btn = tk.Button(grid, text=label, command=lambda v=val: self.do_action(v),
                             bg="#203040", fg="#00ffcc", activebackground="#305060",
-                            font=("Consolas", 9, "bold"), width=20, height=2)
+                            font=(UI_FONT, 9, "bold"), width=20, height=2)
             btn.grid(row=i//2, column=i%2, padx=3, pady=2, sticky="nsew")
             if kind is not None:
                 btn.bind("<Enter>", lambda e, k=kind, t=tip: self.on_button_hover(k, t))
@@ -1150,9 +1155,9 @@ class GameUI:
         grid.columnconfigure(1, weight=1)
 
         f5 = tk.LabelFrame(right, text="事件日志", fg="#ffcc00", bg="#101020",
-                           font=("Consolas", 10, "bold"))
+                           font=(UI_FONT, 10, "bold"))
         f5.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
-        self.log_text = tk.Text(f5, bg="#050510", fg="#cccccc", font=("Microsoft YaHei", 10),
+        self.log_text = tk.Text(f5, bg="#050510", fg="#cccccc", font=(UI_FONT, 10),
                                 wrap=tk.WORD)
         scrollbar2 = tk.Scrollbar(f5, command=self.log_text.yview)
         self.log_text.config(yscrollcommand=scrollbar2.set)
@@ -1235,44 +1240,39 @@ class GameUI:
             return c
 
         # ===== 空间网格：Line3DCollection 一次性绘制 =====
+        # 没被二向箔压过的竖列照常画成立体网格；
+        # 压过的竖列只剩一个点（落在那一层），相邻两个压过的点之间连一条线，
+        # 整张图压完后就只剩一张平面
         segments = []
         colors = []
+        flat_segments = []
         for x in range(GRID):
             for y in range(GRID):
-                if (x, y) in reduced:
-                    z_plane = reduced[(x, y)]
-                    segments.append([(x, y, 0), (x, y, z_plane)])
-                    colors.append("#888888")
-                    segments.append([(x, y, z_plane), (x, y, LAYERS-1)])
-                    colors.append("#888888")
-                else:
+                if (x, y) not in reduced:
                     segments.append([(x, y, 0), (x, y, LAYERS-1)])
                     colors.append("#444466")
-        for y in range(GRID):
-            for z in range(LAYERS):
-                pts = []
-                for x in range(GRID):
-                    if (x, y) in reduced:
-                        pts.append((x, y, reduced[(x, y)]))
-                    else:
-                        pts.append((x, y, z))
-                for i in range(len(pts)-1):
-                    segments.append([pts[i], pts[i+1]])
-                    colors.append("#444466")
         for x in range(GRID):
-            for z in range(LAYERS):
-                pts = []
-                for y in range(GRID):
-                    if (x, y) in reduced:
-                        pts.append((x, y, reduced[(x, y)]))
-                    else:
-                        pts.append((x, y, z))
-                for i in range(len(pts)-1):
-                    segments.append([pts[i], pts[i+1]])
-                    colors.append("#444466")
+            for y in range(GRID):
+                for nx, ny in ((x + 1, y), (x, y + 1)):
+                    if nx >= GRID or ny >= GRID:
+                        continue
+                    a_flat = (x, y) in reduced
+                    b_flat = (nx, ny) in reduced
+                    if a_flat and b_flat:
+                        flat_segments.append([(x, y, reduced[(x, y)]),
+                                              (nx, ny, reduced[(nx, ny)])])
+                    elif not a_flat and not b_flat:
+                        for z in range(LAYERS):
+                            segments.append([(x, y, z), (nx, ny, z)])
+                            colors.append("#444466")
         if segments:
             lc = Line3DCollection(segments, colors=colors, linewidths=0.4, alpha=0.4)
             self.ax.add_collection3d(lc)
+        if flat_segments:
+            lc = Line3DCollection(flat_segments, colors="#aa88ff", linewidths=0.8, alpha=0.8)
+            self.ax.add_collection3d(lc)
+        # 全图都压平后，把坐标轴背景上的格线也关掉，画面里只剩那张平面
+        self.ax.grid(len(reduced) < GRID * GRID)
 
         # 黑域
         for b in self.game.black_domains:
@@ -1280,7 +1280,7 @@ class GameUI:
             for ox in range(3):
                 for oy in range(3):
                     for oz in range(3):
-                        self.ax.scatter(bx+ox, by+oy, bz+oz,
+                        self.ax.scatter(*map_coord((bx+ox, by+oy, bz+oz)),
                                         c="#000000", s=60, marker="s",
                                         edgecolors="#4444ff", linewidths=0.5)
 
@@ -1292,7 +1292,8 @@ class GameUI:
                     continue
                 if not info["habitable"]:
                     continue
-                gx.append(c[0]); gy.append(c[1]); gz.append(c[2])
+                mc = map_coord(c)
+                gx.append(mc[0]); gy.append(mc[1]); gz.append(mc[2])
                 gc.append("#224466")
             if gx:
                 self.ax.scatter(gx, gy, gz, c=gc, s=10, alpha=0.7)
@@ -1333,7 +1334,7 @@ class GameUI:
 
         # 当前选中目标
         if self.selected_coord is not None:
-            self.ax.scatter(*self.selected_coord, c="#ffffff", s=220, marker="s",
+            self.ax.scatter(*map_coord(self.selected_coord), c="#ffffff", s=220, marker="s",
                             edgecolors="#00aaff", linewidths=2)
 
         # 蓝色箭头射线
@@ -1373,6 +1374,7 @@ class GameUI:
             else:
                 coords = []
             if coords:
+                coords = [map_coord(c) for c in coords]
                 cx2 = [c[0] for c in coords]
                 cy2 = [c[1] for c in coords]
                 cz2 = [c[2] for c in coords]
@@ -1526,8 +1528,19 @@ class GameUI:
         self.refresh()
 
 
+def pick_ui_font(root: tk.Tk) -> str:
+    # Consolas 没有中文字形，Windows 上会显示成重叠的乱码，所以挑一个能显示中文的字体
+    families = set(tkfont.families(root))
+    for name in UI_FONT_CANDIDATES:
+        if name in families:
+            return name
+    return "TkDefaultFont"
+
+
 def main() -> None:  # 启动游戏的代码放在函数里
+    global UI_FONT
     root = tk.Tk()
+    UI_FONT = pick_ui_font(root)
     app = GameUI(root)
     root.mainloop()
 
