@@ -641,6 +641,7 @@ func test_reduce_takes_turns_and_blocks_building() -> void:
 	var s := _two_civs(Vector3i(9, 9, 9))
 	_idle_ai(s)
 	var me := s.human()
+	me.has_broadcaster = false
 	var income := me.energy_per_turn(s.map)
 	check(me.reduce_cost() == Balance.COST_REDUCE_BASE + Balance.COST_REDUCE_PER_UNIT, "一个星系，按一个单位收费")
 	check(s.start_reduce(me)["error"] == "", "可以开始降维")
@@ -655,6 +656,122 @@ func test_reduce_takes_turns_and_blocks_building() -> void:
 	check(me.reduced and me.reduce_left == 0, "%d 回合后完成" % Balance.REDUCE_TURNS)
 	check(me.energy_per_turn(s.map) == income / 2, "降维后能量减半")
 	check(s.start_reduce(me)["error"] != "", "不能再降维")
+
+
+func test_reduce_counts_completed_equipment_and_facilities() -> void:
+	var s := _two_civs(Vector3i(9, 9, 9))
+	_idle_ai(s)
+	var me := s.human()
+	me.has_broadcaster = false
+	me.energy = 1000
+	me.mineral = 1000
+	me.actions_left = 30
+	_set_star(s, me.home, StarMap.Star.TRIPLE)
+	s.map.gas[me.home] = 1
+	for kind in ["telescope", "probe", "warning", "antimatter", "broadcaster", "gravity"]:
+		check(s.upgrade(me, kind)["error"] == "", "可下单：" + kind)
+	check(s.build_dyson(me)["error"] == "", "可下单戴森球")
+	check(s.build_miner(me)["error"] == "", "可下单采矿船")
+	check(s.build_bunker(me)["error"] == "", "可下单掩体")
+	check(s.build_starship(me)["error"] == "", "可下单星舰")
+	check(me.reduce_units() == 1, "未完成订单不算已建造单位")
+	s.end_turn()
+	check(me.reduce_units() == 11, "星系和十个建成单位全部计费")
+	check(me.reduce_cost() == Balance.COST_REDUCE_BASE + 11 * Balance.COST_REDUCE_PER_UNIT, "建成后费用正确上涨")
+	me.warships.append(Ship.new(me.home, Vector3.RIGHT))
+	me.colony_ships.append(Ship.new(me.home, Vector3.UP))
+	check(me.reduce_units() == 13, "两种在飞飞船各计一次")
+	me.actions_left = 10
+	check(s.upgrade(me, "telescope")["error"] == "", "可再次升级望远镜")
+	check(s.upgrade(me, "probe")["error"] == "", "可再次升级探测器")
+	check(s.upgrade(me, "antimatter")["error"] == "", "可追加反物质")
+	s.end_turn()
+	check(me.reduce_units() == 16, "重复升级设备和库存反物质按数量累计")
+	me.has_warning = false
+	me.antimatter -= 1
+	me.dysons[me.home] = 0
+	check(me.reduce_units() == 13, "消耗预警和反物质、损失戴森球后不再计费")
+	var energy := me.energy
+	check(s.start_reduce(me)["error"] == "", "完整设施文明可以降维")
+	check(me.energy == energy - Balance.COST_REDUCE_BASE - 13 * Balance.COST_REDUCE_PER_UNIT, "实际扣费包含建成设施")
+
+
+func test_reduce_waits_for_every_construction_queue() -> void:
+	for kind in ["telescope", "probe", "warning", "antimatter", "broadcaster", "gravity", "dyson", "miner", "bunker", "starship"]:
+		var s := _two_civs(Vector3i(9, 9, 9))
+		_idle_ai(s)
+		var me := s.human()
+		me.has_broadcaster = false
+		me.energy = 1000
+		me.mineral = 1000
+		s.map.gas[me.home] = 1
+		var result: Dictionary
+		match kind:
+			"dyson": result = s.build_dyson(me)
+			"miner": result = s.build_miner(me)
+			"bunker": result = s.build_bunker(me)
+			"starship": result = s.build_starship(me)
+			_: result = s.upgrade(me, kind)
+		check(result["error"] == "", kind + " 下单成功")
+		var energy := me.energy
+		var ap := me.actions_left
+		check(s.start_reduce(me)["error"] == "请先完成建造和升级，再开始降维", kind + " 完成前不能降维")
+		check(me.energy == energy and me.actions_left == ap and me.reduce_left == 0, "拒绝启动没有副作用")
+		s.end_turn()
+		check(not me.has_pending_construction() and me.reduce_units() == 2, "订单完成后纳入携带计数")
+		check(s.start_reduce(me)["error"] == "", kind + " 完成后可以降维")
+
+
+func test_reduce_rejections_do_not_charge_and_only_charge_once() -> void:
+	var s := _two_civs(Vector3i(9, 9, 9))
+	_idle_ai(s)
+	var me := s.human()
+	me.dysons[me.home] = 1
+	var cost := me.reduce_cost()
+	me.energy = cost - 1
+	var ap := me.actions_left
+	check(s.start_reduce(me)["error"] == "能量不足", "设施加入费用后不足一能量也不能启动")
+	check(me.energy == cost - 1 and me.actions_left == ap and me.reduce_left == 0, "不足资源不扣费")
+	me.energy = cost
+	me.actions_left = 0
+	check(s.start_reduce(me)["error"] == "行动点不足" and me.energy == cost, "不足行动点不扣费")
+	me.actions_left = ap
+	check(s.start_reduce(me)["error"] == "" and me.energy == 0, "恰好够费用可以启动")
+	check(me.actions_left == ap - 1, "启动只扣一个行动点")
+	check(s.start_reduce(me)["error"] == "正在降维" and me.actions_left == ap - 1, "重复启动不重复收费")
+	for i in Balance.REDUCE_TURNS:
+		s.end_turn()
+	check(me.reduced and me.energy >= 0, "后续回合不再扣降维费用")
+
+
+func test_reduce_blocks_all_construction_without_spending() -> void:
+	var s := _two_civs(Vector3i(9, 9, 9))
+	_idle_ai(s)
+	var me := s.human()
+	me.energy = 1000
+	me.mineral = 1000
+	me.has_starship = true
+	me.starship = Vector3i(2, 0, 0)
+	_set_star(s, me.starship, StarMap.Star.SINGLE)
+	s.map.habitable[me.starship] = true
+	check(s.start_reduce(me)["error"] == "", "开始降维")
+	var energy := me.energy
+	var mineral := me.mineral
+	var ap := me.actions_left
+	for kind in ["telescope", "probe", "warning", "antimatter", "broadcaster", "gravity"]:
+		check(s.upgrade(me, kind)["error"] == "降维期间不能建造", "禁止升级和建造：" + kind)
+	for result in [s.build_dyson(me), s.build_miner(me), s.build_bunker(me), s.build_starship(me),
+			s.launch_warship(me, Vector3.RIGHT), s.launch_colony_ship(me, Vector3.RIGHT),
+			s.launch_foil(me, Vector3i(3, 3, 3)), s.launch_black_domain(me, Vector3i(1, 1, 1))]:
+		check(result["error"] != "", "禁止新增设施、飞船和空间武器")
+	check(s.settle_starship(me)["error"] == "降维期间不能建立星系", "准备中禁止星舰定居")
+	check(me.energy == energy and me.mineral == mineral and me.actions_left == ap, "所有被禁止操作都不扣资源")
+	check(not me.has_pending_construction(), "没有产生建造订单")
+	for i in Balance.REDUCE_TURNS - 1:
+		s.end_turn()
+		check(not me.reduced and me.reduce_left == Balance.REDUCE_TURNS - i - 1, "每回合仅推进一步")
+	s.end_turn()
+	check(me.reduced and s.build_miner(me)["error"] == "", "完成后恢复建造")
 
 
 func test_lightgrain_no_effect_on_reduced() -> void:
@@ -1109,7 +1226,7 @@ func test_foil_cannot_target_flattened_cell() -> void:
 	check(not s._try_foil(ai), "AI 不朝已经压平的格子发射二向箔")
 
 
-func test_whole_map_flat_is_a_draw() -> void:
+func test_whole_map_flat_continues_in_two_dimensions() -> void:
 	var s := _two_civs(Vector3i(9, 9, 9))
 	for civ in s.civs:
 		civ.reduced = true
@@ -1120,7 +1237,7 @@ func test_whole_map_flat_is_a_draw() -> void:
 					s.flattened[Vector3i(x, y, z)] = 0
 	check(not s.is_over(), "还有一列没压平，对局继续")
 	_flatten_whole_column(s, Vector2i(9, 9), 0)
-	check(s.winner == "平局" and s.human().alive and s.civs[1].alive, "整张星图压平后，还活着的文明平局")
+	check(not s.is_over() and s.human().alive and s.civs[1].alive, "二维地图继续游戏，不自动判平局")
 
 func test_bunker_costs_a_star_in_multi_star_system() -> void:
 	var target := Vector3i(3, 0, 0)
@@ -1151,3 +1268,220 @@ func test_black_domain_wall_between_civs() -> void:
 	_set_habitable(s, Vector3i(4, 4, 0), StarMap.Star.SINGLE)
 	me.colonies.append(Vector3i(4, 4, 0))
 	check(not s.blocked(Vector3i(4, 4, 0), Vector3i(4, 0, 0)), "从别的殖民地出发可以绕开")
+
+func _collapse_match() -> GameState:
+	var s := _two_civs(Vector3i(9, 9, 9))
+	for civ in s.civs:
+		civ.is_ai = false
+		civ.reduced = true
+		civ.energy = 1000
+	return s
+
+
+func test_foils_share_one_plane() -> void:
+	var s := _collapse_match()
+	check(s.launch_foil(s.human(), Vector3i(2, 2, 2))["error"] == "", "第一片箔发射")
+	check(s.launch_foil(s.civs[1], Vector3i(7, 7, 7))["error"] == "", "另一高度的箔发射")
+	for i in 30:
+		s.end_turn()
+	check(s.all_flat(), "两片箔最终压平全图")
+	check(s.flattened.values().all(func(z): return z == s.flat_plane), "每个格子都在同一个平面")
+	check(s.civs.all(func(c): return c.home.z == s.flat_plane), "幸存文明也在共同平面")
+	check(s.civs.all(func(c): return c.foils.is_empty()), "展开的箔被消耗")
+
+
+func test_different_planes_are_not_fully_flat() -> void:
+	var s := _collapse_match()
+	for x in StarMap.SIZE:
+		for y in StarMap.SIZE:
+			for z in StarMap.SIZE:
+				s.flattened[Vector3i(x, y, z)] = 2 if x < 5 else 7
+	check(not s.all_flat(), "只数格子不够：不同高度不能算压成同一平面")
+
+
+func test_collapse_finishes_after_combat_ends() -> void:
+	var s := _collapse_match()
+	s.civs[1].reduced = false
+	check(s.launch_foil(s.human(), s.civs[1].home)["error"] == "", "向最后一个对手发射")
+	for i in 30:
+		if s.is_over():
+			break
+		s.end_turn()
+	check(s.is_over() and s.collapse_pending(), "胜负已出，空间还在坍缩")
+	check(s.flattened.size() > 1, "致命打击当次扩散完整结算，不能只处理一个格子")
+	var turn := s.turn
+	var energy := s.human().energy
+	for i in 20:
+		s.end_turn()
+	check(s.all_flat() and not s.collapse_pending(), "战斗结束后整张星图仍压成平面")
+	check(s.turn == turn and s.human().energy == energy, "结束后不执行 AI、不产出、不增加回合")
+
+
+func _two_dimensional_match() -> GameState:
+	var s := _collapse_match()
+	s._unfold_foil(Vector3i(4, 4, 4))
+	for i in 15:
+		if s.all_flat():
+			break
+		s.end_turn()
+	return s
+
+
+func test_line_foil_requires_two_dimensional_world() -> void:
+	var s := _collapse_match()
+	var energy := s.human().energy
+	check(s.launch_line_foil(s.human(), Vector3i(3, 3, 3))["error"] != "", "三维地图不能发射单向箔")
+	check(s.human().energy == energy and s.human().foils.is_empty(), "拒绝的发射不花资源")
+	s = _two_dimensional_match()
+	check(s.launch_line_foil(s.human(), Vector3i(3, 3, 8))["error"] != "", "单向箔目标必须在现有平面")
+	check(s.launch_foil(s.human(), Vector3i(3, 3, 4))["error"] != "", "二维后不能再发二向箔")
+
+
+func test_second_self_reduction_takes_time_and_reduces_income() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	var energy := me.energy
+	var income := me.energy_per_turn(s.map)
+	check(s.start_reduce(me)["error"] == "", "二维地图可以准备一维生存")
+	check(me.energy == energy - me.reduce_cost(), "第二次降维按单位数收费")
+	check(s.launch_line_foil(me, Vector3i(3, 3, 4))["error"] != "", "准备降维期间不能发射单向箔")
+	for i in Balance.REDUCE_TURNS - 1:
+		s.end_turn()
+	check(not me.line_reduced, "不能提前完成一维生存准备")
+	s.end_turn()
+	check(me.reduced and me.line_reduced, "三回合后进入一维生存状态")
+	check(me.energy_per_turn(s.map) == int(income / 2.0), "再次降维产出再减半")
+	check(s.start_reduce(me)["error"] != "", "不支持一维以下的自身降维")
+
+
+func test_line_foil_prepares_flies_and_consumes() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	me.line_reduced = true
+	var energy := me.energy
+	check(s.launch_line_foil(me, Vector3i(3, 0, 4))["error"] == "", "单向箔可以发射")
+	check(me.energy == energy - Balance.COST_LINE_FOIL, "单向箔扣除正确成本")
+	for i in Balance.FOIL_PREPARE_TURNS:
+		s.end_turn()
+	check(me.foils.size() == 1 and me.foils[0].traveled == 0, "准备期间不飞行")
+	for i in 2:
+		s.end_turn()
+	check(s.linearized.is_empty(), "飞行未到目标时不展开")
+	s.end_turn()
+	check(me.foils.is_empty() and not s.linearized.is_empty(), "到达后消耗单向箔并开始压缩")
+
+
+func test_multiple_line_foils_converge_on_one_line() -> void:
+	var s := _two_dimensional_match()
+	for civ in s.civs:
+		civ.line_reduced = true
+	check(s.launch_line_foil(s.human(), Vector3i(2, 2, 4))["error"] == "", "第一片单向箔")
+	check(s.launch_line_foil(s.civs[1], Vector3i(7, 7, 4))["error"] == "", "另一 y 位置的单向箔")
+	for i in 30:
+		s.end_turn()
+	check(s.all_linear() and s.linearized.size() == 100, "整个二维地图压缩完成")
+	check(s.linearized.values().all(func(y): return y == s.line_y), "全部格子归于同一条直线")
+	check(s.civs.all(func(c): return c.alive and c.home.y == s.line_y and c.home.z == s.flat_plane), "幸存文明位于共同直线")
+	check(s.winner == "平局", "一维完成后多个幸存文明才判平局")
+	var remaining := 0
+	for x in StarMap.SIZE:
+		for y in StarMap.SIZE:
+			for z in StarMap.SIZE:
+				if s.cell_exists(Vector3i(x, y, z)):
+					remaining += 1
+	check(remaining == StarMap.SIZE, "空间只剩沿 x 轴的十个格子")
+
+
+func test_line_attack_destroys_unprepared_civ_and_keeps_spreading() -> void:
+	var s := _two_dimensional_match()
+	s.human().line_reduced = true
+	s._unfold_line_foil(Vector3i(9, 3, 4))
+	check(not s.civs[1].alive and s.winner == "你", "只降到二维的对手不能抵挡单向箔")
+	check(s.collapse_pending(), "对手灭亡后直线坍缩还未完成")
+	for i in 15:
+		s.end_turn()
+	check(s.all_linear() and s.human().alive, "胜负结束后完成直线坍缩，已准备的文明活着")
+
+
+func test_line_relocation_preserves_system_facilities_and_knowledge() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	me.line_reduced = true
+	me.dysons[me.home] = 1
+	me.miners[me.home] = true
+	s.civs[1].known[me.home] = true
+	me.has_starship = true
+	me.starship = Vector3i(1, 0, 4)
+	s._unfold_line_foil(Vector3i(0, 3, 4))
+	check(me.home == Vector3i(0, 3, 4), "星系从平面搬到直线")
+	check(me.dysons.get(me.home, 0) == 1 and me.miners.has(me.home), "设施跟随星系")
+	check(s.civs[1].known.has(me.home) and not s.civs[1].known.has(Vector3i(0, 0, 4)), "情报跟随新位置")
+	check(me.starship == Vector3i(1, 3, 4), "已准备的星舰也压到直线上")
+
+
+func test_two_dimensional_starship_movement_and_directions() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	me.has_starship = true
+	me.starship = me.home
+	check(s.move_starship(me, Vector3(1, 0, 5))["error"] == "", "二维中星舰仍可以移动")
+	check(me.starship.z == s.flat_plane, "星舰不能离开二维平面")
+	check(s.launch_warship(me, Vector3(1, 1, 5))["error"] == "", "二维中仍可以派战舰")
+	check(me.warships[0].direction.z == 0.0, "飞行方向限于现有维度")
+	check(s.launch_warship(me, Vector3(0, 0, 1))["error"] != "", "纯粹指向消失维度的方向无效")
+
+
+func test_ai_prepares_for_one_dimension_and_uses_line_foil() -> void:
+	var s := _two_dimensional_match()
+	var ai := s.civs[1]
+	ai.known[s.human().home] = true
+	check(s._try_foil(ai) and ai.reduce_left > 0, "二维 AI 先准备一维生存")
+	for i in Balance.REDUCE_TURNS:
+		s.end_turn()
+	check(ai.line_reduced and s._try_foil(ai), "准备完成后 AI 发射单向箔")
+	check(ai.foils.size() == 1 and ai.foils[0].to_line, "AI 选择正确级别的箔")
+
+
+func test_line_collision_and_ships_share_collapse_rules() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	me.line_reduced = true
+	var other := Vector3i(0, 6, 4)
+	_set_star(s, other, StarMap.Star.SINGLE)
+	me.colonies.append(other)
+	me.warships.append(Ship.new(Vector3i(1, 0, 4), Vector3(1, 1, 0)))
+	s._unfold_line_foil(Vector3i(0, 3, 4))
+	check(me.colonies.size() == 1, "同一 x 的两个星系压到同一位置时不能重叠")
+	check(me.warships.size() == 1 and me.warships[0].position().y == 3, "降维飞船的实际坐标跟随压缩")
+	check(me.warships[0].direction.y == 0, "压成直线后飞船只能沿线飞行")
+
+
+func test_two_dimensional_black_domain_rejected_without_charge() -> void:
+	var s := _two_dimensional_match()
+	var energy := s.human().energy
+	check(s.launch_black_domain(s.human(), s.human().home)["error"] != "", "二维里不能投放注定无法形成的黑域")
+	check(s.human().energy == energy and s.human().pending_domains.is_empty(), "无效黑域不消耗资源")
+
+
+func test_prepared_ship_survives_when_its_direction_disappears() -> void:
+	var s := _collapse_match()
+	var me := s.human()
+	me.warships.append(Ship.new(Vector3i(0, 0, 5), Vector3(0, 0, 1)))
+	s._unfold_foil(Vector3i.ZERO)
+	check(me.warships.size() == 1, "已降维的飞船不会因为失去航向而被摧毁")
+	check(me.warships[0].position().z == 0 and me.warships[0].direction.is_zero_approx(), "失去的方向归零，飞船留在平面上")
+
+
+func test_post_game_line_collapse_preserves_player_defeat() -> void:
+	var s := _two_dimensional_match()
+	var third := Civ.new("Other-2", false, Vector3i(5, 5, s.flat_plane))
+	third.reduced = true
+	third.line_reduced = true
+	s.map.stars[third.home] = StarMap.Star.SINGLE
+	s.civs.append(third)
+	s.civs[1].line_reduced = true
+	s._unfold_line_foil(Vector3i(0, 3, s.flat_plane))
+	check(s.winner == "AI" and not s.human().alive, "玩家未准备一维生存则失败")
+	for i in 15:
+		s.end_turn()
+	check(s.all_linear() and s.winner == "AI", "剩余两个对手进入一维也不能把玩家失败改成平局")

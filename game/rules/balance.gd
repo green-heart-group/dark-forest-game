@@ -71,6 +71,8 @@ static var COLONY_SHIP_RADIUS := 0.5  # 和光粒一样，会额外加上半个�
 # 别人的星系就展开（形状见下面的 FOIL_SQUISH），之后每回合向外扩散一圈，不会停。
 # 被压没的星系消失，只有已经降维的文明能活下来。旧版是 20 能量、立即起飞。
 static var COST_FOIL := 30
+# 单向箔：二维地图里的第二级打击，准备时间和飞行速度沿用二向箔。
+static var COST_LINE_FOIL := 30
 static var FOIL_PREPARE_TURNS := 2
 static var FOIL_SPEED := 1.0
 # 二向箔展开后的形状：中心那一列完全压平，压平的圆每回合半径加 1 格。
@@ -79,7 +81,7 @@ static var FOIL_SPEED := 1.0
 static var FOIL_SQUISH := 1.0
 
 # 自身降维（暂定）：花几个回合进入二维，期间不能建造。完成后不怕光粒，被二向箔压平也能活，
-# 但产能减半。成本按要带进二维的单位数计算：每个星系、每艘在飞的飞船各算一个。
+# 但产能减半。全部现有单位一起携带，星系、飞船和建成设施均计费，明细见 Civ.reduce_unit_counts()。
 # 旧版是固定 40 能量、立即生效。
 static var COST_REDUCE_BASE := 10
 static var COST_REDUCE_PER_UNIT := 5

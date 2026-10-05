@@ -36,7 +36,7 @@ const COLOR_BROADCAST := Color(1.0, 0.5, 0.8)
 ## 坐标轴颜色：x 红、y 绿、z 蓝。面板里的 x、y、z 输入框用同样的颜色。
 const AXIS_COLORS: Array[Color] = [Color(1.0, 0.35, 0.35), Color(0.4, 1.0, 0.4), Color(0.4, 0.6, 1.0)]
 
-enum Action { SCOUT, LIGHTGRAIN, WARSHIP, COLONY, FOIL, DOMAIN, BROADCAST, STARSHIP }
+enum Action { SCOUT, LIGHTGRAIN, WARSHIP, COLONY, FOIL, DOMAIN, BROADCAST, STARSHIP, LINE_FOIL }
 
 var state: GameState
 
@@ -66,6 +66,7 @@ var _action := Action.SCOUT
 var _action_tiles: Dictionary[int, Button] = {}
 ## 建造和升级的按钮，键是 _build_specs() 里的种类
 var _build_tiles: Dictionary[String, Button] = {}
+var _reduce_info := Label.new()
 var _action_name := Label.new()
 var _action_desc := Label.new()
 var _go := Button.new()
@@ -99,6 +100,10 @@ var _grid := MeshInstance3D.new()
 ## 动画时从 _grid_flat_old 过渡到 _grid_flat。
 var _grid_flat: Dictionary[Vector3i, int] = {}
 var _grid_flat_old: Dictionary[Vector3i, int] = {}
+var _grid_line: Dictionary[Vector3i, int] = {}
+var _grid_line_old: Dictionary[Vector3i, int] = {}
+var _line_env_new: Dictionary = {}
+var _line_env_old: Dictionary = {}
 ## 还活着的空间的边界面（侧面看像躺倒的沙漏，二向箔中心最扁）
 var _funnel := MeshInstance3D.new()
 ## 还活着的空间的上下边界，见 _envelope。动画时从 _env_old 过渡到 _env_new。
@@ -219,7 +224,7 @@ func _pick_cell(pos: Vector2) -> Vector3i:
 		return NO_CELL
 	var hit := from + dir * t
 	var c := Vector3i(roundi(hit.x), roundi(hit.y), layer)
-	return c if StarMap.in_bounds(c) else NO_CELL
+	return c if state.cell_exists(c) else NO_CELL
 
 
 ## 可以直接点中的标记所在的格子。
@@ -318,6 +323,10 @@ func _build_cursor() -> void:
 func _draw_grid() -> void:
 	_grid_flat = state.flattened.duplicate()
 	_grid_flat_old = _grid_flat
+	_grid_line = state.linearized.duplicate()
+	_grid_line_old = _grid_line
+	_line_env_new = _line_envelope()
+	_line_env_old = _line_env_new
 	_env_new = _envelope()
 	_env_old = _env_new
 	_warp_t = 1.0
@@ -340,7 +349,7 @@ func _envelope() -> Dictionary:
 				var room := GameState.zone_room(zone["age"], p.distance_to(Vector2(center.x, center.y)))
 				lo = maxf(lo, center.z - room)
 				hi = minf(hi, center.z + room)
-			env[Vector2i(i, j)] = Vector2(lo, maxf(lo, hi))
+			env[Vector2i(i, j)] = Vector2(state.flat_plane, state.flat_plane) if state.all_flat() else Vector2(lo, maxf(lo, hi))
 	return env
 
 
@@ -349,18 +358,35 @@ func _envelope() -> Dictionary:
 func _warp_point(p: Vector3, blend := 1.0) -> Vector3:
 	var c := Vector3i(clampi(roundi(p.x), 0, StarMap.SIZE - 1), clampi(roundi(p.y), 0, StarMap.SIZE - 1),
 			clampi(roundi(p.z), 0, StarMap.SIZE - 1))
-	if not _grid_flat.has(c):
-		return p
-	var plane := float(_grid_flat[c])
-	if _grid_flat_old.has(c):
-		return Vector3(p.x, p.y, plane)
-	return Vector3(p.x, p.y, lerpf(p.z, plane, blend))
+	if _grid_flat.has(c):
+		p.z = lerpf(p.z, float(_grid_flat[c]), 1.0 if _grid_flat_old.has(c) else blend)
+		c.z = _grid_flat[c]
+	if _grid_line.has(c):
+		p.y = lerpf(p.y, float(_grid_line[c]), 1.0 if _grid_line_old.has(c) else blend)
+	return p
+
+
+## 二维空间在每个 x 位置剩下的 y 范围，和规则的单向箔形状一致。
+func _line_envelope() -> Dictionary:
+	var env := {}
+	for i in (StarMap.SIZE - 1) * ENV_SUBDIV + 1:
+		var x := float(i) / ENV_SUBDIV
+		var lo := 0.0
+		var hi := float(StarMap.SIZE - 1)
+		for zone in state.line_zones:
+			var center: Vector3i = zone["center"]
+			var room := GameState.zone_room(zone["age"], absf(x - center.x))
+			lo = maxf(lo, center.y - room)
+			hi = minf(hi, center.y + room)
+		env[i] = Vector2(state.line_y, state.line_y) if state.all_linear() else Vector2(lo, hi)
+	return env
 
 
 ## 按现在的过渡进度重画网格和压平区域边上的曲面。
 func _rebuild_warped() -> void:
 	# 动画中还用旧的网格（新压平的格子里的线还在，正落到平面上），动画结束后换成新的
-	var segs := _grid_segments(_grid_flat if _warp_t >= 1.0 else _grid_flat_old)
+	var segs := _grid_segments(_grid_flat if _warp_t >= 1.0 else _grid_flat_old,
+			_grid_line if _warp_t >= 1.0 else _grid_line_old)
 	var mesh := ImmediateMesh.new()
 	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
 	for s in segs.values():
@@ -388,6 +414,8 @@ func _funnel_mesh() -> ImmediateMesh:
 			for c in corners:
 				var e: Vector2 = _env_old[c].lerp(_env_new[c], _warp_t)
 				var p := Vector2(c) / ENV_SUBDIV
+				var bounds: Vector2 = _line_env_old[c.x].lerp(_line_env_new[c.x], _warp_t)
+				p.y = clampf(p.y, bounds.x, bounds.y)
 				bottom.append(Vector3(p.x, p.y, e.x))
 				top.append(Vector3(p.x, p.y, e.y))
 				top_edge = top_edge and e.y >= n - 0.01
@@ -408,10 +436,10 @@ func _funnel_mesh() -> ImmediateMesh:
 
 ## 网格的每一小段（相邻两个格子之间的连线），键是线段中点，值是 [起点, 终点]。
 ## 一段线只有两头的格子都还在（没压平，或者就是平面那一层），才画出来。
-func _grid_segments(flat: Dictionary[Vector3i, int]) -> Dictionary:
+func _grid_segments(flat: Dictionary[Vector3i, int], line: Dictionary = {}) -> Dictionary:
 	var keep := func(x: int, y: int, z: int) -> bool:
 		var c := Vector3i(x, y, z)
-		return not flat.has(c) or flat[c] == z
+		return (not flat.has(c) or flat[c] == z) and (not line.has(c) or line[c] == y)
 	var segs := {}
 	for a in StarMap.SIZE:
 		for b in StarMap.SIZE:
@@ -427,10 +455,14 @@ func _grid_segments(flat: Dictionary[Vector3i, int]) -> Dictionary:
 
 ## 压平的范围变了：从旧的形状慢慢过渡到新的（新压没的格子落到平面上，边界面跟着收紧）。
 func _animate_flattening() -> void:
-	if state.flattened.size() == _grid_flat.size():
+	if state.flattened.size() == _grid_flat.size() and state.linearized.size() == _grid_line.size():
 		return
 	_grid_flat_old = _grid_flat
 	_grid_flat = state.flattened.duplicate()
+	_grid_line_old = _grid_line
+	_grid_line = state.linearized.duplicate()
+	_line_env_old = _line_env_new
+	_line_env_new = _line_envelope()
 	_env_old = _env_new
 	_env_new = _envelope()
 	_warp_t = 0.0
@@ -438,6 +470,9 @@ func _animate_flattening() -> void:
 
 func _process(delta: float) -> void:
 	if _warp_t >= 1.0:
+		if state.is_over() and state.collapse_pending():
+			state.advance_collapse()
+			refresh()
 		return
 	_warp_t = minf(1.0, _warp_t + delta / FLAT_ANIM_SECONDS)
 	_rebuild_warped()
@@ -494,11 +529,17 @@ func refresh() -> void:
 	for child in _markers.get_children():
 		child.queue_free()
 	var me := state.human()
+	if state.all_flat() and _action == Action.FOIL:
+		_action = Action.LINE_FOIL
+	_action_tiles[Action.FOIL].visible = not state.all_flat()
+	_action_tiles[Action.LINE_FOIL].visible = state.all_flat()
+	_pitch.get_parent().visible = not state.all_flat()
 	_refresh_origins()
 	_animate_flattening()
 	_set_hover(NO_CELL)
 
-	var foil_mode := _action == Action.FOIL
+	var line_mode := _action == Action.LINE_FOIL
+	var foil_mode := _action == Action.FOIL or line_mode
 	var domain_mode := _action == Action.DOMAIN
 	var broadcast_mode := _action == Action.BROADCAST
 	var target_mode := foil_mode or domain_mode or broadcast_mode
@@ -508,11 +549,13 @@ func refresh() -> void:
 	else:
 		_aim_hint.text = "👆 在星图上点一个格子，方向就指向它。也可以沿圆边拖动圆钮微调，滚轮每格 1°。"
 	if foil_mode:
-		_target_label.text = "离发射源多远（以目标格子为中心压平）"
+		_target_label.text = "离发射源多远（沿 x 轴压成直线）" if line_mode else "离发射源多远（以目标格子为中心压平）"
 	elif domain_mode:
 		_target_label.text = "离发射源多远（黑域中心不能超出探测长度）"
 	else:
 		_target_label.text = "离发射源多远（要公开的坐标，星图内任意格子）"
+	if state.all_flat():
+		_aim_hint.text = "二维空间：在平面上点选目标，或调整水平角和距离。单向箔沿 x 轴压缩，先再次自身降维才能生存。"
 	_dist_label.text = "%.1f 格" % _dist.value
 	var goal := _target_cell()
 	if StarMap.in_bounds(goal):
@@ -542,10 +585,13 @@ func refresh() -> void:
 		var target := _target_cell()
 		var layer: Array[Vector3i] = []
 		for x in StarMap.SIZE:
-			for y in StarMap.SIZE:
-				layer.append(Vector3i(x, y, target.z))
+			if line_mode:
+				layer.append(Vector3i(x, state.line_y if state.line_y >= 0 else target.y, state.flat_plane))
+			else:
+				for y in StarMap.SIZE:
+					layer.append(Vector3i(x, y, state.flat_plane if state.flat_plane >= 0 else target.z))
 		var tile := BoxMesh.new()
-		tile.size = Vector3(1.0, 1.0, 0.03)
+		tile.size = Vector3(1.0, 0.06 if line_mode else 1.0, 0.03)
 		_markers.add_child(_instances(tile, layer, _fill(layer.size(), COLOR_FOIL_COLUMN), _fill_f(layer.size(), 1.0)))
 		var box := BoxMesh.new()
 		box.size = Vector3.ONE * 0.9
@@ -581,8 +627,9 @@ func refresh() -> void:
 			_markers.add_child(_settle_candidates(me))
 		else:
 			area = Geometry.cone_cells(origin, direction, me.scout_range, me.cone_angle)
+		area = area.filter(func(c): return state.cell_exists(c))
 		var box := BoxMesh.new()
-		box.size = Vector3.ONE * 0.9
+		box.size = Vector3(0.9, 0.9, 0.03) if state.all_flat() else Vector3.ONE * 0.9
 		_markers.add_child(_instances(box, area, _fill(area.size(), color), _fill_f(area.size(), 1.0)))
 		_markers.add_child(_arrow(origin, direction, length, Color(color, 1.0)))
 
@@ -640,7 +687,7 @@ func refresh() -> void:
 	# 自己的二向箔：白色小方片，连一条线到目标
 	for foil in me.foils:
 		var sheet := BoxMesh.new()
-		sheet.size = Vector3(0.35, 0.35, 0.02)
+		sheet.size = Vector3(0.35, 0.06 if foil.to_line else 0.35, 0.02)
 		var node := MeshInstance3D.new()
 		node.mesh = sheet
 		node.material_override = _flat_material(COLOR_FOIL)
@@ -648,15 +695,21 @@ func refresh() -> void:
 		_markers.add_child(node)
 		_markers.add_child(_segment(foil.position(), Vector3(foil.target), Color(COLOR_FOIL, 0.4)))
 
-	# 被压平的区域：在压成的平面上画薄片（每列一片），所有文明都看得到
-	if not state.flattened.is_empty():
-		var flat_cells: Array[Vector3i] = []
-		for c in state.flattened:
-			if c.z == state.flattened[c]:
-				flat_cells.append(c)
+	# 平面格子和直线格子分开画；已被压没的区域不能留下薄片。
+	var flat_cells: Array[Vector3i] = []
+	var line_cells: Array[Vector3i] = []
+	for c in state.flattened:
+		if c.z != state.flattened[c] or not state.cell_exists(c):
+			continue
+		if state.linearized.has(c):
+			line_cells.append(c)
+		else:
+			flat_cells.append(c)
+	for cells_and_width in [[flat_cells, 1.0], [line_cells, 0.06]]:
+		var cells: Array[Vector3i] = cells_and_width[0]
 		var tile := BoxMesh.new()
-		tile.size = Vector3(1.0, 1.0, 0.03)
-		_markers.add_child(_instances(tile, flat_cells, _fill(flat_cells.size(), COLOR_FLAT), _fill_f(flat_cells.size(), 1.0)))
+		tile.size = Vector3(1.0, cells_and_width[1], 0.03)
+		_markers.add_child(_instances(tile, cells, _fill(cells.size(), COLOR_FLAT), _fill_f(cells.size(), 1.0)))
 
 	# 黑域：生效的画成深色立方体，所有文明都看得到；自己准备中的只画边框
 	for center in state.black_domains:
@@ -726,9 +779,13 @@ func _refresh_texts(me: Civ) -> void:
 	elif state.winner == "无":
 		_status.text = "所有文明都灭亡了（第 %d 回合）" % state.turn
 	elif state.winner == "平局":
-		_status.text = "🤝 平局：整张星图都被压平了（第 %d 回合）" % state.turn
+		_status.text = "🤝 平局：整张星图已压成一条直线（第 %d 回合）" % state.turn
 	elif state.winner != "":
 		_status.text = "💀 你失败了（第 %d 回合）" % state.turn
+	if not state.is_over() and state.all_flat():
+		_status.text += "　二维空间 · 可继续降维"
+	if state.is_over() and state.collapse_pending():
+		_status.text = "空间坍缩继续中…（战斗行动已停止）"
 	_refresh_known_pick(me)
 	_end.disabled = state.is_over()
 
@@ -765,7 +822,22 @@ func _refresh_texts(me: Civ) -> void:
 		tile.disabled = reason != ""
 		tile.modulate.a = 1.0 if reason == "" else 0.5
 		(tile.get_meta("cost") as Label).text = _cost_text(b[2], b[3]) if b[2] + b[3] > 0 else "免费"
+		if kind == "reduce" and me.reduce_left > 0:
+			(tile.get_meta("cost") as Label).text = "剩 %d 回合" % me.reduce_left
 		tile.tooltip_text = "%s %s\n%s%s" % [b[0], b[1], b[4], "\n\n现在不能用：" + reason if reason != "" else ""]
+	_reduce_info.text = "携带 %d 个单位：%dE + %dE × %d = %dE\n准备 %d 回合，期间不能建造。" % [
+			me.reduce_units(), Balance.COST_REDUCE_BASE, Balance.COST_REDUCE_PER_UNIT, me.reduce_units(),
+			me.reduce_cost(), Balance.REDUCE_TURNS]
+	if me.reduce_left > 0:
+		_reduce_info.text = "正在准备%s生存，还剩 %d 回合。\n费用已支付；期间不能建造、升级或投放新单位。" % [
+				"一维" if me.reduced else "二维", me.reduce_left]
+	elif me.line_reduced:
+		_reduce_info.text = "一维生存准备已完成。"
+	elif me.reduced and not state.all_flat():
+		_reduce_info.text = "二维生存准备已完成；全图进入二维后可再次降维。"
+	elif me.has_pending_construction():
+		_reduce_info.text += "\n请先完成建造和升级，完成后按新单位数计费。"
+	_reduce_info.tooltip_text = _reduce_description(me)
 
 	var upgrading := me.pending_upgrades.has("telescope") or me.pending_upgrades.has("probe")
 	var stats := {
@@ -780,9 +852,9 @@ func _refresh_texts(me: Civ) -> void:
 		"已知坐标": "%d 个" % me.known.size(),
 		"反物质": "%d / %d%s" % [me.antimatter, Balance.MAX_ANTIMATTER,
 				"　制造中" if me.pending_upgrades.has("antimatter") else ""],
-		"降维": "已降维（产能减半）" if me.reduced else (
-				"进行中，还剩 %d 回合" % me.reduce_left if me.reduce_left > 0 else "无"),
-		"在飞飞船": "战舰 %d　殖民船 %d　二向箔 %d" % [me.warships.size(), me.colony_ships.size(),
+		"降维": ("进行中，还剩 %d 回合" % me.reduce_left) if me.reduce_left > 0 else (
+				"一维（产能 1/4）" if me.line_reduced else ("二维（产能 1/2）" if me.reduced else "无")),
+		"在飞飞船": "战舰 %d　殖民船 %d　降维箔 %d" % [me.warships.size(), me.colony_ships.size(),
 				me.foils.size()],
 		"星舰": ("在 %s" % me.starship) if me.has_starship else ("建造中" if me.starship_building else "无"),
 		"广播": "准备中 %d 个" % me.pending_broadcasts.size(),
@@ -814,6 +886,9 @@ func _action_specs() -> Dictionary:
 				"沿方向飞，停在路上第一个无主的宜居星系，变成你的新星系。"],
 		Action.FOIL: ["📄", "二向箔", Balance.COST_FOIL, 0,
 				"指定目标坐标，准备 %d 回合后飞过去展开：那一列压成平面，周围的空间离平面远的部分被压没，中心最扁、越往外留得越多。之后每回合向外扩散一圈，不会停。" % Balance.FOIL_PREPARE_TURNS],
+		Action.LINE_FOIL: ["━", "单向箔", Balance.COST_LINE_FOIL, 0,
+				"二维地图里指定目标，准备 %d 回合后起飞。展开后沿 x 轴扩散，把平面压成一条直线。
+首次展开确定共同直线；只有再次完成自身降维的文明能生存。" % Balance.FOIL_PREPARE_TURNS],
 		Action.DOMAIN: ["🕳️", "黑域", Balance.COST_BLACK_DOMAIN, 0,
 				"在探测范围内指定中心，准备 %d 回合后生成 3×3×3 的黑域。光和飞船都穿不过它的边界，二向箔不受影响。" % Balance.BLACK_DOMAIN_PREPARE_TURNS],
 		Action.BROADCAST: ["📢", "广播", Balance.COST_BROADCAST, 0,
@@ -854,8 +929,24 @@ func _build_specs(me: Civ) -> Dictionary:
 		"settle": ["🏠", "星舰定居", 0, 0,
 				"星舰停在无主的宜居星系上时，在那里建立新的星系。"],
 		"reduce": ["🔻", "自身降维", me.reduce_cost(), 0,
-				"花 %d 回合进入二维，期间不能建造。之后不怕光粒，被二向箔压平也能活，但产能减半。\n每个星系、每艘在飞的飞船都要多花能量。" % Balance.REDUCE_TURNS],
+				_reduce_description(me)],
 	}
+
+
+func _reduce_description(me: Civ) -> String:
+	var names := {"systems": "星系", "warships": "战舰", "colony_ships": "殖民船", "starship": "星舰",
+			"dysons": "戴森球", "miners": "采矿船", "bunkers": "掩体", "warning": "预警系统",
+			"broadcaster": "恒星广播器", "gravity": "引力波发射器", "antimatter": "反物质",
+			"telescopes": "望远镜设备", "probes": "探测器设备"}
+	var parts: Array[String] = []
+	var counts := me.reduce_unit_counts()
+	for kind in counts:
+		if counts[kind] > 0:
+			parts.append("%s %d" % [names[kind], counts[kind]])
+	return "全部携带：%s。\n共 %d 个单位，%dE + %dE × %d = %dE，启动时一次支付。\n花 %d 回合准备%s生存，期间不能建造；已有订单须先完成。\n%s" % [
+			"、".join(parts), me.reduce_units(), Balance.COST_REDUCE_BASE, Balance.COST_REDUCE_PER_UNIT,
+			me.reduce_units(), me.reduce_cost(), Balance.REDUCE_TURNS, "一维" if me.reduced else "二维",
+			"完成后抵挡单向箔，产能再减半。" if me.reduced else "完成后不怕光粒和二向箔，产能减半。"]
 
 
 func _cost_text(energy: int, mineral: int) -> String:
@@ -882,10 +973,15 @@ func _cost_block(cost: Vector2i, me: Civ) -> String:
 
 ## 行动 a 现在为什么不能执行。只做简单的检查，其余的由规则在执行时报错。
 func _action_block(me: Civ, a: int) -> String:
+	if not state.is_over() and me.reduce_left > 0 and a in [Action.WARSHIP, Action.COLONY, Action.FOIL, Action.LINE_FOIL, Action.DOMAIN]:
+		return "降维期间不能建造或投放，还剩 %d 回合" % me.reduce_left
 	var r := _cost_block(_spec_cost(a), me)
 	if r != "":
 		return r
 	match a:
+		Action.DOMAIN:
+			if state.all_flat():
+				return "二维空间不能生成黑域"
 		Action.LIGHTGRAIN:
 			if not me.has_broadcaster:
 				return "要先建恒星广播器（在下面「建造和升级」里）"
@@ -895,18 +991,31 @@ func _action_block(me: Civ, a: int) -> String:
 		Action.STARSHIP:
 			if not me.has_starship:
 				return "还没有星舰（在下面「建造和升级」里建）"
+		Action.LINE_FOIL:
+			if not state.all_flat():
+				return "整张星图进入二维后才能使用"
+			if me.reduce_left > 0:
+				return "降维期间不能发射"
+			if a == _action and state.linearized.has(_target_cell()):
+				return "这一格已经压成直线，换一个目标"
 		Action.FOIL:
+			if state.all_flat():
+				return "星图已是二维，请使用单向箔"
+			if me.reduce_left > 0:
+				return "降维期间不能发射"
 			if a == _action and state.flattened.has(_target_cell()):
 				return "目标所在的这一列已经压平了，换一个目标"
 	return ""
 
 
 func _build_block(kind: String, b: Array, me: Civ) -> String:
+	if not state.is_over() and me.reduce_left > 0:
+		return "降维期间不能建造，还剩 %d 回合" % me.reduce_left
+	if not state.is_over() and kind == "reduce" and me.has_pending_construction():
+		return "请先完成建造和升级，再开始降维"
 	var r := _cost_block(Vector2i(b[2], b[3]), me)
 	if r != "":
 		return r
-	if me.reduce_left > 0:
-		return "降维期间不能建造"
 	if me.pending_upgrades.has(kind):
 		return "已在建造中"
 	match kind:
@@ -934,8 +1043,10 @@ func _build_block(kind: String, b: Array, me: Civ) -> String:
 			if me.bunkers.has(_selected_origin()) or me.pending_bunkers.has(_selected_origin()):
 				return "发射源已经有掩体"
 		"reduce":
-			if me.reduced:
-				return "已经降维"
+			if me.line_reduced:
+				return "已经进入一维"
+			if me.reduced and not state.all_flat():
+				return "整张星图进入二维后才能再次降维"
 	return ""
 
 
@@ -990,7 +1101,7 @@ func _build_panel() -> void:
 	box.add_child(grid)
 	var group := ButtonGroup.new()
 	var specs := _action_specs()
-	for a in specs:
+	for a in [Action.SCOUT, Action.LIGHTGRAIN, Action.WARSHIP, Action.COLONY, Action.FOIL, Action.LINE_FOIL, Action.DOMAIN, Action.BROADCAST, Action.STARSHIP]:
 		var spec: Array = specs[a]
 		var tile := _tile(spec[0], spec[1], _cost_text(spec[2], spec[3]))
 		tile.toggle_mode = true
@@ -1069,6 +1180,9 @@ func _build_panel() -> void:
 		tile.pressed.connect(_on_build.bind(kind))
 		builds.add_child(tile)
 		_build_tiles[kind] = tile
+	_reduce_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_reduce_info.add_theme_font_size_override("font_size", 13)
+	box.add_child(_reduce_info)
 
 	# 详细数值，可以收起来
 	var stats := _stat_grid(["星系", "发射源的行星", "恒星", "探测", "光粒", "预警系统", "反物质", "降维", "星舰", "黑域",
@@ -1219,6 +1333,8 @@ func _on_go() -> void:
 		r = state.launch_colony_ship(me, _direction(), _selected_origin())
 	elif _action == Action.FOIL:
 		r = state.launch_foil(me, _target_cell(), _selected_origin())
+	elif _action == Action.LINE_FOIL:
+		r = state.launch_line_foil(me, _target_cell(), _selected_origin())
 	elif _action == Action.DOMAIN:
 		r = state.launch_black_domain(me, _target_cell(), _selected_origin())
 	elif _action == Action.BROADCAST:
@@ -1301,8 +1417,8 @@ func _selected_origin() -> Vector3i:
 ## 两个角度换算成方向（长度为 1）。
 func _direction() -> Vector3:
 	var yaw := deg_to_rad(_yaw.value)
-	var pitch := deg_to_rad(_pitch.value)
-	return Vector3(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch))
+	var pitch := 0.0 if state.all_flat() else deg_to_rad(_pitch.value)
+	return state.space_direction(Vector3(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch)))
 
 
 ## 角度圆盘加上面的名字，鼠标停在上面时显示说明。
@@ -1400,8 +1516,9 @@ func _draw_ship(ship: Ship, color: Color, speed: float) -> void:
 	node.material_override = _flat_material(color)
 	node.position = _warp_point(ship.position())
 	# 圆柱网格默认沿 y 轴，转到飞行方向
-	var up := Vector3.UP if absf(ship.direction.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
-	node.basis = Basis.looking_at(ship.direction, up) * Basis(Vector3.RIGHT, -PI / 2)
+	var facing := Vector3.RIGHT if ship.direction.is_zero_approx() else ship.direction
+	var up := Vector3.UP if absf(facing.dot(Vector3.UP)) < 0.99 else Vector3.RIGHT
+	node.basis = Basis.looking_at(facing, up) * Basis(Vector3.RIGHT, -PI / 2)
 	_markers.add_child(node)
 	_markers.add_child(_segment(ship.position(), ship.position() + ship.direction * speed, color))
 
@@ -1457,7 +1574,7 @@ func _legend_text(colony_view: bool) -> String:
 		hex.call(COLOR_SHIP), hex.call(COLOR_COLONY_SHIP), hex.call(COLOR_STARSHIP)])
 	lines.append("[color=#%s]○[/color] 打中过　[color=#%s]○[/color] 打击经过的空格子" % [
 		hex.call(COLOR_RECORD_HIT), hex.call(COLOR_RECORD_EMPTY)])
-	lines.append("[color=#%s]▬[/color] 你的二向箔　[color=#%s]▬[/color] 被压平的区域　[color=#%s]○[/color] 戴森球　[color=#%s]■[/color] 采矿船" % [
+	lines.append("[color=#%s]▬[/color] 你的降维箔　[color=#%s]▬[/color] 被压缩的区域　[color=#%s]○[/color] 戴森球　[color=#%s]■[/color] 采矿船" % [
 		hex.call(COLOR_FOIL), hex.call(COLOR_FLAT), hex.call(COLOR_DYSON), hex.call(COLOR_MINER)])
 	lines.append("[color=#%s]■[/color] 黑域（光和飞船过不去）　[color=#%s]■[/color] 你准备中的广播" % [
 		hex.call(COLOR_DOMAIN_EDGE), hex.call(COLOR_BROADCAST)])
