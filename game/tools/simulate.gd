@@ -28,7 +28,7 @@ func _init() -> void:
 		changed.append("%s=%s" % [kv[0], balance.get(kv[0])])
 
 	var end_turns: Array[int] = []
-	## 整张星图压平、平局结束的对局
+	## 整张星图压成直线、平局结束的对局
 	var draw_turns: Array[int] = []
 	var contact_turns: Array[int] = []
 	var first_death_turns: Array[int] = []
@@ -79,8 +79,8 @@ func _init() -> void:
 	print("改动：%s；共 %d 局，每局最多 %d 回合" % [", ".join(changed) if changed else "无", runs, MAX_TURNS])
 	print("  首次发现目标：%d 局，中位数第 %s 回合" % [contact_turns.size(), _median(contact_turns)])
 	print("  首个文明灭亡：%d 局，中位数第 %s 回合" % [first_death_turns.size(), _median(first_death_turns)])
-	print("  只剩一个文明：%d 局，中位数第 %s 回合" % [end_turns.size(), _median(end_turns)])
-	print("  全图压平、平局：%d 局，中位数第 %s 回合" % [draw_turns.size(), _median(draw_turns)])
+	print("  非平局终局：%d 局，中位数第 %s 回合" % [end_turns.size(), _median(end_turns)])
+	print("  全图压成直线、平局：%d 局，中位数第 %s 回合" % [draw_turns.size(), _median(draw_turns)])
 	for k in CHECKPOINTS:
 		print("  第 %d 回合平均存活文明 %.2f / 5，每个文明平均 %.1f 个星系" % [k, alive_sum[k] / runs,
 				systems_sum[k] / runs])

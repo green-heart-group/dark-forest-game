@@ -15,6 +15,9 @@ var actions_left := 0
 
 var scout_range := Balance.INIT_SCOUT_RANGE
 var cone_angle := Balance.INIT_CONE_ANGLE
+## 每次完成探测升级所建的设备数量；初始探测能力不额外计费。
+var telescopes := 0
+var probes := 0
 ## 在飞的战舰
 var warships: Array[Ship] = []
 ## 在飞的殖民船
@@ -33,12 +36,14 @@ var starship := Vector3i.ZERO
 ## 星舰建造中：下一回合在 starship_build_at 建好
 var starship_building := false
 var starship_build_at := Vector3i.ZERO
-## 准备中或在飞的二向箔
+## 准备中或在飞的降维箔
 var foils: Array[Foil] = []
 ## 自身降维还要几个回合完成，0 表示没在降维
 var reduce_left := 0
 ## 已经降维（进入二维）：不怕光粒，被二向箔压平也能活，但产能减半
 var reduced := false
+## 二维世界里再次完成自身降维，能在单向箔压成的直线上生存。
+var line_reduced := false
 ## AI 用：派过殖民船的目标。目标可能已被别人悄悄占了，不再重复去。
 var colony_tried: Dictionary[Vector3i, bool] = {}
 
@@ -110,7 +115,7 @@ func star_total(map: StarMap) -> int:
 	return total
 
 
-## 恒星越多，能量越多。降维后减半。
+## 恒星越多，能量越多。每次自身降维后再减半。
 func energy_per_turn(map: StarMap) -> int:
 	var total := 0
 	for c in colonies:
@@ -118,7 +123,7 @@ func energy_per_turn(map: StarMap) -> int:
 	total += dyson_count() * Balance.DYSON_ENERGY
 	if starship_only():
 		total = Balance.STARSHIP_ENERGY
-	return int(total / 2.0) if reduced else total
+	return int(total / 4.0) if line_reduced else (int(total / 2.0) if reduced else total)
 
 
 func dyson_count() -> int:
@@ -128,17 +133,35 @@ func dyson_count() -> int:
 	return total
 
 
-## 每个星系产矿石，每艘采矿船再多产一些。降维后减半。
+## 每个星系产矿石，每艘采矿船再多产一些。每次自身降维后再减半。
 func mineral_per_turn(_map: StarMap) -> int:
 	var total := colonies.size() * Balance.MINERAL_PER_COLONY + miners.size() * Balance.MINER_MINERAL
 	if starship_only():
 		total = Balance.STARSHIP_MINERAL
-	return int(total / 2.0) if reduced else total
+	return int(total / 4.0) if line_reduced else (int(total / 2.0) if reduced else total)
 
 
-## 自身降维要带进二维的单位数：每个星系、每艘在飞的飞船、星舰各算一个。
+## 自身降维携带全部现有单位。未完成的建造和已投放的武器 / 空间效果不在其中。
+func reduce_unit_counts() -> Dictionary[String, int]:
+	return {
+		"systems": colonies.size(), "warships": warships.size(), "colony_ships": colony_ships.size(),
+		"starship": int(has_starship), "dysons": dyson_count(), "miners": miners.size(),
+		"bunkers": bunkers.size(), "warning": int(has_warning), "broadcaster": int(has_broadcaster),
+		"gravity": int(has_gravity), "antimatter": antimatter, "telescopes": telescopes, "probes": probes,
+	}
+
+
 func reduce_units() -> int:
-	return colonies.size() + warships.size() + colony_ships.size() + (1 if has_starship else 0)
+	var total := 0
+	for count in reduce_unit_counts().values():
+		total += count
+	return total
+
+
+## 先完成已有订单，避免按旧单位数付费后又在降维期间建成新单位。
+func has_pending_construction() -> bool:
+	return starship_building or not pending_upgrades.is_empty() or not pending_dysons.is_empty() \
+			or not pending_miners.is_empty() or not pending_bunkers.is_empty()
 
 
 func reduce_cost() -> int:

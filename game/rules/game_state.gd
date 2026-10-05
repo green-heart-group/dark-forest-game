@@ -31,6 +31,14 @@ var hidden: Array[Vector3i] = []
 var hidden_strikes: Array[Dictionary] = []
 ## 展开的二向箔：每项是 {"center": 展开的格子, "age": 展开了几个回合}。所有文明都看得到。
 var foil_zones: Array[Dictionary] = []
+## 第一片二向箔确定全图共同平面，后续展开不会再产生不同高度的平面。
+var flat_plane := -1
+## 二维格子压到共同直线的 y；z 始终为 flat_plane，直线沿 x 轴。
+var linearized: Dictionary[Vector3i, int] = {}
+var line_zones: Array[Dictionary] = []
+var line_y := -1
+## 一轮空间坍缩完整结算后再判断胜负。
+var _collapse_depth := 0
 
 
 ## 第一个文明是人类玩家，其余是 AI。母星优先放在宜居星系上。
@@ -98,6 +106,7 @@ func start_turn(civ: Civ) -> void:
 ## 玩家结束回合：AI 依次行动，然后所有文明结算产出，进入下一回合。
 func end_turn() -> void:
 	if is_over():
+		advance_collapse()
 		return
 	for civ in civs:
 		if civ.is_ai and civ.alive and not is_over():
@@ -141,6 +150,7 @@ func end_turn() -> void:
 ## 从 origin（默认母星）朝 direction 发出圆锥探测。
 ## 返回 {"error": 出错原因，成功时为空, "found": 新发现的坐标}。
 func scout(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictionary:
+	direction = space_direction(direction)
 	var found: Array[Vector3i] = []
 	if origin == AT_HOME:
 		origin = civ.home
@@ -152,7 +162,7 @@ func scout(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictiona
 	civ.actions_left -= 1
 	for c in Geometry.cone_cells(origin, direction, civ.scout_range, civ.cone_angle):
 		var owner := coord_owner(c)
-		if owner != null and owner != civ and not civ.known.has(c) and not blocked(origin, c):
+		if cell_exists(c) and owner != null and owner != civ and not civ.known.has(c) and not blocked(origin, c):
 			civ.known[c] = true
 			found.append(c)
 	if not civ.is_ai:
@@ -167,6 +177,7 @@ func scout(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictiona
 ## 圆柱范围内最近的敌方星系被打中，少一颗恒星；自己的星系会被穿过。
 ## 返回 {"error": 出错原因, "hit": 是否打中, "cell": 打中的格子}。
 func lightgrain(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictionary:
+	direction = space_direction(direction)
 	if origin == AT_HOME:
 		origin = civ.home
 	var error := _check_action(civ, direction, origin, Balance.COST_LIGHTGRAIN)
@@ -193,6 +204,7 @@ func lightgrain(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dic
 ## 从 origin（默认母星）朝 direction 派出战舰。之后每回合结束时前进一段。
 ## 返回 {"error": 出错原因，成功时为空}。
 func launch_warship(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictionary:
+	direction = space_direction(direction)
 	if origin == AT_HOME:
 		origin = civ.home
 	var error := _check_build(civ)
@@ -213,6 +225,7 @@ func launch_warship(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) ->
 ## 从 origin（默认母星）朝 direction 派出殖民船。之后每回合结束时前进一段，
 ## 停在经过的第一个无主宜居星系。返回 {"error": 出错原因，成功时为空}。
 func launch_colony_ship(civ: Civ, direction: Vector3, origin: Vector3i = AT_HOME) -> Dictionary:
+	direction = space_direction(direction)
 	if origin == AT_HOME:
 		origin = civ.home
 	var error := _check_build(civ)
@@ -267,7 +280,7 @@ func _move_colony_ships(civ: Civ) -> void:
 
 ## 这个格子能不能建立殖民地：宜居、还有恒星、没有活着的文明占着。
 func can_settle(c: Vector3i) -> bool:
-	return map.is_habitable(c) and map.star_at(c) != StarMap.Star.NONE and coord_owner(c) == null
+	return cell_exists(c) and map.is_habitable(c) and map.star_at(c) != StarMap.Star.NONE and coord_owner(c) == null
 
 
 ## 每艘战舰前进一段，检查新飞过的格子：碰到敌方星系就攻击并消耗掉，飞出星图就消失。
@@ -300,6 +313,8 @@ func _move_warships(civ: Civ) -> void:
 ## 碰到黑域边界（和发射源 origin 不在同一边）返回 TRAPPED。
 func _sweep(civ: Civ, origin: Vector3i, cells: Array[Vector3i], weapon: String) -> Vector3i:
 	for c in cells:
+		if not cell_exists(c):
+			continue
 		if blocked(origin, c):
 			return TRAPPED
 		var owner := coord_owner(c)
@@ -350,26 +365,43 @@ func _sweep(civ: Civ, origin: Vector3i, cells: Array[Vector3i], weapon: String) 
 ## 从 origin（默认母星）向目标坐标 target 发射二向箔：先准备几个回合，再飞过去。
 ## 返回 {"error": 出错原因，成功时为空}。
 func launch_foil(civ: Civ, target: Vector3i, origin: Vector3i = AT_HOME) -> Dictionary:
+	return _launch_foil(civ, target, origin, false)
+
+
+func launch_line_foil(civ: Civ, target: Vector3i, origin: Vector3i = AT_HOME) -> Dictionary:
+	return _launch_foil(civ, target, origin, true)
+
+
+func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -> Dictionary:
 	if origin == AT_HOME:
 		origin = civ.home
 	var error := _check_build(civ)
-	if error == "" and not StarMap.in_bounds(target):
+	if is_over():
+		error = "游戏已结束"
+	elif to_line and not all_flat():
+		error = "整张星图进入二维后才能发射单向箔"
+	elif not to_line and all_flat():
+		error = "星图已是二维，请使用单向箔"
+	elif not StarMap.in_bounds(target):
 		error = "目标坐标不在星图内"
-	if error == "" and target == origin:
+	elif to_line and target.z != flat_plane:
+		error = "目标必须在二维平面上"
+	elif target == origin:
 		error = "目标不能是发射源"
-	if error == "" and civ.owns(target):
+	elif civ.owns(target):
 		error = "目标不能是自己的星系"
-	if error == "" and flattened.has(target):
-		error = "这一格已经压平了"
+	elif (linearized.has(target) if to_line else flattened.has(target)):
+		error = "这一格已经压成直线了" if to_line else "这一格已经压平了"
+	var cost := Balance.COST_LINE_FOIL if to_line else Balance.COST_FOIL
 	if error == "":
-		error = _check_action(civ, Vector3(target - origin), origin, Balance.COST_FOIL)
+		error = _check_action(civ, Vector3(target - origin), origin, cost)
 	if error != "":
 		return {"error": error}
-	civ.energy -= Balance.COST_FOIL
+	civ.energy -= cost
 	civ.actions_left -= 1
-	civ.foils.append(Foil.new(origin, target, Balance.FOIL_PREPARE_TURNS))
+	civ.foils.append(Foil.new(origin, target, Balance.FOIL_PREPARE_TURNS, to_line))
 	if not civ.is_ai:
-		add_log("二向箔开始准备，目标 %s，%d 回合后起飞" % [target, Balance.FOIL_PREPARE_TURNS])
+		add_log("%s开始准备，目标 %s，%d 回合后起飞" % ["单向箔" if to_line else "二向箔", target, Balance.FOIL_PREPARE_TURNS])
 	return {"error": ""}
 
 
@@ -381,7 +413,7 @@ func _advance_foils(civ: Civ) -> void:
 		if foil.prepare_left > 0:
 			foil.prepare_left -= 1
 			if foil.prepare_left == 0 and not civ.is_ai:
-				add_log("二向箔准备完成，起飞")
+				add_log("%s准备完成，起飞" % ("单向箔" if foil.to_line else "二向箔"))
 			still_flying.append(foil)
 			continue
 		var from_t := foil.traveled
@@ -400,11 +432,12 @@ func _advance_foils(civ: Civ) -> void:
 		if at == NO_HIT:
 			still_flying.append(foil)
 			continue
-		add_log("二向箔在 %s 展开" % at)
-		_unfold_foil(at)
-		if is_over():
-			return
-	civ.foils = still_flying
+		add_log("%s在 %s 展开" % ["单向箔" if foil.to_line else "二向箔", at])
+		if foil.to_line:
+			_unfold_line_foil(at)
+		else:
+			_unfold_foil(at)
+	civ.foils = still_flying if civ.alive else []
 
 
 ## 把格子 c 压到高度 plane 的平面上（同一个 x、y，z 变成 plane）。这一格里没降维的文明失去星系，
@@ -414,11 +447,26 @@ func _flatten_cell(c: Vector3i, plane: int) -> void:
 	if flattened.has(c) or not StarMap.in_bounds(c):
 		return
 	flattened[c] = plane
+	_compress_cell(c, Vector3i(c.x, c.y, plane), false)
+	if all_flat():
+		add_log("整张星图已进入二维：可以再次自身降维，并发射单向箔")
+		_check_winner()
+
+
+func _linearize_cell(c: Vector3i) -> void:
+	if linearized.has(c):
+		return
+	linearized[c] = line_y
+	_compress_cell(c, Vector3i(c.x, line_y, flat_plane), true)
+
+
+## 两级坍缩共享伤害、设施迁移、情报更新和飞船处理。
+func _compress_cell(c: Vector3i, flat: Vector3i, to_line: bool) -> void:
+	var weapon := "单向箔" if to_line else "二向箔"
 	var r := Balance.BLACK_DOMAIN_RADIUS
 	black_domains = black_domains.filter(func(d): return maxi(maxi(absi(d.x - c.x), absi(d.y - c.y)), absi(d.z - c.z)) > r)
-	var flat := Vector3i(c.x, c.y, plane)
 	var owner := coord_owner(c)
-	if owner != null and owner.reduced:
+	if owner != null and (owner.line_reduced if to_line else owner.reduced):
 		_move_system(owner, c, flat)
 	else:
 		map.stars[c] = StarMap.Star.NONE
@@ -426,25 +474,63 @@ func _flatten_cell(c: Vector3i, plane: int) -> void:
 			civ.known.erase(c)
 		if owner != null:
 			if owner == human():
-				add_log("你的星系 %s 被二向箔压平" % c)
+				add_log("你的星系 %s 被%s压缩" % [c, weapon])
 			_lose_system(c, owner)
 	for civ in civs:
+		var survives := civ.line_reduced if to_line else civ.reduced
 		if civ.alive and civ.has_starship and civ.starship == c:
-			if civ.reduced:
+			if survives:
 				civ.starship = flat
+				if civ.starship_only():
+					civ.home = flat
 			else:
-				_lose_starship(civ, "二向箔")
-		if civ.reduced:
-			continue
-		civ.warships = _outside_cell(civ.warships, c)
-		civ.colony_ships = _outside_cell(civ.colony_ships, c)
-	if all_flat():
-		_check_winner()
+				_lose_starship(civ, weapon)
+		if survives:
+			civ.warships = _fold_ships(civ.warships, c, flat, 1 if to_line else 2)
+			civ.colony_ships = _fold_ships(civ.colony_ships, c, flat, 1 if to_line else 2)
+		else:
+			civ.warships = _outside_cell(civ.warships, c)
+			civ.colony_ships = _outside_cell(civ.colony_ships, c)
 
 
 ## 整张星图是不是都压平了。
 func all_flat() -> bool:
-	return flattened.size() == StarMap.SIZE * StarMap.SIZE * StarMap.SIZE
+	if flattened.size() != StarMap.SIZE * StarMap.SIZE * StarMap.SIZE:
+		return false
+	var plane: int = flattened.values()[0]
+	return flattened.values().all(func(z): return z == plane)
+
+
+## 二维地图只剩一条共同直线。
+func all_linear() -> bool:
+	return linearized.size() == StarMap.SIZE * StarMap.SIZE and linearized.values().all(func(y): return y == line_y)
+
+
+## 还存在的格子：压平后只保留平面，压线后只保留直线。
+func cell_exists(c: Vector3i) -> bool:
+	return StarMap.in_bounds(c) and (not flattened.has(c) or flattened[c] == c.z) \
+			and (not linearized.has(c) or linearized[c] == c.y)
+
+
+## 完成降维的地图里，方向只能沿剩下的轴。
+func space_direction(direction: Vector3) -> Vector3:
+	if all_flat():
+		direction.z = 0.0
+	if all_linear():
+		direction.y = 0.0
+	return direction.normalized()
+
+
+func _fold_ships(ships: Array[Ship], from: Vector3i, to: Vector3i, axis: int) -> Array[Ship]:
+	var kept: Array[Ship] = []
+	for ship in ships:
+		if Vector3i(ship.position().round()) == from:
+			ship.origin = to
+			ship.traveled = 0.0
+			ship.direction[axis] = 0.0
+			ship.direction = ship.direction.normalized()
+		kept.append(ship)
+	return kept
 
 
 ## 降维文明的星系被压到平面上：从 from 搬到 to，恒星、戴森球、采矿船跟着走，
@@ -455,7 +541,7 @@ func _move_system(owner: Civ, from: Vector3i, to: Vector3i) -> void:
 		return
 	if coord_owner(to) != null:
 		if owner == human():
-			add_log("你的星系 %s 被压到平面上，和 %s 的星系重叠，毁掉了" % [from, to])
+			add_log("你的星系 %s 被压缩后和 %s 的星系重叠，毁掉了" % [from, to])
 		map.stars[from] = StarMap.Star.NONE
 		_lose_system(from, owner)
 		return
@@ -488,7 +574,7 @@ func _move_system(owner: Civ, from: Vector3i, to: Vector3i) -> void:
 			civ.known.erase(from)
 			civ.known[to] = true
 	if owner == human():
-		add_log("你的星系 %s 被压到平面上，现在在 %s" % [from, to])
+		add_log("你的星系 %s 被压缩，现在在 %s" % [from, to])
 
 
 ## 不在格子 c 里的飞船。
@@ -502,16 +588,64 @@ func _outside_cell(ships: Array[Ship], c: Vector3i) -> Array[Ship]:
 
 ## 二向箔在格子 at 展开：平面的高度是 at 的 z，马上压平它能压到的格子。
 func _unfold_foil(at: Vector3i) -> void:
-	var zone := {"center": at, "age": 0}
+	if flat_plane < 0:
+		flat_plane = at.z
+	var zone := {"center": Vector3i(at.x, at.y, flat_plane), "age": 0}
 	foil_zones.append(zone)
 	_apply_zone(zone)
 
 
+## 胜负结束后也允许环境继续演化，不恢复行动、不结算收入或 AI。
+func collapse_pending() -> bool:
+	return (not foil_zones.is_empty() and not all_flat()) or (not line_zones.is_empty() and not all_linear())
+
+
+func advance_collapse() -> void:
+	if collapse_pending():
+		_spread_flat()
+
+
 ## 每回合每片展开的二向箔再扩散一圈。
 func _spread_flat() -> void:
-	for zone in foil_zones:
-		zone["age"] += 1
-		_apply_zone(zone)
+	if not all_flat():
+		for zone in foil_zones:
+			zone["age"] += 1
+			_apply_zone(zone)
+	if not all_linear():
+		for zone in line_zones:
+			zone["age"] += 1
+			_apply_line_zone(zone)
+
+
+func _unfold_line_foil(at: Vector3i) -> void:
+	if not all_flat() or at.z != flat_plane:
+		return
+	if line_y < 0:
+		line_y = at.y
+	var zone := {"center": Vector3i(at.x, line_y, flat_plane), "age": 0}
+	line_zones.append(zone)
+	_apply_line_zone(zone)
+
+
+## 和二向箔相同的收拢形状，在二维里沿 x 扩散、压缩 y。
+static func line_covers(center: Vector3i, age: int, c: Vector3i) -> bool:
+	var room := zone_room(age, absf(c.x - center.x))
+	return absf(c.x - center.x) <= age or absi(c.y - center.y) > room
+
+
+func _apply_line_zone(zone: Dictionary) -> void:
+	_collapse_depth += 1
+	var center: Vector3i = zone["center"]
+	for h in StarMap.SIZE:
+		for y in ([line_y - h, line_y + h] if h > 0 else [line_y]):
+			if y < 0 or y >= StarMap.SIZE:
+				continue
+			for x in StarMap.SIZE:
+				var c := Vector3i(x, y, flat_plane)
+				if line_covers(center, zone["age"], c):
+					_linearize_cell(c)
+	_collapse_depth -= 1
+	_check_winner()
 
 
 ## 展开了 age 回合、中心在 center 的二向箔，有没有把格子 c 压没。
@@ -531,6 +665,7 @@ static func zone_room(age: int, d: float) -> float:
 ## 压平这片二向箔压到的格子。离平面近的先压，免得降维文明的星系移到平面上时，
 ## 撞上待会儿才会被压掉的别人的星系。
 func _apply_zone(zone: Dictionary) -> void:
+	_collapse_depth += 1
 	var center: Vector3i = zone["center"]
 	var age: int = zone["age"]
 	for h in StarMap.SIZE:
@@ -542,8 +677,8 @@ func _apply_zone(zone: Dictionary) -> void:
 					var c := Vector3i(x, y, z)
 					if not flattened.has(c) and zone_covers(center, age, c):
 						_flatten_cell(c, center.z)
-						if is_over():
-							return
+	_collapse_depth -= 1
+	_check_winner()
 
 
 ## 格子 c 再过几个回合会被压没（已经压没时为 0，没有展开的二向箔时为 INF）。
@@ -565,6 +700,8 @@ func launch_black_domain(civ: Civ, center: Vector3i, origin: Vector3i = AT_HOME)
 	var error := _check_build(civ)
 	if error == "" and not StarMap.in_bounds(center):
 		error = "中心坐标不在星图内"
+	if error == "" and flattened.has(center):
+		error = "压平的空间不能生成黑域"
 	if error == "" and Vector3(center - origin).length() > civ.scout_range:
 		error = "中心离发射源太远，超出探测长度"
 	if error == "":
@@ -737,21 +874,27 @@ func start_reduce(civ: Civ) -> Dictionary:
 		error = "游戏已结束"
 	elif not civ.alive:
 		error = "文明已灭亡"
-	elif civ.reduced:
-		error = "已经降维"
+	elif civ.line_reduced:
+		error = "已经进入一维"
+	elif civ.reduced and not all_flat():
+		error = "整张星图进入二维后才能再次降维"
 	elif civ.reduce_left > 0:
 		error = "正在降维"
+	elif civ.has_pending_construction():
+		error = "请先完成建造和升级，再开始降维"
 	elif civ.actions_left <= 0:
 		error = "行动点不足"
 	elif civ.energy < civ.reduce_cost():
 		error = "能量不足"
 	if error != "":
 		return {"error": error}
-	civ.energy -= civ.reduce_cost()
+	var cost := civ.reduce_cost()
+	civ.energy -= cost
 	civ.actions_left -= 1
 	civ.reduce_left = Balance.REDUCE_TURNS
 	if not civ.is_ai:
-		add_log("开始自身降维，%d 回合后完成，期间不能建造" % Balance.REDUCE_TURNS)
+		add_log("携带 %d 个单位，消耗 %dE；开始自身降维到%s，%d 回合后完成，期间不能建造" % [
+				civ.reduce_units(), cost, "一维" if civ.reduced else "二维", Balance.REDUCE_TURNS])
 	return {"error": ""}
 
 
@@ -760,9 +903,12 @@ func _advance_reduce(civ: Civ) -> void:
 		return
 	civ.reduce_left -= 1
 	if civ.reduce_left == 0:
-		civ.reduced = true
+		if civ.reduced:
+			civ.line_reduced = true
+		else:
+			civ.reduced = true
 		if not civ.is_ai:
-			add_log("自身降维完成：不怕光粒和二向箔，产能减半")
+			add_log("自身降维完成：进入%s，产能为原来的 %s" % ["一维" if civ.line_reduced else "二维", "1/4" if civ.line_reduced else "1/2"])
 
 
 ## 在自己的星系 at（默认母星）上建一个戴森球，花矿石，下一回合建好。
@@ -833,6 +979,7 @@ func build_starship(civ: Civ, at: Vector3i = AT_HOME) -> Dictionary:
 ## 在星图内、没有别人的星系、没被压平。不能穿过黑域的边界。
 ## 返回 {"error": 出错原因，成功时为空, "to": 到达的格子}。
 func move_starship(civ: Civ, direction: Vector3, max_distance: float = Balance.STARSHIP_JUMP) -> Dictionary:
+	direction = space_direction(direction)
 	var error := ""
 	if not civ.has_starship:
 		error = "没有星舰"
@@ -844,7 +991,8 @@ func move_starship(civ: Civ, direction: Vector3, max_distance: float = Balance.S
 			if blocked(civ.starship, c):
 				break
 			var owner := coord_owner(c)
-			if (owner != null and owner != civ) or flattened.has(c):
+			if (owner != null and owner != civ) or not cell_exists(c) \
+					or (flattened.has(c) and not civ.reduced) or (linearized.has(c) and not civ.line_reduced):
 				continue
 			dest = c
 		if dest == civ.starship:
@@ -869,6 +1017,8 @@ func settle_starship(civ: Civ) -> Dictionary:
 		error = "游戏已结束"
 	elif not civ.alive:
 		error = "文明已灭亡"
+	elif civ.reduce_left > 0:
+		error = "降维期间不能建立星系"
 	elif not civ.has_starship:
 		error = "没有星舰"
 	elif not can_settle(civ.starship):
@@ -1036,8 +1186,10 @@ func _apply_upgrades(civ: Civ) -> void:
 		match kind:
 			"telescope":
 				civ.cone_angle = minf(civ.cone_angle + Balance.TELESCOPE_STEP, Balance.MAX_CONE_ANGLE)
+				civ.telescopes += 1
 			"probe":
 				civ.scout_range = minf(civ.scout_range + Balance.PROBE_STEP, Balance.MAX_SCOUT_RANGE)
+				civ.probes += 1
 			"warning":
 				civ.has_warning = true
 			"antimatter":
@@ -1177,20 +1329,19 @@ func _lose_starship(owner: Civ, cause: String) -> void:
 ## 每有文明灭亡就重新判断一次。二向箔可能让好几个文明同时灭亡，
 ## 所以已经分出胜负后还会再改（例如你灭亡后，剩下的 AI 也被压平，就变成「无」）。
 func _check_winner() -> void:
+	if _collapse_depth > 0:
+		return
 	var alive := civs.filter(func(c): return c.alive)
 	var result := ""
-	# 暂定：整张星图都压平后，还活着的文明（都已降维）之间没法再分出胜负，算平局
-	if all_flat() and alive.size() >= 2:
-		result = "平局"
-	elif spectator:
-		if alive.size() <= 1:
-			result = alive[0].name if alive.size() == 1 else "无"
-	elif alive.is_empty():
+	# 玩家已灭亡时保留败局；环境继续坍缩不能把失败变成平局。
+	if alive.is_empty():
 		result = "无"
-	elif not human().alive:
+	elif not spectator and not human().alive:
 		result = "AI"
 	elif alive.size() == 1:
-		result = "你"
+		result = alive[0].name if spectator else "你"
+	elif all_linear():
+		result = "平局"
 	if result == "" or result == winner:
 		return
 	winner = result
@@ -1198,7 +1349,7 @@ func _check_winner() -> void:
 		"你": add_log("你胜利了")
 		"AI": add_log("你失败了")
 		"无": add_log("所有文明都灭亡了")
-		"平局": add_log("整张星图都被压平，还剩 %d 个文明，平局" % alive.size())
+		"平局": add_log("整张星图已压成一条直线，还剩 %d 个文明，平局" % alive.size())
 
 
 # ---------- 简单 AI ----------
@@ -1210,7 +1361,7 @@ func _check_winner() -> void:
 ## 没有能打的目标：先造预警系统，被打中过就在母星投放黑域（躲起来）、再建一艘星舰（留条后路），再派殖民船（同时最多一艘），再建采矿船（每回合最多一艘），再建戴森球（每回合最多一个），再造一个反物质（没有时），再升级探测器、望远镜，
 ## 然后随机方向探测。
 func _ai_turn(ai: Civ) -> void:
-	if _flat_near(ai) and not ai.reduced and ai.reduce_left == 0:
+	if _flat_near(ai) and not (ai.line_reduced if all_flat() else ai.reduced) and ai.reduce_left == 0:
 		if start_reduce(ai)["error"] != "":
 			return  # 能量不够降维，先攒着，什么都不做
 	if ai.starship_only():
@@ -1272,7 +1423,7 @@ func _nearest_pair(ai: Civ, max_d: float, skip_flat := false) -> Array[Vector3i]
 	var best: Array[Vector3i] = []
 	var best_d := max_d
 	for t in ai.known:
-		if skip_flat and flattened.has(t):
+		if skip_flat and (linearized.has(t) if all_flat() else flattened.has(t)):
 			continue
 		for o in ai.colonies:
 			var d := Vector3(t - o).length()
@@ -1290,11 +1441,12 @@ func _try_foil(ai: Civ) -> bool:
 	var far := _nearest_pair(ai, INF, true)
 	if far.is_empty():
 		return false
-	if not ai.reduced:
-		if ai.energy < maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + Balance.COST_FOIL):
+	var to_line := all_flat()
+	if not (ai.line_reduced if to_line else ai.reduced):
+		if ai.energy < maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + (Balance.COST_LINE_FOIL if to_line else Balance.COST_FOIL)):
 			return false
 		return start_reduce(ai)["error"] == ""
-	return launch_foil(ai, far[1], far[0])["error"] == ""
+	return (launch_line_foil(ai, far[1], far[0]) if to_line else launch_foil(ai, far[1], far[0]))["error"] == ""
 
 
 ## 只剩星舰的 AI：停在能殖民的星系上就建立星系；否则朝最近的、没去过的宜居星系移动。
@@ -1354,8 +1506,13 @@ func _try_dyson(ai: Civ) -> bool:
 
 ## 压平的区域再过不超过 AI_REDUCE_ALERT 回合就会压到这个文明的某个星系。
 func _flat_near(ai: Civ) -> bool:
-	for c in ai.colonies:
-		if turns_until_flat(c) <= Balance.AI_REDUCE_ALERT:
+	var positions := ai.origins()
+	for c in positions:
+		if all_flat():
+			for zone in line_zones:
+				if line_covers(zone["center"], zone["age"] + Balance.AI_REDUCE_ALERT, c):
+					return true
+		elif turns_until_flat(c) <= Balance.AI_REDUCE_ALERT:
 			return true
 	return false
 
