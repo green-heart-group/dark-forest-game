@@ -42,6 +42,7 @@
 - [x] 整理代码：行动的花费和「不能做」的原因只在规则里写一次；画面的 main.gd 拆成几个文件
 - [x] 自动发布 Windows exe 和网页版；运行时不再读 `balance.gd` 的原文
 - [x] 把 `feature/prototype` 合并回 `master`，以后用 GitHub Flow：改动通过 PR 合并，PR 自动跑测试（[decisions/0003](decisions/0003-github-flow.md)）
+- [x] 整理测试：规则测试按规则分成 20 个文件，一条命令跑全部（本地和 GitHub 一样），检查每条规则都有测试，写测试的规矩写进 [代码结构](guides/code.md#写测试的规矩)
 
 ## 已完成：光速和科技树（阶段 3）
 

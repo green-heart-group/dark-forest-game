@@ -8,7 +8,8 @@
   （数值、花费和不能做的原因只写一次、对局记录、界面缩放、截图检查画面等）。
 - 运行、测试、平衡模拟的命令见根目录 `README.md`「快速开始」和「测试和平衡模拟」。
   终端里用 `godot_console`（会等程序跑完并显示输出），不用 `godot`；新增 `class_name` 后先跑一次 `--import`。
-  改完代码跑规则测试和画面测试，输出「0 个失败」才算通过。
+  改完代码跑 `uv run game/tools/test.py`（规则测试和画面测试都跑），两种测试都输出「0 个失败」才算通过。
+  写测试的规矩（每个测试标上测的是哪条规则等）见 `docs/guides/code.md`「写测试的规矩」。
 - 分支用 GitHub Flow（`docs/decisions/0003-github-flow.md`）：不直接推 `master`，从 `master` 开新分支，通过 PR squash 合并。
 
 ## 改代码时一起更新的文档

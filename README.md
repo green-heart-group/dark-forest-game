@@ -114,7 +114,7 @@ godot --path game --editor
 game/
 ├── rules/    规则代码：不依赖任何画面节点，所有数值在 balance.gd
 ├── view/     画面代码：只读取规则数据
-├── tests/    规则测试和画面测试
+├── tests/    规则测试（rules/ 里按规则分文件）和画面测试
 ├── tools/    平衡模拟、生成数值目录、做网页字体、录 README 的动图
 └── balance_presets/  共享的数值方案（和 balance.gd 不一样的一组数值）
 docs/         设计、要确定的问题、现状、路线图、开发日志、提议和重要决定（入口 docs/README.md）
@@ -126,10 +126,14 @@ docs/         设计、要确定的问题、现状、路线图、开发日志、
 ### 测试和平衡模拟
 
 ```bash
-# 跑规则测试
-godot_console --headless --path game --script res://tests/run_tests.gd
+# 跑全部测试：先导入，再跑规则测试和画面测试（GitHub 上跑的也是这一条）
+uv run game/tools/test.py
 
-# 跑画面测试：检查界面和星图显示是否和规则一致
+# 只跑规则测试里名字带 ai 的（rules 换成 view 就是画面测试；--no-import 跳过导入）
+uv run game/tools/test.py rules --only ai
+
+# 也可以直接用 Godot 跑某一种测试，最后加 -- only=词 只跑名字里带这个词的
+godot_console --headless --path game --script res://tests/run_tests.gd
 godot_console --headless --path game --script res://tests/run_view_tests.gd
 
 # 平衡模拟：5 个文明全由 AI 控制，打 50 局（默认分给几个进程同时跑，JOBS=1 时只用一个）
