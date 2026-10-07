@@ -4,8 +4,9 @@
 [游戏设计 §14 决定记录](../design/game-design.md#14-决定记录)。
 
 每个决定一个文件，文件名为 `NNNN-简短英文标题.md`（例如 `0002-archive-python.md`），编号接着往下排。
-内容包括：状态和日期、背景、考虑过的选项、最终选择和理由。后来改了主意，不改旧文件的结论，
+至少写状态和日期、选了什么；背景、考虑过的选项和理由按需要写，能短就短。后来改了主意，不改旧文件的结论，
 新写一条，在旧文件的状态里写「被 NNNN 取代」。
 
 - [0001-platform.md](0001-platform.md)：开发平台用 Godot 4.7.2（已定，[A2](../design/archive/decided-questions-2026-10.md#a2-开发平台)）。
 - [0002-archive-python.md](0002-archive-python.md)：旧 Python 版归档到 `archive/python` 分支，主分支只放 Godot 版。
+- [0003-github-flow.md](0003-github-flow.md)：分支和合并用 GitHub Flow，改动都通过 PR 进 `master`，只用 squash 合并。

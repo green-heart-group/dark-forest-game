@@ -9,6 +9,7 @@
 - 运行、测试、平衡模拟的命令见根目录 `README.md`「快速开始」和「测试和平衡模拟」。
   终端里用 `godot_console`（会等程序跑完并显示输出），不用 `godot`；新增 `class_name` 后先跑一次 `--import`。
   改完代码跑规则测试和画面测试，输出「0 个失败」才算通过。
+- 分支用 GitHub Flow（`docs/decisions/0003-github-flow.md`）：不直接推 `master`，从 `master` 开新分支，通过 PR squash 合并。
 
 ## 改代码时一起更新的文档
 

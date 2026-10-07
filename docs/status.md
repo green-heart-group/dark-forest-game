@@ -5,7 +5,7 @@
 
 ## 进度（2026-10-07）
 
-- 平台：Godot 4.7.2 原型。新规则在 `feature/prototype` 分支上，还没合并回 `master`。
+- 平台：Godot 4.7.2 原型，在 `master` 上，改动通过 PR 合并（见 [decisions/0003-github-flow.md](decisions/0003-github-flow.md)）。
   旧 Python 版只在 `archive/python` 分支上，不再改动（见 [decisions/0002-archive-python.md](decisions/0002-archive-python.md)）。
 - 规则：光速和科技树（[路线图阶段 3](roadmap.md#已完成光速和科技树阶段-3)）做完了，
   又按 E7F6 的七次试玩意见改了规则（前五次是 [F1.1～F5.3](design/game-design.md#试玩意见定下的f)；
