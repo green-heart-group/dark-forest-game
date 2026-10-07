@@ -3,3 +3,6 @@
 
 # VS Code 个人设置，里面有各自电脑上的 Godot 路径
 .vscode/
+
+# 网页版带的字体，用 game/tools/make_web_fonts.py 生成
+view/web_fonts/

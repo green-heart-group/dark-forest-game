@@ -15,7 +15,7 @@ var half := false
 ## 圆盘边上的文字：键是角度，值是文字
 var marks := {}
 
-const RADIUS := 44.0
+const RADIUS := 36.0
 const COLOR_RIM := Color(0.35, 0.38, 0.48)
 const COLOR_FACE := Color(0.12, 0.13, 0.18)
 const COLOR_HAND := Color(0.45, 0.75, 1.0)
@@ -28,8 +28,12 @@ func _init() -> void:
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 
 
+func _make_custom_tooltip(for_text: String) -> Object:
+	return preload("res://view/tip.gd").make(self, for_text)
+
+
 func _ready() -> void:
-	custom_minimum_size = Vector2(RADIUS + 40, 2 * RADIUS + 30) if half else Vector2(2 * RADIUS + 40, 2 * RADIUS + 30)
+	custom_minimum_size = Vector2(RADIUS + 40, 2 * RADIUS + 24) if half else Vector2(2 * RADIUS + 40, 2 * RADIUS + 24)
 
 
 ## 圆心：半圆贴着左边放，整圆放在中间。
