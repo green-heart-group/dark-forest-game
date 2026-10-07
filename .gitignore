@@ -9,6 +9,9 @@ docs/local/
 # 旧 Python 版（archive/python 分支）在本地留下的文件，切回 master 时不显示
 __pycache__/
 .venv/
-build/
+build/*
 dist/
 uv.lock
+
+#
+!build/.gitkeep

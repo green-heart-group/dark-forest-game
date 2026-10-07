@@ -1,0 +1,19 @@
+# 检查文档里的链接有没有打不开的（只查仓库内文件之间的链接，不访问外部网址）。
+# 本地也可以跑同样的检查：lychee --offline --exclude-path docs/local docs README.md CLAUDE.md
+name: 检查文档链接
+
+on:
+  push:
+    paths: ["**.md", ".github/workflows/links.yml"]
+  pull_request:
+    paths: ["**.md", ".github/workflows/links.yml"]
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --no-progress docs README.md CLAUDE.md
+          fail: true

@@ -1,0 +1,107 @@
+# 发布游戏：推送 v 开头的标签（如 v0.1.0）时，跑测试，导出 Windows exe 和网页版，
+# 把 exe 打包挂到 Release 页面，网页版发到 GitHub Pages。
+# exe 和网页版各有一个开发者版（一打开就有调试面板）：dark-forest-windows-dev.zip 和网页的 /dev/。
+# 标签里带「-」（如 v0.1.0-test）的算试用版：Release 标成预发布。
+# 也可以在 Actions 页面手动运行：只跑测试和导出，结果在运行页面底部下载，不发布。
+name: 发布
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 创建 Release
+  pages: write      # 发布网页版
+  id-token: write   # 发布网页版时 GitHub 要用
+
+env:
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载 Godot 和导出模板
+        run: |
+          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
+          wget -q $base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          wget -q $base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+          dir=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          mkdir -p $dir
+          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          mv templates/* $dir/
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: 做网页版带的字体
+        run: uv run game/tools/make_web_fonts.py
+
+      - name: 导入并跑测试
+        run: |
+          godot --headless --path game --import
+          godot --headless --path game --script res://tests/run_tests.gd
+          godot --headless --path game --script res://tests/run_view_tests.gd
+
+      - name: 导出
+        run: |
+          mkdir -p build/web
+          godot --headless --path game --export-release "Windows Desktop" ../build/dark-forest.exe
+          godot --headless --path game --export-release "Windows Desktop (dev)" ../build/dark-forest-dev.exe
+          godot --headless --path game --export-release "Web" ../build/web/index.html
+          test -s build/dark-forest.exe && test -s build/dark-forest-dev.exe && test -s build/web/index.html
+          cd build
+          zip -q dark-forest-windows.zip dark-forest.exe
+          zip -q dark-forest-windows-dev.zip dark-forest-dev.exe
+
+      - name: 网页版的开发者入口（/dev/ 转到 ?debug，打开调试面板）
+        run: |
+          mkdir -p build/web/dev
+          cat > build/web/dev/index.html <<'EOF'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>黑暗森林（开发者调试）</title>
+          <script>
+            var extra = location.search ? "&" + location.search.slice(1) : "";
+            location.replace("../?debug" + extra);
+          </script>
+          EOF
+
+      - name: 保存导出结果（运行页面底部可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-forest-${{ github.ref_name }}
+          path: |
+            build/dark-forest-windows.zip
+            build/dark-forest-windows-dev.zip
+            build/web
+
+      - name: 发 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flag=""
+          case "$GITHUB_REF_NAME" in *-*) flag="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" build/dark-forest-windows.zip build/dark-forest-windows-dev.zip --generate-notes $flag
+
+      - name: 准备网页版
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  pages:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
