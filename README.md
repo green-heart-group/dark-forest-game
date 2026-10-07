@@ -121,7 +121,7 @@ docs/         设计、要确定的问题、现状、路线图、开发日志、
 ```
 
 每个文件管什么、改代码要守的规矩见 [代码结构](docs/guides/code.md)。
-改动都从新分支通过 PR 合并进 `master`，步骤见 [分支和合并](docs/decisions/0003-github-flow.md#日常步骤)。
+改动都从新分支通过 PR 合并进 `master`，见 [分支和合并](docs/decisions/0003-github-flow.md)。
 
 ### 测试和平衡模拟
 

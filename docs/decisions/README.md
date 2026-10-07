@@ -9,4 +9,4 @@
 
 - [0001-platform.md](0001-platform.md)：开发平台用 Godot 4.7.2（已定，[A2](../design/archive/decided-questions-2026-10.md#a2-开发平台)）。
 - [0002-archive-python.md](0002-archive-python.md)：旧 Python 版归档到 `archive/python` 分支，主分支只放 Godot 版。
-- [0003-github-flow.md](0003-github-flow.md)：分支和合并用 GitHub Flow，改动都通过 PR 进 `master`，只用 squash 合并；日常步骤也在这里。
+- [0003-github-flow.md](0003-github-flow.md)：分支和合并用 GitHub Flow，改动都通过 PR 进 `master`，只用 squash 合并。
