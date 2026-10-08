@@ -1,5 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
+# dependencies = ["cogapp"]
 # ///
 """一条命令跑全部测试：先导入（新加了 class_name 时要导入一次），再跑规则、画面和展开演示测试。
 本地和 GitHub 上都用它，所以两边跑的东西一样。
@@ -16,6 +17,9 @@
 每次跑完把每个规则测试用了多久记在 game/.godot/test_times.json（不进 git），下次分的时候让每份的总时间差不多；
 没有记录时（比如 GitHub 上）轮流分。
 只有失败的进程才把它的完整输出打出来，免得几个进程的输出混在一起。
+跑全部测试（没给 which 和 --only）而且全部通过时，更新文档里由代码决定的部分：三组的测试个数写进 docs/status.md，
+再调用 update_docs.py 更新文档里标了数值名的数字和 cog 生成的表格。
+GitHub 上跑完以后 docs/ 变了就算失败，说明提交的文档是旧的。
 
 用哪个 Godot：有环境变量 GODOT 就用它，否则先找 godot_console（Windows 上会等程序跑完并显示输出），再找 godot。
 有失败时退出码为 1。
@@ -40,6 +44,8 @@ SUITES = {
     "unfolding": ("展开演示", "res://tests/run_unfolding_tests.gd"),
 }
 TIMES = GAME / ".godot" / "test_times.json"
+# 全部通过时把测试个数写进这里
+STATUS = GAME.parent / "docs" / "status.md"
 # 没有记录的测试，当它要这么多毫秒
 DEFAULT_MS = 100
 
@@ -145,22 +151,57 @@ def main() -> int:
             w.join()
 
         failed = []
+        counts: dict[str, int] = {}
         for suite in suites:
             mine = [(proc, report, log) for s, proc, report, log in running if s == suite]
             results = [(proc.returncode, report, log) for proc, report, log in mine]
             seconds = max(done_at[proc.pid] for proc, _, _ in mine) - t0
-            text, ok = summary(suite, results, seconds, len(names) if suite == "rules" else None)
+            text, ok, counts[suite] = summary(suite, results, seconds, len(names) if suite == "rules" else None)
             print(text, flush=True)
             if not ok:
                 failed.append(SUITES[suite][0])
 
     print("全部通过" if not failed else "有失败：" + "、".join(failed))
+    if not failed and args.which == "all" and not args.only:
+        failed += update_docs(counts)
     return 1 if failed else 0
 
 
+def update_docs(counts: dict[str, int]) -> list[str]:
+    """全部跑、全部通过以后，更新文档里由代码决定的部分：测试个数，以及 update_docs.py 管的数字和表格。
+    返回失败的项（文档里有认不出的数值标记时）。"""
+    import update_docs  # 同一目录下的 update_docs.py；只在这里导入，mutate.py 导入本文件时不用装 cogapp
+
+    root = GAME.parent
+    changed, problems = update_docs.update(write=True)
+    if write_counts(counts):
+        changed.append(STATUS)
+    for path in changed:
+        print(f"已更新 {path.relative_to(root)}，记得一起提交")
+    for p in problems:
+        print(p)
+    return ["文档里的数值标记"] if problems else []
+
+
+def write_counts(counts: dict[str, int], status: Path | None = None) -> bool:
+    """把测试个数写进 docs/status.md 里「- 测试：规则测试 N 个、画面测试 N 个、展开演示测试 N 个」那一行。
+    文档里只在这一处写测试个数（规则测试 test_docs.gd 查），这样不会几处对不上。返回有没有改。"""
+    status = status or STATUS
+    text = status.read_text(encoding="utf-8")
+    line = "规则测试 {rules} 个、画面测试 {view} 个、展开演示测试 {unfolding} 个".format(**counts)
+    new, n = re.subn(r"规则测试 \d+ 个、画面测试 \d+ 个、展开演示测试 \d+ 个", line, text, count=1)
+    if n == 0:
+        print(f"{status} 里找不到写测试个数的那一行，没有写")
+        return False
+    if new == text:
+        return False
+    status.write_text(new, encoding="utf-8", newline="\n")
+    return True
+
+
 def summary(suite: str, results: list[tuple[int, Path, Path]], seconds: float,
-            expected: int | None) -> tuple[str, bool]:
-    """合并一组测试几个进程的结果，写成和 test_log.gd 一样的汇总，返回 (汇总, 是否全部通过)。
+            expected: int | None) -> tuple[str, bool, int]:
+    """合并一组测试几个进程的结果，写成和 test_log.gd 一样的汇总，返回 (汇总, 是否全部通过, 测试个数)。
     有失败的进程，汇总前面先放它的完整输出。"""
     title = SUITES[suite][0]
     tests = checks = 0
@@ -190,7 +231,7 @@ def summary(suite: str, results: list[tuple[int, Path, Path]], seconds: float,
         lines.append("最慢的：" + "，".join(f"{n} {times[n] / 1000:.1f} 秒" for n in slow))
     if failed:
         lines.append("失败的测试：" + "，".join(failed))
-    return "\n".join(lines), not failed and all(code == 0 for code, *_ in results)
+    return "\n".join(lines), not failed and all(code == 0 for code, *_ in results), tests
 
 
 if __name__ == "__main__":

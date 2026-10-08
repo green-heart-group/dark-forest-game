@@ -6,8 +6,8 @@
 代码都在 `game/`（Godot 4.7 项目，GDScript）。最重要的一条：**规则和画面分开**。
 规则代码不知道画面存在，所以能不开窗口跑测试和平衡模拟；画面只读规则数据，要改局面就调用规则的函数。
 
-独立的视觉试验放在 `game/demos/`。[降维展开](dimension-unfolding.md) 已接入正式规则和星图，
-纯布局由规则和演示共用，演示场景仍可单独运行。
+只看画面效果、不开对局的演示放在 `game/demos/`，现在有一个：[降维展开演示](dimension-unfolding.md)。
+它和规则共用 `unfolding_layout.gd`。
 
 ## 规则代码（`game/rules/`）
 
@@ -20,8 +20,8 @@
 | `ship.gd` | 会动的单位（探测器、战舰、殖民船、星舰、吞噬者、智子、飞行中的光粒）；战舰带的武器和受的伤 |
 | `foil.gd` | 飞行中的二向箔、单向著 |
 | `star_map.gd` | 星图生成，以及每局当前阶段的原点、边长和边界 |
-| `dimension_space.gd` | 3D/2D/1D 一一映射、阶段末原子迁移、只读动画布局 |
-| `unfolding_layout.gd` | 规则和演示共用的 9 格顺时针映射和插值函数 |
+| `dimension_space.gd` | 降维时每一格在三维、二维、一维里各在哪；全图展开完一次性换坐标；给画面算展开到一半时的样子 |
+| `unfolding_layout.gd` | 一列 9 格怎样按顺时针铺成 3×3，展开到一半时画在哪（规则和演示共用） |
 | `tech.gd` | 科技树：编号、名字、等级、前置 |
 | `geometry.gd` | 沿方向飞行、视野圆锥用到的几何计算 |
 | `ai.gd` | AI 每回合怎么行动（顺序见 [原型现在的规则 §11](../design/current-rules.md#11-ai-怎么行动)） |
@@ -55,9 +55,9 @@
   `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
 - **空间阶段**由 `GameState.dimension` 和 `StarMap.extent/origin` 管理，不能再用固定 `StarMap.SIZE`
   检查对局中的坐标。几何扫描必须传 `map.bounds()`；`SIZE` 只用于生成 9³ 的初始地图。
-- **降维迁移**由 `DimensionSpace.commit()` 一次替换全部坐标容器。波前期间不搬动规则坐标，
-  画面读取 `frame()`；阶段换图用 `last_mapping` 关联前后格子，禁止将渲染坐标写回规则。
-- **回放**版本 2 与旧 10³ 规则不兼容；加载时明确拒绝旧文件，避免悄悄重算为另一局。
+- **降维换坐标**只在 `DimensionSpace.commit()` 里做，一次换掉所有存坐标的地方。展开的过程中规则里的坐标不动，
+  画面从 `frame()` 读展开到一半的样子；换完以后用 `last_mapping` 查一格换之前在哪。画面算出来的位置不能写回规则。
+- **对局记录**现在是第 2 版，10×10×10 星图时的第 1 版读的时候直接拒绝，免得悄悄按新规则重算成另一局。
 
 
 ## 画面代码（`game/view/`）
@@ -126,16 +126,17 @@
 
 | 文件 | 做什么 |
 | --- | --- |
-| `game/tools/test.py` | 一条命令跑全部测试：先导入，再同时开几个 Godot 进程，规则测试分成几份，画面测试一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多 |
+| `game/tools/test.py` | 一条命令跑全部测试：先导入，再同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
 | `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
 | `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |
 | `game/tests/rules/test_*.gd` | 规则测试，按规则分组（星图、移动、科技、交战、黑域、降维、AI、回放……），一组一个文件 |
 | `game/tests/rules/rule_suite.gd` | 规则测试的共同底子：`check`、`check_eq`，和摆测试局面的小工具（`_two_civs`、`_ship` 等） |
 | `game/tests/run_view_tests.gd` | 画面测试：检查界面和星图显示的东西和规则一致。按 `run_tests()` 里写的顺序跑 |
-| `game/tests/run_unfolding_tests.gd` | 独立展开演示的映射、空间预留、控件及关键帧检查；统一测试命令同时运行它 |
+| `game/tests/run_unfolding_tests.gd` | 展开演示的测试：格子一个不少、相邻的列展开时不重叠、控件和关键画面。`test.py` 也跑它 |
 | `game/tests/test_log.gd` | 各套测试共用的记结果的部分：数测试和检查、失败时写出是哪个测试、最后的汇总；命令行参数 `only=`、`tests=`、`report=`、`stop_on_fail`（说明在文件开头） |
 | `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计对局怎么发展 |
 | `game/tools/make_balance_index.gd` | 从 `balance.gd` 重新生成数值目录 `balance_index.gd`（见上面「数值」） |
+| `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.gd` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
 | `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
 
@@ -165,9 +166,23 @@
   `test_repo.gd` 的 `test_every_rule_has_a_test` 会检查：规则文档里每个最小的一节（「还没做的」除外）和正文里出现的每个编号，
   都至少有一个测试写到；测试上写的标题和编号在文档里都找得到。所以改了规则文档的标题、加了新的一节或新的编号，测试也要跟上。
   GDScript 还没有好用的工具统计「测试跑到了哪些代码行」，这个检查是用来代替它的：至少保证每条规则都有测试。
+- **文档也有测试**：`test_docs.gd` 检查文档的规矩（为什么这样分见 [文档入口](../README.md#现在的事实和历史记录)），
+  只改了文档时跑 `uv run game/tools/test.py rules --only docs` 就够了：
+  - 游戏设计、原型现在的规则和决定记录里写到的编号（U1、F3.5……），要么在 [决定记录「编号从哪里来」](../design/decision-log.md#编号从哪里来) 登记了来源，
+    要么是 [要确定的问题](../open-questions.md) 里还开着的问题；决定记录里已经有决定的编号，不能还留在要确定的问题里。
+  - 「现在的事实」那些文件里没有分支名、合没合并、本机路径、勾选清单（路线图除外）；测试个数只在 `docs/status.md`。
+  - `docs/` 下每个目录都有 `README.md`，列出目录里的每个文件和下一级目录。
+- **文档里由代码决定的部分自动更新**，不手改（`game/tools/update_docs.py`，只管它的 `FILES` 里列出的文件，
+  现在只有原型现在的规则；开发日志这类历史记录写着当时的数字，不跟着改）：
+  - 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 `balance.gd` 里写的值，
+    写法照原来的（55% 还写百分数，2.0 还带小数点）。文档里新写一个来自 `balance.gd` 的数字，就在它后面加上标记；
+    标记和数字之间最多隔几个字的单位（E、格、回合）。
+  - 整块的表格用 cog 生成：`<!-- [[[cog ... ]]] -->` 和 `<!-- [[[end]]] -->` 之间的内容每次重新生成，
+    比如 [原型现在的规则 §4](../design/current-rules.md#4-科技树) 的科技表取自 `tech.gd` 和 `TECH_COST`。要改表的样子，改 `update_docs.py` 里的函数。
+  - `test.py` 全部跑、全部通过时会自动做这些；只改了数值、不想跑测试时，跑 `uv run game/tools/update_docs.py`。
 - **用变异测试找漏洞**：改了一个规则文件、补了测试以后，可以跑 `uv run game/tools/mutate.py 文件名.gd`，
   看这个文件里哪些地方出错时测试发现不了。没发现的里面有一些改了也不影响结果（比如两个值永远不会相等时，`<` 和 `<=` 一样），不用补。
-- **测试要快**：规则测试一个进程跑完十几秒，`test.py` 分进程跑约 4 秒，最慢的单个测试决定了最快能多快。
+- **测试要快**：`test.py` 分进程跑，最慢的单个测试决定了最快能多快（现在多久见 [现状](../status.md)）。
   汇总下面会列出超过 1 秒的测试，变慢了想想能不能把局面摆小一点。
 
 ### 截图检查画面

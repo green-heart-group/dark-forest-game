@@ -8,7 +8,7 @@
 - 回答：在每条最后的「决定」后面写选项字母（例如「A」），或者直接写自己的想法。
 - 每条都写了：现在是什么情况、为什么要问、选项和推荐，不用翻别的文档也能回答。
   想看来龙去脉，再点每条的「来源」。
-- 答完以后：结论写进 [游戏设计 §14 决定记录](design/game-design.md#14-决定记录)（编号不变），
+- 答完以后：结论写进 [决定记录](design/decision-log.md)（编号不变），
   正文里用到的地方标上编号；这条的讨论过程挪到 [存档](design/archive/decided-questions-2026-10.md)，
   然后从这里删掉，在最后的「已经答完的」表里加一行。所以这个文件里永远只有没定的问题。
 - 编号按组：A 总的取向，B 和原著不一样的，C 游戏自己加的，D 原著有、游戏还没做的，E 平衡和细节，
@@ -64,8 +64,9 @@
   - 殖民地数量设上限。
   - 殖民地越多，每个新殖民地越贵。
   - 采矿船、戴森球的产出减少。
-- 现在：U1 改为保留 729 格的展开，并限制 AI 把降维作为最后手段。旧版主要靠压缩结束对局的结果
-  不能直接沿用；新版只做过 5 局冒烟模拟（见 [现状](status.md#平衡模拟的最新结果)），需要继续试玩后再决定。
+- 现在：加入二维、一维以后，一度几乎每局都能分出胜负，主要靠压平时星系挤到一起被毁掉。
+  降维展开（U1）以后星系不再被压掉，AI 也只在走投无路时才发二向箔，又有不少局打满 200 回合分不出胜负
+  （数字见 [现状](status.md#平衡模拟的最新结果)）。先试玩，看实际感受再决定要不要改。
 
 ### E6. 自身降维的携带范围和成本
 
@@ -81,8 +82,8 @@
 
 | 编号 | 结论写在哪里 | 讨论过程 |
 | --- | --- | --- |
-| A1、B1～B8、C1～C5、D1～D7、E2～E5、E7～E9、G14、T17～T23 | [游戏设计 §14](design/game-design.md#14-决定记录) | [存档](design/archive/decided-questions-2026-10.md) |
+| A1、B1～B8、C1～C5、D1～D7、E2～E5、E7～E9、G14、T17～T23 | [决定记录](design/decision-log.md) | [存档](design/archive/decided-questions-2026-10.md) |
 | A2 | [decisions/0001](decisions/0001-platform.md)（项目上的决定） | [存档](design/archive/decided-questions-2026-10.md#a2-开发平台) |
-| G1～G13 | [游戏设计 §1～§9](design/game-design.md#14-决定记录) 正文（2026-10-06 写进去） | [光速提议 §6](proposals/light-speed-and-intel.md#6-要决定的事) |
-| T1～T16 | [游戏设计 §1～§9](design/game-design.md#14-决定记录) 正文（2026-10-06 写进去） | [科技树提议 §5](proposals/tech-tree.md#5-要决定的事) |
-| F1.1～F5.3 | [游戏设计 §14](design/game-design.md#试玩意见定下的f) | [试玩意见 1～5](proposals/README.md#列表)（试玩意见 6、7 整理成了 G14、T23） |
+| G1～G13 | [游戏设计 §1～§9](design/game-design.md) 正文（2026-10-06 写进去） | [光速提议 §6](proposals/light-speed-and-intel.md#6-要决定的事) |
+| T1～T16 | [游戏设计 §1～§9](design/game-design.md) 正文（2026-10-06 写进去） | [科技树提议 §5](proposals/tech-tree.md#5-要决定的事) |
+| F1.1～F5.3 | [决定记录](design/decision-log.md#试玩意见定下的f) | [试玩意见 1～5](proposals/README.md#列表)（试玩意见 6、7 整理成了 G14、T23） |

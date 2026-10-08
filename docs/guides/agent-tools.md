@@ -1,6 +1,7 @@
 # 让 AI 助手操作 Godot
 
 2026-10-03 调查的结果。AI 助手指 Claude Code 这类能自己运行命令、改代码的工具，下面简称 agent。
+这一页只讲 agent 能用哪些办法操作 Godot；运行和测试命令见仓库根目录的 [README](../../README.md)，调试面板见 [调试模式](debug-tools.md)。
 
 Godot 官方没有 MCP，第三方做的很多（目录网站上有 30 多个）。
 MCP（Model Context Protocol）是一种标准接口，让 agent 能直接操作外部程序，比如运行游戏、读报错、截图。

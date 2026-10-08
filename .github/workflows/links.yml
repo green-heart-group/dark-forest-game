@@ -1,5 +1,6 @@
 # 检查文档里的链接有没有打不开的（只查仓库内文件之间的链接，不访问外部网址）。
-# 本地也可以跑同样的检查：lychee --offline --exclude-path docs/local docs README.md CLAUDE.md
+# 链到某一节的（`#标题`）也查那一节还在不在，改了标题忘了改链接会报错。
+# 本地也可以跑同样的检查：lychee --offline --include-fragments --exclude-path docs/local docs README.md CLAUDE.md AGENTS.md
 name: 检查文档链接
 
 on:
@@ -15,5 +16,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: lycheeverse/lychee-action@v2
         with:
-          args: --offline --no-progress docs README.md CLAUDE.md
+          args: --offline --include-fragments --no-progress docs README.md CLAUDE.md AGENTS.md
           fail: true
