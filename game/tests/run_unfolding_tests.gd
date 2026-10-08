@@ -3,7 +3,7 @@ extends SceneTree
 ## --headless --path game --script res://tests/run_unfolding_tests.gd
 ## 去掉 --headless，并在 -- 后加 output=<目录>，同时截图检查关键帧。
 
-const Layout := preload("res://demos/unfolding_layout.gd")
+const Layout := preload("res://rules/unfolding_layout.gd")
 var checks := 0
 var failures := 0
 var output := ""
@@ -25,7 +25,7 @@ func check(ok: bool, message: String) -> void:
 
 
 func run() -> void:
-	var script: Script = load("res://demos/unfolding_layout.gd")
+	var script: Script = load("res://rules/unfolding_layout.gd")
 	if not script.can_instantiate():
 		push_error("布局脚本不能编译")
 		quit(1)

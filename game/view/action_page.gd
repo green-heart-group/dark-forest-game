@@ -191,6 +191,14 @@ func select_unit(ship: Ship) -> void:
 
 ## 按现在的局面刷新整页：哪些行动能用、单位菜单、方向和目标输入、执行按钮。
 func refresh(me: Civ) -> void:
+	_dist.max_value = ceilf(Vector3(state.map.extent - Vector3i.ONE).length())
+	for i in _coord_boxes.size():
+		var spin := _coord_boxes[i]
+		spin.set_block_signals(true)
+		spin.min_value = state.map.origin[i]
+		spin.max_value = state.map.origin[i] + state.map.extent[i] - 1
+		spin.editable = state.map.extent[i] > 1
+		spin.set_block_signals(false)
 	if state.all_flat() and _action == Action.FOIL:
 		_action = Action.LINE_FOIL
 	elif not state.all_flat() and _action == Action.LINE_FOIL:
@@ -246,12 +254,12 @@ func _refresh_aim_inputs() -> void:
 		_aim_hint.text = "👆 点星图上的格子定方向（从%s算起）" % from
 		_aim_hint.tooltip_text = "点星图上的格子定方向。也可以调角度，或输入坐标。"
 	if state.all_flat():
-		_aim_hint.text += "\n二维空间：只有水平角。"
+		_aim_hint.text += "\n一维空间：只能沿 x 轴移动。" if state.all_linear() else "\n二维空间：只有水平角。"
 	match _action:
 		Action.FOIL:
 			_dist_row.tooltip_text = "离发射源多远（以目标格子为中心压平）"
 		Action.LINE_FOIL:
-			_dist_row.tooltip_text = "离发射源多远（沿 x 轴压成直线）"
+			_dist_row.tooltip_text = "离发射源多远（沿 x 扩散，最终展开为 729 格直线）"
 		Action.DOMAIN:
 			_dist_row.tooltip_text = "离发射源多远（黑域的中心）"
 		Action.BROADCAST:
@@ -264,14 +272,16 @@ func _refresh_aim_inputs() -> void:
 			_dist_row.tooltip_text = "离星舰多远（目的地）"
 	_dist_label.text = "%.1f 格" % _dist.value
 	var goal := _target_cell()
-	if StarMap.in_bounds(goal):
+	if state.map.contains(goal):
+		for i in _coord_boxes.size():
+			_coord_boxes[i].set_value_no_signal(goal[i])
 		_target_info.text = "→ (%d, %d, %d)" % [goal.x, goal.y, goal.z]
 		_target_info.add_theme_color_override("font_color", Color(0.85, 0.85, 0.9))
 	else:
 		_target_info.text = "→ 星图外"
 		_target_info.add_theme_color_override("font_color", Color(1.0, 0.5, 0.4))
 	_dist_row.tooltip_text += "\n目标格子：(%d, %d, %d)%s" % [goal.x, goal.y, goal.z,
-			"" if StarMap.in_bounds(goal) else "，在星图外面"]
+			"" if state.map.contains(goal) else "，在星图外面"]
 
 
 ## 给星图画预览用的瞄准：{"kind": 预览画成什么, "from": 起点, "direction": 方向, "target": 目标格子,
@@ -315,7 +325,7 @@ func _action_specs() -> Dictionary:
 				"从有广播器的发射源把一个坐标以光速告诉所有人。那里的文明可能被听到的人（包括看不见的隐藏文明）打。离目标越近，越容易暴露自己。",
 				Aim.TARGET],
 		Action.FOIL: ["📄", "二向箔",
-				"准备 %d 回合后飞向目标展开：那一层压成平面，周围被压没，中心最扁、越远留得越多。之后每回合向外扩散，不会停。" % Balance.FOIL_PREPARE_TURNS,
+				"准备 %d 回合后飞向目标展开：每列 9 格展开为 3×3，波前持续扩散。全图完成后得到 27×27 新坐标并重新探索。未自身降维的文明会被消灭。" % Balance.FOIL_PREPARE_TURNS,
 				Aim.TARGET],
 		Action.LINE_FOIL: ["━", "单向著",
 				"二维里用。准备 %d 回合后起飞，展开后沿 x 轴扩散，把平面压成直线。只有再次降维的文明能活。" % Balance.FOIL_PREPARE_TURNS,
@@ -444,8 +454,8 @@ func aim_at(c: Vector3i) -> void:
 	if v.length() < 1e-6 and not _target_box.visible:
 		return
 	if v.length() >= 1e-6:
-		_yaw.value = roundf(rad_to_deg(atan2(v.y, v.x)))
-		_pitch.value = roundf(rad_to_deg(atan2(v.z, Vector2(v.x, v.y).length())))
+		_yaw.value = rad_to_deg(atan2(v.y, v.x))
+		_pitch.value = rad_to_deg(atan2(v.z, Vector2(v.x, v.y).length()))
 	_dist.set_value_no_signal(v.length())
 	main.refresh()
 

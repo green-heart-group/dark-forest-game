@@ -131,7 +131,7 @@ func test_map_generation_follows_planet_rules() -> void:
 
 func test_bounds() -> void:
 	check(StarMap.in_bounds(Vector3i(0, 0, 0)), "原点在图内")
-	check(StarMap.in_bounds(Vector3i(9, 9, 9)), "(9,9,9) 在图内")
+	check(StarMap.in_bounds(Vector3i(8, 8, 8)), "(8,8,8) 在图内")
 	check(not StarMap.in_bounds(Vector3i(10, 0, 0)), "(10,0,0) 在图外")
 
 
@@ -165,7 +165,7 @@ func test_homes_far_apart() -> void:
 # ---------- 实力和收入 ----------
 
 func test_action_points_follow_home_stars_and_colonies() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	check(me.action_points(s.map) == 5, "单星母星系 6 − 1 = 5 个行动点")
 	_set_star(s, Vector3i.ZERO, StarMap.Star.TRIPLE)
@@ -176,7 +176,7 @@ func test_action_points_follow_home_stars_and_colonies() -> void:
 
 
 func test_income_from_fission_dysons_and_miners() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 3
 	var base := Balance.ENERGY_PER_SYSTEM + Balance.ENERGY_PER_STAR
@@ -191,7 +191,7 @@ func test_income_from_fission_dysons_and_miners() -> void:
 
 
 func test_end_turn_pays_income() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 2
 	var e := me.energy
@@ -232,7 +232,7 @@ func test_sphere_sizes_match_design() -> void:
 # ---------- 移动 ----------
 
 func test_ship_accelerates_then_moves() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3.ZERO, Vector3(1, 0, 0))
 	var expect := [0.1, 0.3, 0.6, 1.0, 1.5, 2.1, 2.8, 3.6, 4.4]
@@ -244,7 +244,7 @@ func test_ship_accelerates_then_moves() -> void:
 
 
 func test_ship_with_target_snaps_onto_it() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony", "starship"])
 	var ss := s.build(me, "starship")["ship"] as Ship
@@ -277,9 +277,9 @@ func test_starship_target_does_not_reveal_owner() -> void:
 
 
 func test_ship_without_target_leaves_map() -> void:
-	var s := _two_civs(Vector3i(0, 0, 9))
+	var s := _two_civs(Vector3i(0, 0, 8))
 	var me := s.human()
-	var w := _ship(s, me, Ship.WARSHIP, Vector3(9, 5, 5), Vector3(1, 0, 0))
+	var w := _ship(s, me, Ship.WARSHIP, Vector3(8, 5, 5), Vector3(1, 0, 0))
 	w.speed = 0.7
 	s._move_ship(me, w)
 	s._clean_dead()
@@ -287,7 +287,7 @@ func test_ship_without_target_leaves_map() -> void:
 
 
 func test_turn_ship_costs_and_reverse_resets_speed() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(3, 3, 3), Vector3(1, 0, 0))
 	w.speed = 0.5
@@ -301,7 +301,7 @@ func test_turn_ship_costs_and_reverse_resets_speed() -> void:
 
 
 func test_probe_slow_start_until_out_of_vision() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["interstellar_probe"])
 	var p := s.build(me, "probe")["ship"] as Ship
@@ -316,7 +316,7 @@ func test_probe_slow_start_until_out_of_vision() -> void:
 
 
 func test_warp_ship_flies_at_light_speed_outside_vision() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	w.warp = true
@@ -333,7 +333,7 @@ func test_warp_ship_flies_at_light_speed_outside_vision() -> void:
 # ---------- 科技和建造 ----------
 
 func test_tech_tiers_and_prerequisites() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	check(me.has_tech("colony"), "殖民船开局就有（0 级）")
@@ -353,7 +353,7 @@ func test_tech_tiers_and_prerequisites() -> void:
 
 ## E8：III 级要 II 级开放以后、能量收入达到门槛，再比 II 级晚 TIER_GAP 回合。
 func test_tier3_needs_tier2_and_income() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = Balance.TIER3_ENERGY
 	s.end_turn()
@@ -370,7 +370,7 @@ func test_tier3_needs_tier2_and_income() -> void:
 
 
 func test_telescope_and_warning_upgrades() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	for i in Balance.TELESCOPE_MAX:
@@ -388,7 +388,7 @@ func test_telescope_and_warning_upgrades() -> void:
 
 
 func test_build_needs_tech_and_respects_limits() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	me.energy = 1000
 	me.mineral = 1000
@@ -405,7 +405,7 @@ func test_build_needs_tech_and_respects_limits() -> void:
 
 
 func test_units_built_docked_then_dispatched() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	var m := me.mineral
@@ -424,7 +424,7 @@ func test_units_built_docked_then_dispatched() -> void:
 
 
 func test_facilities_next_turn_and_dyson_cap() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["dyson"])
 	me.actions_left = 99
@@ -546,7 +546,7 @@ func test_wakes_are_left_and_seen() -> void:
 
 
 func test_warning_reports_enemy_warship() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	me.has_warning = true
 	_ship(s, s.civs[1], Ship.WARSHIP, Vector3(1.8, 0, 0), Vector3(-1, 0, 0))
@@ -558,7 +558,7 @@ func test_warning_reports_enemy_warship() -> void:
 # ---------- 战舰、反物质、殖民船 ----------
 
 func test_warships_destroy_each_other() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	_ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -569,11 +569,11 @@ func test_warships_destroy_each_other() -> void:
 
 ## E8：II 级的条件是自己的任何舰船和别人的舰船相距 CONTACT_RANGE 以内，I 级开放以后才算。
 func test_contact_opens_tier2_after_tier1() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	_ship(s, me, Ship.PROBE, Vector3(3, 0, 0), Vector3(1, 0, 0))
-	_ship(s, ai, Ship.COLONY, Vector3(3.9, 0, 0), Vector3(-1, 0, 0))
+	_ship(s, ai, Ship.COLONY, Vector3(3.8, 0, 0), Vector3(-1, 0, 0))
 	s._combat()
 	check(me.tier2_turn < 0, "I 级还没开时，接触不算")
 	_open_tiers(me, 1)
@@ -581,7 +581,7 @@ func test_contact_opens_tier2_after_tier1() -> void:
 	s._combat()
 	check(me.tier2_turn >= 0 and ai.tier2_turn >= 0, "探测器和殖民船相距 1 格以内，双方都算接触")
 	check(me.tier2_turn == Balance.TIER_GAP, "II 级比 I 级晚 TIER_GAP 回合开放")
-	var far := _two_civs(Vector3i(9, 9, 9))
+	var far := _two_civs(Vector3i(8, 8, 8))
 	_open_tiers(far.human(), 1)
 	_ship(far, far.human(), Ship.PROBE, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	_ship(far, far.civs[1], Ship.PROBE, Vector3(4.5, 0, 0), Vector3(1, 0, 0))
@@ -590,7 +590,7 @@ func test_contact_opens_tier2_after_tier1() -> void:
 
 
 func test_tiers_open_in_order_with_a_gap() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s._engage(me, s.civs[1])
 	check(me.tier2_turn < 0, "先接触、还没发现别人时不算")
@@ -609,7 +609,7 @@ func test_tiers_open_in_order_with_a_gap() -> void:
 # ---------- 战舰的武器（T23） ----------
 
 func test_warships_carry_researched_weapons() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["warship"])
 	var plain := s.build_cost(me, "warship")
@@ -622,7 +622,7 @@ func test_warships_carry_researched_weapons() -> void:
 
 
 func test_beam_destroys_warship_out_of_collision_range() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -635,12 +635,12 @@ func test_beam_destroys_warship_out_of_collision_range() -> void:
 
 
 func test_torpedo_needs_two_hits() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	mine.weapons = ["beam", "torpedo"]
-	var theirs := _ship(s, ai, Ship.WARSHIP, Vector3(4.9, 0, 0), Vector3(1, 0, 0))
+	var theirs := _ship(s, ai, Ship.WARSHIP, Vector3(4.8, 0, 0), Vector3(1, 0, 0))
 	var mineral := me.mineral
 	s._combat()
 	check(not theirs.dead and theirs.damage == 1, "1.9 格只有鱼雷够得着，打中一次不毁")
@@ -650,7 +650,7 @@ func test_torpedo_needs_two_hits() -> void:
 
 
 func test_hbomb_first_and_salvages_cost() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -666,7 +666,7 @@ func test_hbomb_first_and_salvages_cost() -> void:
 
 
 func test_armed_warships_fire_at_the_same_time() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var a := _ship(s, s.human(), Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	var b := _ship(s, s.civs[1], Ship.WARSHIP, Vector3(4.4, 0, 0), Vector3(-1, 0, 0))
 	a.weapons = ["beam"]
@@ -676,7 +676,7 @@ func test_armed_warships_fire_at_the_same_time() -> void:
 
 
 func test_weapon_needs_ammo_money() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	mine.weapons = ["beam"]
@@ -732,18 +732,18 @@ func test_building_own_sophon_frees_civ() -> void:
 
 
 func test_sophon_waits_when_not_a_home() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["sophon"])
 	var sophon: Ship = s.build(me, "sophon")["ship"]
 	s.send_sophon(me, sophon.id, Vector3i(2, 0, 0))
 	_turns(s, 4)
 	check(sophon.lock < 0 and sophon.direction == Vector3.ZERO and sophon.pos == Vector3(2, 0, 0), "不是别人的母星系，原地待命")
-	check(s.sophon_error(me, sophon.id, Vector3i(9, 9, 9)) == "", "可以再派")
+	check(s.sophon_error(me, sophon.id, Vector3i(8, 8, 8)) == "", "可以再派")
 	check(s.civs[1].known.is_empty() and s.civs[1].sightings.is_empty(), "别人看不到智子")
 
 func test_seeing_enemy_ship_counts_as_discovery() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_ship(s, s.civs[1], Ship.PROBE, Vector3(1, 0, 0), Vector3(1, 0, 0))
 	s._observe(me)
@@ -779,7 +779,7 @@ func test_warship_hits_colony_ship_first() -> void:
 
 
 func test_colony_ship_settles_target() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony"])
 	_set_habitable(s, Vector3i(1, 0, 0), StarMap.Star.DOUBLE)
@@ -798,7 +798,7 @@ func test_colony_ship_settles_target() -> void:
 
 ## F4.4：没看到过的格子也能当目的地；到了不能殖民就停在那里，可以再派。
 func test_colony_ship_blind_target() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony"])
 	var c := s.build(me, "colony")["ship"] as Ship
@@ -814,7 +814,7 @@ func test_colony_ship_blind_target() -> void:
 
 ## F4.4：宜居星系要看到过才知道；情报里记着宜居不宜居。
 func test_known_habitable_needs_intel() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var far := Vector3i(6, 0, 0)
 	_set_habitable(s, far, StarMap.Star.SINGLE)
@@ -853,7 +853,7 @@ func test_interstellar_probe_parks_and_jams_broadcaster() -> void:
 
 
 func test_devourer_eats_rocky_planet() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_set_star(s, Vector3i(1, 0, 0), StarMap.Star.SINGLE)
 	s.map.rocky[Vector3i(1, 0, 0)] = 2
@@ -866,7 +866,7 @@ func test_devourer_eats_rocky_planet() -> void:
 
 
 func test_starship_keeps_civ_alive_and_settles() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ss := _ship(s, me, Ship.STARSHIP, Vector3(2, 0, 0))
 	ss.docked = false
@@ -890,11 +890,11 @@ func test_broadcast_spreads_at_light_speed() -> void:
 	var ai := s.civs[1]
 	ai.broadcasters[ai.home] = true
 	me.broadcasters[me.home] = true
-	check(s.broadcast(ai, Vector3i(9, 9, 9))["error"] == "", "可以广播任何坐标")
+	check(s.broadcast(ai, Vector3i(8, 8, 8))["error"] == "", "可以广播任何坐标")
 	_turns(s, 4)
-	check(not me.heard.has(Vector3i(9, 9, 9)), "4 回合后还没传到 5 格外")
+	check(not me.heard.has(Vector3i(8, 8, 8)), "4 回合后还没传到 5 格外")
 	s.end_turn()
-	check(me.heard.has(Vector3i(9, 9, 9)), "第 5 回合听到")
+	check(me.heard.has(Vector3i(8, 8, 8)), "第 5 回合听到")
 	check(me.discovered, "听到广播算发现别人")
 
 
@@ -903,9 +903,9 @@ func test_hearing_needs_broadcaster() -> void:
 	var me := s.human()
 	var ai := s.civs[1]
 	ai.broadcasters[ai.home] = true
-	s.broadcast(ai, Vector3i(9, 9, 9))
+	s.broadcast(ai, Vector3i(8, 8, 8))
 	_turns(s, 3)
-	check(not me.heard.has(Vector3i(9, 9, 9)), "没有恒星广播器听不到")
+	check(not me.heard.has(Vector3i(8, 8, 8)), "没有恒星广播器听不到")
 
 
 func test_broadcast_reveals_owner_and_needs_source() -> void:
@@ -980,7 +980,7 @@ func _fill_light(s: GameState, c: float) -> void:
 
 ## G14：只能投放在看得到的地方；生效后那一格光速为 0，保持一段时间，同时向周围扩散，之后慢慢恢复。
 func test_black_domain_holds_then_spreads() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var center := Vector3i(2, 0, 0)
 	check(s.launch_black_domain(me, center)["error"] != "", "要先有黑域投放科技")
@@ -1000,12 +1000,12 @@ func test_black_domain_holds_then_spreads() -> void:
 	check(s.light_at(Vector3i(5, 0, 0)) < 1.0, "扩散到更远的地方")
 	_turns(s, 60)
 	check(s.light_at(center) > Balance.GRAIN_MIN_LIGHT, "很久以后中心也恢复得差不多")
-	check(s.light_at(Vector3i(9, 9, 9)) < 1.0, "宇宙背景的光速降低了一点")
+	check(s.light_at(Vector3i(8, 8, 8)) < 1.0, "宇宙背景的光速降低了一点")
 
 
 ## G14：舰船的速度乘以光速；光速低于 0.95 的地方光粒没有杀伤力；舰船慢到几乎不动就停下，停 5 回合消失。
 func test_light_slows_ships_and_disarms_grains() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_fill_light(s, 0.5)
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(0, 1, 0), Vector3(1, 0, 0))
@@ -1020,7 +1020,7 @@ func test_light_slows_ships_and_disarms_grains() -> void:
 	check(s.grain_error(me, Vector3(1, 0, 0)).contains("黑域"), "在黑域里不能发射光粒")
 	_fill_light(s, 0.005)
 	s.light[s._li(Vector3i.ZERO)] = 1.0  # 两边的母星系都不在里面，不然直接算输
-	s.light[s._li(Vector3i(9, 9, 9))] = 1.0
+	s.light[s._li(Vector3i(8, 8, 8))] = 1.0
 	var p := _ship(s, me, Ship.PROBE, Vector3(0, 3, 0), Vector3(1, 0, 0))
 	_turns(s, Balance.SHIP_STUCK_TURNS - 1)
 	check(me.ships.has(p) and p.pos == Vector3(0, 3, 0) and p.stuck == Balance.SHIP_STUCK_TURNS - 1, "慢到几乎不动就停在原地")
@@ -1059,7 +1059,7 @@ func test_black_domain_blocks_vision_and_slows_reports() -> void:
 
 ## 只为提速的捷径（回合末看之前先算好的数据、只扫线段附近的格子），和直接一格一格算的结果一样。
 func test_speedups_match_plain_checks() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var n := StarMap.SIZE
@@ -1115,7 +1115,7 @@ func test_speedups_match_plain_checks() -> void:
 
 ## G14、B4：被困在黑域里的星系产出只有 1/10（向上取整），母星系在里面不能升级；全部困在光速为 0 的地方就算输。
 func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 4
 	_set_star(s, Vector3i(5, 5, 5), StarMap.Star.SINGLE)
@@ -1140,7 +1140,7 @@ func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
 # ---------- 降维 ----------
 
 func test_foil_prepares_flies_and_unfolds() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var target := Vector3i(1, 0, 0)
 	_set_star(s, Vector3i(1, 0, 2), StarMap.Star.DOUBLE)  # 同一列、别的高度
@@ -1155,10 +1155,10 @@ func test_foil_prepares_flies_and_unfolds() -> void:
 	s.end_turn()
 	check(me.foils.is_empty(), "到达目标后用掉")
 	check(s.flattened.get(target) == 0, "目标被压平，平面高度是目标的 z")
-	check(s.map.star_at(Vector3i(1, 0, 2)) == StarMap.Star.NONE, "中心那一列所有高度都压平")
-	check(not s.flattened.has(Vector3i(2, 0, 1)) and s.flattened.has(Vector3i(2, 0, 2)), "旁边一列：平面附近还留着")
+	check(s.map.star_at(Vector3i(1, 0, 2)) == StarMap.Star.DOUBLE, "展开保留原星系")
+	check(not s.flattened.has(Vector3i(2, 0, 1)) and not s.flattened.has(Vector3i(2, 0, 2)), "波前按整列传播")
 	s.end_turn()
-	check(s.flattened.has(Vector3i(2, 0, 1)) and not s.flattened.has(Vector3i(3, 0, 1)), "每回合向外扩散 0.9 格")
+	check(not s.flattened.has(Vector3i(2, 0, 1)), "0.9 格尚未覆盖相邻列")
 
 
 func test_foil_unfolds_on_enemy_in_path() -> void:
@@ -1172,7 +1172,7 @@ func test_foil_unfolds_on_enemy_in_path() -> void:
 
 
 func test_foil_bad_targets() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["dimension"])
 	check(s.launch_foil(me, Vector3i(10, 0, 0))["error"] != "", "目标必须在星图内")
@@ -1203,112 +1203,109 @@ func _flatten_whole_column(s: GameState, col: Vector2i, plane: int) -> void:
 		s._flatten_cell(Vector3i(col.x, col.y, z), plane)
 
 
-func test_reduced_civ_moves_onto_plane() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
-	var me := s.human()
-	var ai := s.civs[1]
-	me.reduced = true
-	_set_star(s, Vector3i.ZERO, StarMap.Star.DOUBLE)
-	me.dysons[Vector3i.ZERO] = 1
-	me.miners[Vector3i.ZERO] = 2
-	me.grains[Vector3i.ZERO] = true
-	ai.known[Vector3i.ZERO] = 1
-	var w := _ship(s, me, Ship.WARSHIP, Vector3.ZERO)
-	var flat := Vector3i(0, 0, 4)
-	_flatten_whole_column(s, Vector2i(0, 0), 4)
-	check(me.alive and me.home == flat and me.colonies == [flat], "母星被压到平面的高度上")
-	check(s.map.star_at(flat) == StarMap.Star.DOUBLE and s.map.star_at(Vector3i.ZERO) == StarMap.Star.NONE, "恒星跟着走")
-	check(me.dysons.get(flat, 0) == 1 and me.miners.get(flat, 0) == 2 and me.grains.has(flat), "设施跟着走")
-	check(w.pos == Vector3(flat) and not w.dead, "停着的单位也跟着走")
-	check(ai.known.has(flat) and not ai.known.has(Vector3i.ZERO), "知道这个星系的文明改记新坐标")
+func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
+	s._unfold_foil(anchor)
+	for i in 40:
+		if s.all_flat():
+			break
+		s._spread_flat()
 
 
-func test_reduced_systems_in_same_column_collide() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+func test_unfold_preserves_systems_assets_and_environment() -> void:
+	var s := _collapse_match()
 	var me := s.human()
-	me.reduced = true
 	var upper := Vector3i(0, 0, 7)
-	_set_star(s, upper, StarMap.Star.SINGLE)
+	_set_habitable(s, upper, StarMap.Star.DOUBLE)
 	me.colonies.append(upper)
-	var ss := _ship(s, me, Ship.STARSHIP, Vector3(0, 0, 3))
-	ss.docked = false
-	_flatten_whole_column(s, Vector2i(0, 0), 0)
-	check(me.alive and me.colonies == [Vector3i.ZERO], "压到同一格的第二个星系毁掉")
-	check(not ss.dead and ss.pos == Vector3.ZERO, "降维文明的星舰也被压到平面上")
+	me.dysons[upper] = 2
+	me.miners[upper] = 3
+	me.grains[upper] = true
+	me.bunkers[upper] = true
+	me.broadcasters[upper] = true
+	me.pending.append({"kind": "miner", "at": upper})
+	me.pending_domains.append({"center": upper, "left": 2})
+	var ship := _ship(s, me, Ship.STARSHIP, Vector3(0, 0, 3))
+	ship.docked = false
+	var scout := _ship(s, me, Ship.PROBE, Vector3(1.2, 2, 3), Vector3(0, 0, 1))
+	s._ensure_light()
+	s.light[s._li(upper)] = 0.25
+	s.black_domains.append({"center": upper, "left": 3})
+	var stars := s.map.stars.duplicate()
+	_flatten_whole_column(s, Vector2i.ZERO, 4)
+	check(me.colonies == [Vector3i.ZERO, upper] and not ship.dead, "阶段内保留身份，不把同列资产相互覆盖")
+	_finish_flat(s)
+	var dest := DimensionSpace.plane_cell(upper, 4)
+	check(s.all_flat() and s.map.extent == Vector3i(27, 27, 1), "真实星图切换为 27²")
+	check(me.colonies.size() == 2 and me.owns(dest) and not ship.dead, "同列多个星系、星舰全部存活")
+	for c in stars:
+		check(s.map.star_at(DimensionSpace.plane_cell(c, 4)) == stars[c], "每个原星系一一保留")
+	check(me.dysons[dest] == 2 and me.miners[dest] == 3 and me.grains.has(dest), "设施、库存正确迁移")
+	check(me.bunkers.has(dest) and me.broadcasters.has(dest) and me.pending[0]["at"] == dest, "防御和待建队列迁移")
+	check(me.pending_domains[0]["center"] == dest and s.black_domains[0]["center"] == dest, "黑域准备和中心迁移")
+	check(s.light_at(dest) == 0.25 and s.map.is_habitable(dest) and s.map.rocky[dest] == 1, "光速、行星及宜居信息保留")
+	check(scout.pos.z == 4 and scout.direction.z == 0 and scout.direction.length() > 0, "浮点舰船和竖直航向转入二维")
+	check(s.cell_exists(Vector3i(26, 26, 4)) and not s.cell_exists(Vector3i(27, 0, 4)), "新边界生效")
+	check(not s.cell_exists(Vector3i(26, 26, 5)), "二维平面外不是有效格子")
 
 
-## 星系搬到平面上：别人记的情报跟着改坐标，宜居与否跟着搬来的星系；
-## 和平面上的星系重叠而毁掉时，别人也不再记着这个坐标。
-func test_moved_system_keeps_intel_consistent() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+func test_epoch_clears_old_intelligence_and_reexplores() -> void:
+	var s := _collapse_match()
 	var me := s.human()
-	var ai := s.civs[1]
-	me.reduced = true
-	var flat := Vector3i(0, 0, 4)
-	_set_habitable(s, flat, StarMap.Star.SINGLE)
-	ai.known[Vector3i.ZERO] = 1
-	ai.intel[Vector3i.ZERO] = s.snapshot(Vector3i.ZERO)
-	_flatten_whole_column(s, Vector2i(0, 0), 4)
-	check(me.home == flat and ai.intel.has(flat) and not ai.intel.has(Vector3i.ZERO), "情报跟着星系改坐标")
-	check(not s.map.is_habitable(flat), "不宜居的星系盖住平面上的宜居星系后，那一格不再宜居")
-
-	var s2 := _two_civs(Vector3i(9, 9, 9))
-	var me2 := s2.human()
-	me2.reduced = true
-	var upper := Vector3i(0, 0, 7)
-	_set_star(s2, upper, StarMap.Star.SINGLE)
-	me2.colonies.append(upper)
-	s2.civs[1].known[upper] = 1
-	_flatten_whole_column(s2, Vector2i(0, 0), 0)
-	check(not s2.civs[1].known.has(upper), "重叠毁掉的星系，别人也不再记着")
+	var enemy := s.civs[1].home
+	me.known[enemy] = 1
+	me.intel[enemy] = s.snapshot(enemy)
+	me.reports.append({"cells": {enemy: s.snapshot(enemy)}})
+	me.heard[enemy] = 1
+	me.colony_tried[enemy] = true
+	me.discovered = true
+	me.tier1_turn = 1
+	var energy := me.energy
+	_finish_flat(s)
+	check(me.known.is_empty() and me.intel.is_empty() and me.reports.is_empty() and me.heard.is_empty(), "新阶段清除旧情报及在途报告")
+	check(me.colony_tried.is_empty() and me.energy == energy and me.tier1_turn == 1 and me.discovered, "探索记忆重置，发展成果保留")
+	s._observe(me)
+	check(me.intel.has(me.home) and not me.known.has(s.civs[1].home), "新坐标可重新观测，远处敌人仍隐藏")
 
 
-## 降维文明的星系压到平面上和别人的星系重叠而毁掉：停在那里的星舰也一起毁掉，不会留在别人的星系上。
-func test_parked_starship_crushed_with_its_system() -> void:
+func test_same_column_enemy_assets_do_not_collide() -> void:
 	var s := _two_civs(Vector3i(0, 0, 7))
+	for civ in s.civs:
+		civ.reduced = true
+		_ship(s, civ, Ship.STARSHIP, Vector3(civ.home))
+	_finish_flat(s)
+	check(s.civs.all(func(c): return c.alive and c.has_starship()), "同列敌对星系和停靠星舰不会覆盖")
+	check(s.civs[0].home != s.civs[1].home, "两个文明获得不同二维坐标")
+
+
+func test_dimension_mapping_bijection_and_movement() -> void:
+	for z in 9:
+		var seen := {}
+		for c in StarMap.new().cells():
+			seen[DimensionSpace.plane_cell(c, z)] = true
+		check(seen.size() == 729, "每个锚点层都有 729 个唯一目标")
+	var s := _two_dimensional_match()
+	for civ in s.civs:
+		civ.line_reduced = true
+	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
+	for i in 40:
+		s._spread_flat()
+	check(s.all_linear() and s.map.extent == Vector3i(729, 1, 1), "二维再次展开为 729 格直线")
+	check(s.map.cells().size() == 729 and s.civs[0].home != s.civs[1].home, "一维仍没有坐标覆盖")
+	check(s.cell_exists(Vector3i(728, 13, s.flat_plane)), "一维末端可用")
+	var sh := _ship(s, s.human(), Ship.PROBE, Vector3(700, 13, s.flat_plane), Vector3.RIGHT)
+	s._move_ship(s.human(), sh)
+	check(not sh.dead and sh.pos.x > 700, "原 3D 边界不会错误删除一维舰船")
+	check(Geometry.segment_cells(Vector3(700, 13, s.flat_plane), Vector3(702, 13, s.flat_plane), 0, s.map.bounds()).size() == 2, "一维战斗扫描使用当前边界")
+
+
+func test_ai_foil_is_last_resort() -> void:
+	var s := _collapse_match()
 	var ai := s.civs[1]
-	s.human().reduced = true  # 没降维的文明在平面上也会被抹掉，这里要它的星系留在平面上
-	ai.reduced = true
-	_ship(s, ai, Ship.STARSHIP, Vector3(0, 0, 7))
-	_flatten_whole_column(s, Vector2i(0, 0), 0)
-	check(ai.colonies.is_empty() and not ai.has_starship(), "星系和停着的星舰一起毁掉")
-	check(not ai.alive and s.human().alive, "什么都不剩的文明灭亡，平面上原来的星系留下")
-
-
-## 停在空格子上的星舰被压到别人的星系上，或者别人的星系后来被压到星舰所在的格子：星舰都毁掉。
-func test_parked_starship_crushed_onto_other_system() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
-	var ai := s.civs[1]
-	s.human().reduced = true
-	ai.reduced = true
-	var ss := _ship(s, ai, Ship.STARSHIP, Vector3(0, 0, 5))
-	_flatten_whole_column(s, Vector2i(0, 0), 0)
-	check(ss.dead and ai.alive, "星舰压到别人的星系上就毁掉，文明还有星系，活着")
-
-	var s2 := _two_civs(Vector3i(9, 9, 9))
-	var me := s2.human()
-	var ai2 := s2.civs[1]
-	me.reduced = true
-	ai2.reduced = true
-	s2.map.stars.erase(Vector3i.ZERO)
-	var home := Vector3i(0, 0, 6)
-	_set_star(s2, home, StarMap.Star.SINGLE)
-	me.colonies = [home]
-	me.home = home
-	var ss2 := _ship(s2, ai2, Ship.STARSHIP, Vector3(0, 0, 2))
-	_flatten_whole_column(s2, Vector2i(0, 0), 0)
-	check(me.owns(Vector3i.ZERO) and ss2.dead, "星舰先压过去、别人的星系后压过来，星舰也毁掉")
-
-
-## 一片准备中的二向箔，发射的星系被搬到平面上：箔从新位置起飞。
-func test_moved_system_moves_preparing_foil() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
-	var me := s.human()
-	me.reduced = true
-	var f := Foil.new(Vector3.ZERO, Vector3i(5, 5, 5), 2)
-	me.foils.append(f)
-	_flatten_whole_column(s, Vector2i(0, 0), 4)
-	check(f.origin == Vector3(0, 0, 4), "准备中的箔跟着星系搬走")
+	ai.known[s.human().home] = 1
+	check(not AI._try_foil(s, ai), "有资源和已知敌人不等于可以常规使用末日武器")
+	ai.times_hit = 2
+	check(AI._try_foil(s, ai) and ai.foils.size() == 1, "最后据点反复被打且没有常规武器时可发射")
+	check(not AI._try_foil(s, ai), "在途箔未结束时不重复发射")
 
 
 func test_everyone_flattened_means_no_winner() -> void:
@@ -1319,7 +1316,7 @@ func test_everyone_flattened_means_no_winner() -> void:
 
 
 func test_flattening_destroys_ships_and_wakes() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ss := _ship(s, me, Ship.STARSHIP, Vector3(3, 3, 3))
 	ss.docked = false
@@ -1333,13 +1330,13 @@ func test_flattening_destroys_ships_and_wakes() -> void:
 func test_foil_vanishes_when_launcher_dies() -> void:
 	var s := _two_civs(Vector3i(3, 0, 0))
 	var ai := s.civs[1]
-	ai.foils.append(Foil.new(Vector3(ai.home), Vector3i(9, 9, 9), 2))
+	ai.foils.append(Foil.new(Vector3(ai.home), Vector3i(8, 8, 8), 2))
 	s._lose_system(ai.home, ai)
 	check(ai.foils.is_empty(), "发射者灭亡，二向箔也消失")
 
 
 func test_reduce_takes_turns_and_blocks_building() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	check(s.start_reduce(me)["error"] != "", "要先有维度打击科技")
 	_give(me, ["dimension"])
@@ -1361,7 +1358,7 @@ func test_reduce_takes_turns_and_blocks_building() -> void:
 
 
 func test_reduce_waits_for_pending_buildings() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["dimension"])
 	s.build(me, "miner")
@@ -1370,7 +1367,7 @@ func test_reduce_waits_for_pending_buildings() -> void:
 
 
 func _collapse_match() -> GameState:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	for civ in s.civs:
 		civ.reduced = true
 		civ.energy = 1000
@@ -1382,7 +1379,7 @@ func test_foils_share_one_plane() -> void:
 	var s := _collapse_match()
 	check(s.launch_foil(s.human(), Vector3i(1, 1, 1))["error"] == "", "第一片箔发射")
 	check(s.launch_foil(s.civs[1], Vector3i(8, 8, 7))["error"] == "", "另一高度的箔发射")
-	for i in 60:
+	for i in 180:
 		s.end_turn()
 	check(s.all_flat(), "两片箔最终压平全图")
 	check(s.flattened.values().all(func(z): return z == s.flat_plane), "每个格子都在同一个平面")
@@ -1401,7 +1398,7 @@ func test_different_planes_are_not_fully_flat() -> void:
 func test_collapse_finishes_after_combat_ends() -> void:
 	var s := _collapse_match()
 	s.civs[1].reduced = false
-	s._unfold_foil(Vector3i(9, 9, 9))
+	s._unfold_foil(Vector3i(8, 8, 8))
 	check(s.is_over() and s.collapse_pending(), "胜负已出，空间还在坍缩")
 	var turn := s.turn
 	var energy := s.human().energy
@@ -1447,7 +1444,7 @@ func test_line_foils_converge_then_draw_after_grace() -> void:
 		civ.line_reduced = true
 	check(s.launch_line_foil(s.human(), Vector3i(2, 2, 4))["error"] == "", "第一片单向著")
 	check(s.launch_line_foil(s.civs[1], Vector3i(7, 7, 4))["error"] == "", "另一 y 位置的单向著")
-	for i in 60:
+	for i in 180:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -1523,14 +1520,14 @@ func test_hidden_weapon_matches_dimension() -> void:
 func test_line_attack_destroys_unprepared_civ() -> void:
 	var s := _two_dimensional_match()
 	s.human().line_reduced = true
-	s._unfold_line_foil(Vector3i(9, 3, 4))
+	s._unfold_line_foil(s.civs[1].home)
 	check(not s.civs[1].alive and s.winner == "你", "只降到二维的对手不能抵挡单向著")
 
 
 # ---------- AI ----------
 
 func test_ai_researches_after_discovery() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_open_tiers(ai, 1)
@@ -1556,15 +1553,15 @@ func test_ai_launches_grain_at_known_target() -> void:
 
 
 func test_ai_colonizes() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_give(ai, ["colony"])
-	_set_habitable(s, Vector3i(9, 9, 8), StarMap.Star.SINGLE)
-	_set_habitable(s, Vector3i(9, 0, 9), StarMap.Star.SINGLE)
-	ai.intel[Vector3i(9, 9, 8)] = s.snapshot(Vector3i(9, 9, 8))
+	_set_habitable(s, Vector3i(8, 8, 7), StarMap.Star.SINGLE)
+	_set_habitable(s, Vector3i(8, 0, 8), StarMap.Star.SINGLE)
+	ai.intel[Vector3i(8, 8, 7)] = s.snapshot(Vector3i(8, 8, 7))
 	AI.take_turn(s, ai)
-	check(not ai.colony_tried.has(Vector3i(9, 0, 9)), "AI 不去没看到过的宜居星系")
+	check(not ai.colony_tried.has(Vector3i(8, 0, 8)), "AI 不去没看到过的宜居星系")
 	var sent := false
 	for sh in ai.ships:
 		sent = sent or (sh.kind == Ship.COLONY and sh.has_target)
@@ -1607,7 +1604,7 @@ func test_long_ai_game_runs() -> void:
 
 ## AI 只用自己看到或听到的情报：看不到你时，不知道你在哪里，也不会朝你打。
 func test_ai_only_knows_what_it_saw() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_give(ai, ["warship", "grain", "dimension"])
@@ -1623,9 +1620,9 @@ func test_ai_only_knows_what_it_saw() -> void:
 	check(ai.ships.all(func(sh): return sh.kind != Ship.GRAIN), "AI 不知道目标时不发光粒")
 	# 听到广播以后才知道
 	s.civs[0].broadcasters[Vector3i.ZERO] = true
-	ai.broadcasters[Vector3i(9, 9, 9)] = true  # 有广播器才听得到
+	ai.broadcasters[Vector3i(8, 8, 8)] = true  # 有广播器才听得到
 	ai.heard.clear()
-	s.broadcasts.append({"from": Vector3(9, 9, 0), "target": Vector3i.ZERO, "sender": null, "exposed": GameState.NO_HIT,
+	s.broadcasts.append({"from": Vector3(8, 8, 0), "target": Vector3i.ZERO, "sender": null, "exposed": GameState.NO_HIT,
 			"radius": 0.0, "heard": {}, "hidden_heard": {}})
 	for i in 12:
 		s._spread_broadcasts()
@@ -1674,7 +1671,7 @@ func test_same_seed_same_game() -> void:
 	for s in [a, b]:
 		s.spectator = true
 		s.human().is_ai = true
-		for i in 60:
+		for i in 180:
 			s.end_turn()
 	check(a.checksums.size() == b.checksums.size() and a.checksums == b.checksums, "同一个种子的两局 AI 对局每回合都一样")
 	check(a.checksum() == b.checksum(), "最后的局面一样")
@@ -1866,15 +1863,15 @@ func test_continue_after_death_recomputes_last_turn() -> void:
 		if s.is_over():
 			break
 		s.end_turn()
-	check(s.is_over() and s.winner != "AI", "接着打到分出胜负")
+	check(s.steps > ended.steps and s.winner != "AI", "接着推进对局，胜负不再由玩家死亡决定")
 	var again := Replay.from_state(s).play_to(s.steps)
 	check(again.checksum() == s.checksum(), "接着打的部分也能原样重算")
 
 
 ## 三个文明：你在 (0,0,0)，AI 在 (9,9,9)，第三方在 (9,0,0)。
 func _three_civs() -> GameState:
-	var s := _two_civs(Vector3i(9, 9, 9))
-	var third := Civ.new("第三方", false, Vector3i(9, 0, 0))
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var third := Civ.new("第三方", false, Vector3i(8, 0, 0))
 	_set_star(s, third.home, StarMap.Star.SINGLE)
 	s.civs.append(third)
 	s.start_turn(third)
@@ -1885,8 +1882,8 @@ func _three_civs() -> GameState:
 func test_grain_kills_parked_starship_and_civ() -> void:
 	var s := _three_civs()
 	var ai := s.civs[1]
-	_ship(s, ai, Ship.STARSHIP, Vector3(9, 9, 9))
-	_ship(s, s.human(), Ship.GRAIN, Vector3(6, 9, 9), Vector3(1, 0, 0))
+	_ship(s, ai, Ship.STARSHIP, Vector3(8, 8, 8))
+	_ship(s, s.human(), Ship.GRAIN, Vector3(6, 8, 8), Vector3(1, 0, 0))
 	_turns(s, 6)
 	check(ai.colonies.is_empty() and not ai.has_starship(), "星系和停着的星舰都被毁掉")
 	check(not ai.alive, "什么都不剩的文明灭亡")
@@ -1905,7 +1902,7 @@ func test_grain_flies_on_after_owner_dies() -> void:
 
 ## 预警系统是整个文明的：下单的星系在建好前丢了，换个星系照样建好。
 func test_warning_built_after_its_system_falls() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var other := Vector3i(0, 3, 0)
 	_set_star(s, other, StarMap.Star.SINGLE)
@@ -1930,7 +1927,7 @@ func test_dead_civ_intel_expires() -> void:
 
 ## 观战局里 0 号文明也叫「你」：它赢了也不能写成玩家胜利。
 func test_spectator_winner_is_named() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	s.spectator = true
 	s._die(s.civs[1])
 	check(s.winner == "你" and s.winner_by_name(), "观战局的胜负写赢家的名字")
@@ -2040,3 +2037,85 @@ func _find_conflict_markers(dir: String, bad: Array[String]) -> void:
 			if markers.any(func(m): return line.begins_with(m)):
 				bad.append(path)
 				break
+
+
+func test_replay_across_dimension_epochs() -> void:
+	var s := GameState.new_game(71, 1)
+	for civ in s.civs:
+		s.set_autoplay(civ, false)
+		s.dev_set(civ, "energy", 2000)
+		s.dev_set(civ, "reduced", true)
+		s.dev_set(civ, "line_reduced", true)
+		s.dev_tech(civ, "dimension", true)
+	var target := Vector3i(4, 4, 4)
+	if s.human().owns(target):
+		target.x += 1
+	check(s.launch_foil(s.human(), target)["error"] == "", "通过正式行动触发可重放的展开")
+	for i in 100:
+		if s.all_flat():
+			break
+		s.end_turn()
+	check(s.all_flat() and not s.is_over(), "首次换坐标后仍是可玩的对局")
+	target = Vector3i(13, 13, s.flat_plane)
+	check(s.launch_line_foil(s.human(), target)["error"] == "", "二维通过正式行动再次展开")
+	for i in 200:
+		if s.all_linear():
+			break
+		s.end_turn()
+	check(s.all_linear(), "两次维度展开均完成")
+	var replay := Replay.from_state(s)
+	var again := replay.play_to(s.steps)
+	check(replay.desync_step == -1 and again.checksum() == s.checksum(), "两次原子换图及新地图行动确定性重放")
+	check(again.map.stars == s.map.stars and again.map.extent == s.map.extent, "重放恢复所有星系及地图边界")
+
+
+func test_same_dimension_grain_still_works() -> void:
+	var s := _two_dimensional_match()
+	var enemy := s.civs[1]
+	var shot := Ship.make(Ship.GRAIN, Vector3(enemy.home), 99)
+	s._grain_hit(enemy.home, enemy, shot, s.human())
+	check(not enemy.alive, "二维文明仍可用同维度常规武器交战，不会永久免疫光粒")
+
+
+func test_unprepared_ship_entering_folded_column_dies() -> void:
+	var s := _collapse_match()
+	s.human().reduced = false
+	s._unfold_foil(Vector3i(3, 0, 0))
+	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2.9, 0, 4), Vector3.RIGHT)
+	ship.speed = 0.5
+	s._move_ship(s.human(), ship)
+	check(ship.dead, "新进入已展开空间的未降维单位同样毁灭")
+
+
+func test_unfold_keeps_incoming_projectiles_moving() -> void:
+	var s := _collapse_match()
+	var grain := Ship.make(Ship.GRAIN, Vector3(-2, 4, 4), 123)
+	grain.docked = false
+	grain.direction = Vector3.RIGHT
+	s.hidden_ships.append(grain)
+	_finish_flat(s)
+	check(grain.direction != Vector3.ZERO and not grain.dead, "图外来袭换图后仍在飞行")
+	var before := grain.pos
+	s._move_ship(null, grain)
+	check(grain.pos != before and not grain.dead, "新航向仍进入星图，不会卡死在边缘")
+
+
+func test_light_diffusion_in_new_dimensions() -> void:
+	var s := _two_dimensional_match()
+	s._ensure_light()
+	var center := Vector3i(13, 13, s.flat_plane)
+	s.light[s._li(center)] = 0.0
+	s._light_moving = true
+	s._spread_light()
+	check(is_equal_approx(s.light_at(center), 8.0 / 9.0), "二维光速按邻近 3×3 格扩散")
+	check(s.light.size() == 729 and s.light_at(Vector3i(13, 13, s.flat_plane + 1)) == 1.0, "光速数组保留 729 格且图外读取安全")
+
+
+func test_old_replay_is_rejected_explicitly() -> void:
+	var path := Replay.DIR.path_join("_old-version.replay")
+	DirAccess.make_dir_recursive_absolute(Replay.DIR)
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_var({"version": 1, "seed": 71})
+	file.close()
+	check(Replay.load_file(path) == null, "旧 10³ 规则记录不能被新规则静默重算")
+	DirAccess.remove_absolute(path)

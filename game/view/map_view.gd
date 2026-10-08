@@ -66,8 +66,6 @@ const PICK_PX := 24.0
 const OUTLINE_GAP := 0.04
 ## 情报过了多少回合以后画得最淡
 const INTEL_FADE_TURNS := 20.0
-## 边界面每格分几段（分得越细，曲面越平滑）
-const ENV_SUBDIV := 2
 const FLAT_ANIM_SECONDS := 1.2
 ## 降到零维的动画（F5.2）：整条直线越缩越快，缩成一个亮点
 const ZERO_ANIM_SECONDS := 2.0
@@ -77,7 +75,7 @@ const CAM_PITCH := -25.0
 const CAM_YAW := 115.0
 const CAM_DISTANCE := 17.0
 const CAM_MIN_DISTANCE := 4.0
-const CAM_MAX_DISTANCE := 60.0
+const CAM_MAX_DISTANCE := 2400.0
 ## 视角中心最多移出星图多远（格）
 const CAM_MARGIN := 3.0
 ## 相机追上目标位置的快慢（越大越快）
@@ -127,6 +125,7 @@ var _goal_pitch := CAM_PITCH
 var _goal_distance := CAM_DISTANCE
 ## 正在用哪个鼠标键拖动（没在拖动时为 MOUSE_BUTTON_NONE）：左键旋转，右键、中键平移
 var _drag_button := MOUSE_BUTTON_NONE
+var _last_pointer := Vector2.ZERO
 ## 网格画法（Grid 里的一个）
 var grid_mode := Grid.DOTS
 ## 空间网格的点阵
@@ -139,21 +138,10 @@ var _trails: Dictionary[int, Array] = {}
 var _tube_parts: Array[Array] = []
 ## 每次刷新重画的标记
 var _markers := Node3D.new()
-## 空间网格。压平的格子只留下平面那一层，所以压平的范围变了要重画。
+## 空间网格。保留所有格子，位置随着布局变化。
 var _grid := MeshInstance3D.new()
-## 网格画的是哪个压平状态（和 state.flattened 比较，找出新压平的格子）。
-## 动画时从 _grid_flat_old 过渡到 _grid_flat。
-var _grid_flat: Dictionary[Vector3i, int] = {}
-var _grid_flat_old: Dictionary[Vector3i, int] = {}
-var _grid_line: Dictionary[Vector3i, int] = {}
-var _grid_line_old: Dictionary[Vector3i, int] = {}
-var _line_env_new: Dictionary = {}
-var _line_env_old: Dictionary = {}
-## 还活着的空间的边界面（侧面看像躺倒的沙漏，二向箔中心最扁）
+## 每个原格子展开后留下独立薄片。
 var _funnel := MeshInstance3D.new()
-## 还活着的空间的上下边界，见 _envelope。动画时从 _env_old 过渡到 _env_new。
-var _env_old := {}
-var _env_new := {}
 ## 过渡进度，0 到 1
 var _warp_t := 1.0
 ## 降到零维：有没有文明已经降到零维、动画进度（0 到 1）、缩向哪一点、最后剩下的亮点
@@ -163,6 +151,12 @@ var _zero_point := Vector3.ZERO
 var _zero_dot := MeshInstance3D.new()
 ## 上次画的压缩形状（见 _collapse_shape），变了才放过渡动画
 var _shape := []
+var _layout_old := {}
+var _layout_new := {}
+var _amounts := {}
+var _layout_epoch := -1
+var _axes := Node3D.new()
+var _last_show_vision := false
 ## 鼠标点选：按下的位置
 var _press_pos := Vector2.ZERO
 ## 鼠标停在哪个格子上（没有时为 NO_CELL），指着的东西（_pickables 里的一项，指着空格子时为空）
@@ -200,8 +194,8 @@ func setup(p_main: Node) -> void:
 	funnel_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_funnel.material_override = funnel_mat
 	_world.add_child(_funnel)
+	_world.add_child(_axes)
 	redraw_grid()
-	_draw_axes()
 	_world.add_child(_markers)
 	_build_cursor()
 	_build_selection()
@@ -240,10 +234,11 @@ func _world_per_px() -> float:
 
 ## 重置视角：看整张星图，用开局的角度。instant：不放过渡，直接跳过去。
 func reset_view(instant := false) -> void:
-	_goal_focus = Vector3.ONE * (StarMap.SIZE - 1) / 2.0
+	var bounds := _visual_bounds()
+	_goal_focus = bounds.get_center()
 	_goal_yaw = CAM_YAW
 	_goal_pitch = CAM_PITCH
-	_goal_distance = CAM_DISTANCE
+	_goal_distance = maxf(CAM_DISTANCE, bounds.size.length() * CAM_DISTANCE / (Vector3.ONE * (StarMap.SIZE - 1)).length())
 	if instant:
 		_snap_camera()
 
@@ -263,8 +258,9 @@ func _snap_camera() -> void:
 
 
 func _clamp_focus(p: Vector3) -> Vector3:
-	var lo := Vector3.ONE * -CAM_MARGIN
-	var hi := Vector3.ONE * (StarMap.SIZE - 1 + CAM_MARGIN)
+	var bounds := _visual_bounds()
+	var lo := bounds.position - Vector3.ONE * CAM_MARGIN
+	var hi := bounds.end + Vector3.ONE * CAM_MARGIN
 	return p.clamp(lo, hi)
 
 
@@ -380,6 +376,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if _drag_button == MOUSE_BUTTON_NONE:
 				_drag_button = mb.button_index
 				_press_pos = mb.position
+				_last_pointer = mb.position
 			if mb.button_index == MOUSE_BUTTON_LEFT and mb.double_click:
 				var obj := _pick_object(mb.position)
 				var c := _nearest_cell(mb.position)
@@ -398,12 +395,14 @@ func _unhandled_input(event: InputEvent) -> void:
 					cell_clicked.emit(c)
 	elif event is InputEventMouseMotion and _drag_button != MOUSE_BUTTON_NONE:
 		var mm := event as InputEventMouseMotion
+		var movement := mm.position - _last_pointer
+		_last_pointer = mm.position
 		if _drag_button == MOUSE_BUTTON_LEFT:
-			_turn(-mm.relative.x * 0.3, -mm.relative.y * 0.3)
+			_turn(-movement.x * 0.3, -movement.y * 0.3)
 			_yaw = _goal_yaw  # 拖动旋转直接跟手，不用追
 			_pitch = _goal_pitch
 		else:
-			_pan(mm.relative.x, -mm.relative.y)
+			_pan(movement.x, -movement.y)
 			_focus = _goal_focus
 		_update_camera()
 	elif event is InputEventMouseMotion:
@@ -445,22 +444,19 @@ func _nearest_cell(pos: Vector2) -> Vector3i:
 		return NO_CELL
 	var best := NO_CELL
 	var best_score := INF
-	for x in StarMap.SIZE:
-		for y in StarMap.SIZE:
-			for z in StarMap.SIZE:
-				var c := Vector3i(x, y, z)
-				if not state.cell_exists(c):
-					continue
-				var p := _world.to_global(_warp_point(Vector3(c)))
-				if _camera.is_position_behind(p):
-					continue
-				var d := _camera.unproject_position(p).distance_to(pos)
-				if d > PICK_PX:
-					continue
-				var score := d + 0.5 * _camera.global_position.distance_to(p)
-				if score < best_score:
-					best_score = score
-					best = c
+	for c in state.map.cells():
+		if not state.cell_exists(c):
+			continue
+		var p := _world.to_global(_warp_point(Vector3(c)))
+		if _camera.is_position_behind(p):
+			continue
+		var d := _camera.unproject_position(p).distance_to(pos)
+		if d > PICK_PX:
+			continue
+		var score := d + 0.5 * _camera.global_position.distance_to(p)
+		if score < best_score:
+			best_score = score
+			best = c
 	return best
 
 
@@ -703,18 +699,14 @@ func _intel_text(info: Dictionary) -> String:
 
 # ---------- 固定的背景：网格和坐标轴 ----------
 
-## 每个整数坐标沿三个方向连线，组成空间网格。压没的格子不画，压平的只留下平面那一层。
-## 还活着的空间用半透明的面围起来：二向箔中心最扁，越往外越厚（侧面看像躺倒的沙漏）。
-## 画的就是规则里真正还活着的范围。换了局面（新开一局、回放跳到别的回合）时调用，不放动画。
+## 换局面（新开一局、回放跳转）时直接采样当前布局，不放过渡动画。
 func redraw_grid() -> void:
-	_grid_flat = state.flattened.duplicate()
-	_grid_flat_old = _grid_flat
-	_grid_line = state.linearized.duplicate()
-	_grid_line_old = _grid_line
-	_line_env_new = _line_envelope()
-	_line_env_old = _line_env_new
-	_env_new = _envelope()
-	_env_old = _env_new
+	var frame := DimensionSpace.frame(state)
+	_layout_new = frame["positions"]
+	_layout_old = _layout_new.duplicate()
+	_amounts = frame["amounts"]
+	_layout_epoch = state.space_epoch
+	_draw_axes()
 	_shape = _collapse_shape()
 	_warp_t = 1.0
 	_zero_on = state.zero_winner != null
@@ -727,66 +719,33 @@ func redraw_grid() -> void:
 	_rebuild_warped()
 
 
-## 还活着的空间的上下边界：键是边界面上的点（每格分 ENV_SUBDIV 段），值是 Vector2(下沿, 上沿) 的高度。
-## 没有展开的二向箔时，就是整张星图的上下边。
-func _envelope() -> Dictionary:
-	var env := {}
-	var n := float(StarMap.SIZE - 1)
-	var steps := (StarMap.SIZE - 1) * ENV_SUBDIV
-	for i in steps + 1:
-		for j in steps + 1:
-			var p := Vector2(i, j) / ENV_SUBDIV
-			var lo := 0.0
-			var hi := n
-			for zone in state.foil_zones:
-				var center: Vector3i = zone["center"]
-				var room := GameState.zone_room(zone["age"], p.distance_to(Vector2(center.x, center.y)))
-				lo = maxf(lo, center.z - room)
-				hi = minf(hi, center.z + room)
-			env[Vector2i(i, j)] = Vector2(state.flat_plane, state.flat_plane) if state.all_flat() else Vector2(lo, maxf(lo, hi))
-	return env
+## 逻辑坐标按稳定格子身份跟随空间展开；所有标记、航线和选中共用它。
+func _warp_point(p: Vector3, blend := -1.0) -> Vector3:
+	var c := Vector3i(p.round())
+	if not _layout_new.has(c):
+		return p + state.visual_offset
+	var t := DimensionSpace.Layout.smooth_amount(_warp_t if blend < 0.0 else blend)
+	var local := p - Vector3(c)
+	return Vector3(_layout_old.get(c, _layout_new[c])).lerp(_layout_new[c], t) + local
 
 
-## 一点在压平动画中的位置：新压平的格子里的点，从原来的高度慢慢落到平面上；
-## 已经压平的格子里的点在平面上；没压平的格子不动。
-func _warp_point(p: Vector3, blend := 1.0) -> Vector3:
-	var c := Vector3i(clampi(roundi(p.x), 0, StarMap.SIZE - 1), clampi(roundi(p.y), 0, StarMap.SIZE - 1),
-			clampi(roundi(p.z), 0, StarMap.SIZE - 1))
-	if _grid_flat.has(c):
-		p.z = lerpf(p.z, float(_grid_flat[c]), 1.0 if _grid_flat_old.has(c) else blend)
-		c.z = _grid_flat[c]
-	if _grid_line.has(c):
-		p.y = lerpf(p.y, float(_grid_line[c]), 1.0 if _grid_line_old.has(c) else blend)
-	return p
-
-
-## 二维空间在每个 x 位置剩下的 y 范围，和规则的单向著形状一致。
-func _line_envelope() -> Dictionary:
-	var env := {}
-	for i in (StarMap.SIZE - 1) * ENV_SUBDIV + 1:
-		var x := float(i) / ENV_SUBDIV
-		var lo := 0.0
-		var hi := float(StarMap.SIZE - 1)
-		for zone in state.line_zones:
-			var center: Vector3i = zone["center"]
-			var room := GameState.zone_room(zone["age"], absf(x - center.x))
-			lo = maxf(lo, center.y - room)
-			hi = minf(hi, center.y + room)
-		env[i] = Vector2(state.line_y, state.line_y) if state.all_linear() else Vector2(lo, hi)
-	return env
+func _visual_bounds() -> AABB:
+	if _layout_new.is_empty():
+		return AABB(Vector3(state.map.origin), Vector3(state.map.extent - Vector3i.ONE))
+	var bounds := AABB(Vector3(_layout_new.values()[0]), Vector3.ZERO)
+	for p in _layout_new.values():
+		bounds = bounds.expand(p)
+	return bounds
 
 
 ## 按现在的过渡进度和网格画法重画网格（线和点阵）和压平区域边上的曲面。
 ## 视野里的线和点亮一些，看得出自己看得到哪里（F4.2）。
 func _rebuild_warped() -> void:
-	# 动画中还用旧的网格（新压平的格子里的线还在，正落到平面上），动画结束后换成新的
-	var flat := _grid_flat if _warp_t >= 1.0 else _grid_flat_old
-	var line := _grid_line if _warp_t >= 1.0 else _grid_line_old
 	var mesh := ImmediateMesh.new()
 	if grid_mode != Grid.DOTS:
 		var vision_only := grid_mode != Grid.ALL_LINES
 		var started := false
-		var segs := _grid_segments(flat, line)
+		var segs := _grid_segments()
 		for mid in segs:
 			var seen := _in_eyes(mid)
 			if vision_only and not seen:
@@ -803,19 +762,15 @@ func _rebuild_warped() -> void:
 	_grid.mesh = mesh
 	_dots.visible = (grid_mode == Grid.DOTS or grid_mode == Grid.DOTS_AND_VISION) and not (_zero_on and _zero_t >= 1.0)
 	if _dots.visible:
-		_dots.multimesh = _dot_mesh(flat, line)
+		_dots.multimesh = _dot_mesh()
 	_funnel.mesh = _funnel_mesh()
 
 
 ## 点阵：每个还在的格子中心一个小点。
-func _dot_mesh(flat: Dictionary[Vector3i, int], line: Dictionary) -> MultiMesh:
-	var keep := _grid_keep(flat, line)
+func _dot_mesh() -> MultiMesh:
 	var points: Array[Vector3] = []
-	for x in StarMap.SIZE:
-		for y in StarMap.SIZE:
-			for z in StarMap.SIZE:
-				if keep.call(x, y, z):
-					points.append(Vector3(x, y, z))
+	for c in state.map.cells():
+		points.append(Vector3(c))
 	var dot := SphereMesh.new()
 	dot.radius = 0.028
 	dot.height = 0.056
@@ -861,88 +816,74 @@ func _load_grid_mode() -> void:
 	grid_mode = clampi(cfg.get_value("view", "grid", Grid.DOTS), 0, Grid.size() - 1) as Grid
 
 
-## 还活着的空间的边界面：上下各一张，在二向箔中心贴着平面，往外慢慢张开，
-## 合起来侧面看像躺倒的沙漏。贴着星图上下边的地方（还没被压到）不画。
+## 每个展开格子画独立薄片，保留全部层，不能再用重叠的漏斗面。
 func _funnel_mesh() -> ImmediateMesh:
 	var mesh := ImmediateMesh.new()
-	var n := float(StarMap.SIZE - 1)
-	var steps := (StarMap.SIZE - 1) * ENV_SUBDIV
-	var tris: Array[Vector3] = []
-	for i in steps:
-		for j in steps:
-			var corners := [Vector2i(i, j), Vector2i(i + 1, j), Vector2i(i + 1, j + 1), Vector2i(i, j + 1)]
-			var top: Array[Vector3] = []
-			var bottom: Array[Vector3] = []
-			var top_edge := true
-			var bottom_edge := true
-			for c in corners:
-				var e: Vector2 = _env_old[c].lerp(_env_new[c], _warp_t)
-				var p := Vector2(c) / ENV_SUBDIV
-				var bounds: Vector2 = _line_env_old[c.x].lerp(_line_env_new[c.x], _warp_t)
-				p.y = clampf(p.y, bounds.x, bounds.y)
-				bottom.append(Vector3(p.x, p.y, e.x))
-				top.append(Vector3(p.x, p.y, e.y))
-				top_edge = top_edge and e.y >= n - 0.01
-				bottom_edge = bottom_edge and e.x <= 0.01
-			if not top_edge:
-				tris.append_array([top[0], top[1], top[2], top[0], top[2], top[3]])
-			if not bottom_edge:
-				tris.append_array([bottom[0], bottom[1], bottom[2], bottom[0], bottom[2], bottom[3]])
-	if tris.is_empty():
+	if state.dimension == 3 and state.foil_zones.is_empty():
 		return mesh
 	mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
-	for v in tris:
-		mesh.surface_add_vertex(v)
+	for c in state.map.cells():
+		var t: float = _amounts.get(c, 0.0)
+		if state.dimension == 3 and t <= 0.0:
+			continue
+		var center := _warp_point(Vector3(c))
+		var width := 0.43
+		var depth := 0.025 if state.all_linear() else 0.43
+		var a := center + Vector3(-width, -depth, -0.04)
+		var b := center + Vector3(width, -depth, -0.04)
+		var d := center + Vector3(-width, depth, -0.04)
+		var e := center + Vector3(width, depth, -0.04)
+		for point in [a, b, e, a, e, d]:
+			mesh.surface_add_vertex(point)
 	mesh.surface_end()
 	return mesh
 
 
-## 格子 (x, y, z) 还在不在网格上：没压平，或者就是平面（直线）那一层。
-func _grid_keep(flat: Dictionary[Vector3i, int], line: Dictionary) -> Callable:
-	return func(x: int, y: int, z: int) -> bool:
-		var c := Vector3i(x, y, z)
-		return (not flat.has(c) or flat[c] == z) and (not line.has(c) or line[c] == y)
-
-
-## 网格的每一小段（相邻两个格子之间的连线），键是线段中点，值是 [起点, 终点]。
-## 一段线只有两头的格子都还在，才画出来。
-func _grid_segments(flat: Dictionary[Vector3i, int], line: Dictionary = {}) -> Dictionary:
-	var keep := _grid_keep(flat, line)
+## 当前整数坐标中的邻接线；完成换图后自动变成 27² 或 729 的网格。
+func _grid_segments(_flat: Dictionary = {}, _line: Dictionary = {}) -> Dictionary:
 	var segs := {}
-	for a in StarMap.SIZE:
-		for b in StarMap.SIZE:
-			for i in StarMap.SIZE - 1:
-				if keep.call(i, a, b) and keep.call(i + 1, a, b):
-					segs[Vector3(i + 0.5, a, b)] = [Vector3(i, a, b), Vector3(i + 1, a, b)]
-				if keep.call(a, i, b) and keep.call(a, i + 1, b):
-					segs[Vector3(a, i + 0.5, b)] = [Vector3(a, i, b), Vector3(a, i + 1, b)]
-				if keep.call(a, b, i) and keep.call(a, b, i + 1):
-					segs[Vector3(a, b, i + 0.5)] = [Vector3(a, b, i), Vector3(a, b, i + 1)]
+	for c in state.map.cells():
+		for axis in [Vector3i.RIGHT, Vector3i.UP, Vector3i.BACK]:
+			var next: Vector3i = c + axis
+			if state.cell_exists(next):
+				segs[(Vector3(c) + Vector3(next)) / 2.0] = [Vector3(c), Vector3(next)]
 	return segs
 
 
-## 压缩的形状：压没了几格，每片箔扩散到多大。箔每回合都会扩大，有时一个格子也没多压没，
-## 但边界面还是变了，所以不能只看格子数。
+## 波前每回合继续扩散，即使本回合没有扫过新的整数格，布局也要更新。
 func _collapse_shape() -> Array:
-	return [state.flattened.size(), state.linearized.size(),
+	return [state.space_epoch, state.flattened.size(), state.linearized.size(),
 			state.foil_zones.map(func(z): return z["age"]), state.line_zones.map(func(z): return z["age"])]
 
 
-## 压缩的形状变了：从旧的形状慢慢过渡到新的（新压没的格子落到平面上，边界面跟着收紧）。
+## 从当前屏幕位置过渡到下一回合布局；快速连点不会跳回旧动画的起点。
 func _animate_flattening() -> void:
 	var shape := _collapse_shape()
 	if shape == _shape:
 		return
 	_shape = shape
-	_grid_flat_old = _grid_flat
-	_grid_flat = state.flattened.duplicate()
-	_grid_line_old = _grid_line
-	_grid_line = state.linearized.duplicate()
-	_line_env_old = _line_env_new
-	_line_env_new = _line_envelope()
-	_env_old = _env_new
-	_env_new = _envelope()
+	_set_hover({})
+	var current := {}
+	for c in _layout_new:
+		current[c] = _warp_point(Vector3(c))
+	if _layout_epoch != state.space_epoch:
+		var translated := {}
+		for c in current:
+			translated[state.last_mapping.get(c, c)] = current[c]
+		current = translated
+		_layout_epoch = state.space_epoch
+		_trails.clear()
+		select_object({})
+	var frame := DimensionSpace.frame(state)
+	_layout_old = current
+	_layout_new = frame["positions"]
+	_amounts = frame["amounts"]
 	_warp_t = 0.0
+	var bounds := _visual_bounds()
+	_goal_focus = bounds.get_center()
+	_goal_distance = maxf(_goal_distance, bounds.size.length() * 1.55)
+	_draw_axes()
+
 
 
 ## 压平或降到零维的动画还没放完。
@@ -955,6 +896,7 @@ func advance_animation(delta: float) -> void:
 	if _warp_t < 1.0:
 		_warp_t = minf(1.0, _warp_t + delta / FLAT_ANIM_SECONDS)
 		_rebuild_warped()
+		refresh(main.viewed(), _aim, _last_show_vision, _reveal)
 	if _zero_t < 1.0:
 		_zero_t = minf(1.0, _zero_t + delta / ZERO_ANIM_SECONDS)
 		_apply_zero()
@@ -978,7 +920,7 @@ func _zero_center() -> Vector3:
 	if not w.colonies.is_empty():
 		return _warp_point(Vector3(w.colonies[0]))
 	if w.has_starship():
-		return w.starship().pos
+		return _warp_point(w.starship().pos)
 	return Vector3.ONE * (StarMap.SIZE - 1) / 2.0
 
 
@@ -991,7 +933,7 @@ func _animate_zero() -> void:
 	_zero_t = 0.0 if on else 1.0
 	if on:
 		_zero_point = _zero_center()
-		focus_on(_zero_point)
+		_goal_focus = _zero_point
 	_apply_zero()
 
 
@@ -1011,23 +953,26 @@ func _apply_zero() -> void:
 	_zero_dot.scale = Vector3.ONE * (0.12 + 0.6 * flash)
 
 
-## 从 (0,0,0) 那个角沿三条边画出坐标轴，标上轴名和 0～9 的刻度，
+## 从当前地图原点沿仍然存在的轴画刻度；展开期间隐藏旧坐标轴，
 ## 让玩家看得出每个格子的坐标。文字总是朝向相机。
 func _draw_axes() -> void:
-	var n := StarMap.SIZE - 1
-	# 轴线放在网格外侧一点，免得和网格线重叠
-	var start := Vector3.ONE * -0.6
+	_axes.visible = not state.collapse_pending()
+	for node in _axes.get_children():
+		node.free()
+	var origin := Vector3(state.map.origin) + state.visual_offset
+	var start := origin - Vector3.ONE * 0.6
 	for i in 3:
+		if state.map.extent[i] <= 1:
+			continue
 		var axis := Vector3.ZERO
 		axis[i] = 1.0
+		var n := state.map.extent[i] - 1
 		var color := AXIS_COLORS[i]
-		# 坐标轴画淡一点，不抢星图上单位的风头
-		_world.add_child(_segment(start, start + axis * (n + 1.8), Color(color, 0.35), false))
-		_world.add_child(_label3d(["x", "y", "z"][i], start + axis * (n + 2.3), Color(color, 0.7), 48))
-		for k in StarMap.SIZE:
-			var p := start + axis * (k + 0.6)
-			_world.add_child(_label3d(str(k), p, Color(color, 0.4), 30))
-	_world.add_child(_label3d("(0,0,0)", start - Vector3.ONE * 0.4, Color(1, 1, 1, 0.35), 26))
+		_axes.add_child(_segment(start, start + axis * (n + 1.8), Color(color, 0.35), false))
+		_axes.add_child(_label3d(["x", "y", "z"][i], start + axis * (n + 2.3), Color(color, 0.7), 48))
+		var step := maxi(1, ceili(n / 9.0))
+		for k in range(0, n + 1, step):
+			_axes.add_child(_label3d(str(k + state.map.origin[i]), start + axis * (k + 0.6), Color(color, 0.4), 30))
 
 
 # ---------- 会变化的部分：标记 ----------
@@ -1036,7 +981,9 @@ func _draw_axes() -> void:
 ## show_vision：画自己的视野；reveal：上帝视角，画出所有星系和别人的舰船。
 func refresh(me: Civ, aim: Dictionary, show_vision: bool, reveal: bool) -> void:
 	for child in _markers.get_children():
+		_markers.remove_child(child)
 		child.queue_free()
+	_last_show_vision = show_vision
 	_aim = aim
 	_reveal = reveal
 	_animate_flattening()
@@ -1084,12 +1031,12 @@ func _draw_preview(me: Civ) -> void:
 				return
 			if s.kind == Ship.PROBE:
 				var cone := state.cone_of(me, s)
-				area = Geometry.cone_cells(from, direction, cone[0], cone[1])
+				area = Geometry.cone_cells(from, direction, cone[0], cone[1], state.map.bounds())
 			else:
-				area = Geometry.cylinder_cells(from, direction, SHIP_PREVIEW_LENGTH, 0.0)
+				area = Geometry.cylinder_cells(from, direction, SHIP_PREVIEW_LENGTH, 0.0, state.map.bounds())
 				color = Color(SHIP_COLORS[s.kind], 0.1)
 		"grain":
-			area = Geometry.cylinder_cells(from, direction, SHIP_PREVIEW_LENGTH, Balance.GRAIN_RADIUS)
+			area = Geometry.cylinder_cells(from, direction, SHIP_PREVIEW_LENGTH, Balance.GRAIN_RADIUS, state.map.bounds())
 			color = COLOR_BEAM
 		"colony":
 			_markers.add_child(_colony_candidates(me))
@@ -1123,11 +1070,11 @@ func _draw_preview(me: Civ) -> void:
 ## 二向箔预览：从发射源到目标的直线，目标那一层（展开后最先压平、扩散最远的平面）。
 func _draw_foil_preview(from: Vector3, target: Vector3i, line_mode: bool) -> void:
 	var layer: Array[Vector3i] = []
-	for x in StarMap.SIZE:
+	for x in state.map.extent.x:
 		if line_mode:
 			layer.append(Vector3i(x, state.line_y if state.line_y >= 0 else target.y, state.flat_plane))
 		else:
-			for y in StarMap.SIZE:
+			for y in state.map.extent.y:
 				layer.append(Vector3i(x, y, state.flat_plane if state.flat_plane >= 0 else target.z))
 	var tile := BoxMesh.new()
 	tile.size = Vector3(1.0, 0.06 if line_mode else 1.0, 0.03)
@@ -1165,33 +1112,15 @@ func _draw_vision(me: Civ) -> void:
 
 ## 星图上大家都看得到的东西：压平的空间、黑域。
 func _draw_space() -> void:
-	# 平面格子和直线格子分开画；已被压没的区域不能留下薄片。
-	var flat_cells: Array[Vector3i] = []
-	var line_cells: Array[Vector3i] = []
-	for c in state.flattened:
-		if c.z != state.flattened[c] or not state.cell_exists(c):
-			continue
-		if state.linearized.has(c):
-			line_cells.append(c)
-		else:
-			flat_cells.append(c)
-	for cells_and_width in [[flat_cells, 1.0], [line_cells, 0.06]]:
-		var cells: Array[Vector3i] = cells_and_width[0]
-		var tile := BoxMesh.new()
-		tile.size = Vector3(1.0, cells_and_width[1], 0.03)
-		_markers.add_child(_instances(tile, cells, _fill(cells.size(), COLOR_FLAT), _fill_f(cells.size(), 1.0)))
 	# 黑域（G14）：光速低于 0.95 的格子画成半透明的方块，光速越低越不透明；中心还保持光速为 0 的再加一圈边框
 	var slow_cells: Array[Vector3i] = []
 	var slow_colors: Array[Color] = []
 	if not state.light.is_empty():
-		for x in StarMap.SIZE:
-			for y in StarMap.SIZE:
-				for z in StarMap.SIZE:
-					var c := Vector3i(x, y, z)
-					var speed := state.light_at(c)
-					if speed < Balance.GRAIN_MIN_LIGHT and state.cell_exists(c):
-						slow_cells.append(c)
-						slow_colors.append(Color(COLOR_DOMAIN, COLOR_DOMAIN.a * (1.0 - speed)))
+		for c in state.map.cells():
+			var speed := state.light_at(c)
+			if speed < Balance.GRAIN_MIN_LIGHT:
+				slow_cells.append(c)
+				slow_colors.append(Color(COLOR_DOMAIN, COLOR_DOMAIN.a * (1.0 - speed)))
 	if not slow_cells.is_empty():
 		var cube := BoxMesh.new()
 		cube.size = Vector3.ONE
@@ -1562,9 +1491,10 @@ func _bubble(center: Vector3, radius: float, color: Color) -> MeshInstance3D:
 
 ## 从 p 到星图最远的角有多远。
 func _farthest_corner(p: Vector3) -> float:
-	var n := float(StarMap.SIZE - 1)
-	var far := Vector3(n if p.x < n / 2.0 else 0.0, n if p.y < n / 2.0 else 0.0, n if p.z < n / 2.0 else 0.0)
-	return p.distance_to(far)
+	var lo := Vector3(state.map.origin)
+	var hi := lo + Vector3(state.map.extent - Vector3i.ONE)
+	return (p - lo).abs().max((p - hi).abs()).length()
+
 
 
 ## 正在扩大的球面：三个互相垂直的圆圈（粗线）。
@@ -1650,7 +1580,7 @@ func _predict(s: Ship, turns: int) -> Array[Vector3]:
 			break
 		p += s.direction * speed
 		points.append(p)
-		if Ship.outside(p):
+		if Ship.outside(p, state.map.bounds()):
 			break
 	return points
 
@@ -1774,7 +1704,7 @@ func _length_inside(from: Vector3, direction: Vector3) -> float:
 	var step := direction.normalized() * 0.1
 	var traveled := 0.0
 	var p := from
-	while not Ship.outside(p) and traveled < SHIP_PREVIEW_LENGTH * 2.0:
+	while not Ship.outside(p, state.map.bounds()) and traveled < SHIP_PREVIEW_LENGTH * 2.0:
 		p += step
 		traveled += 0.1
 	return traveled

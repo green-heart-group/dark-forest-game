@@ -6,7 +6,27 @@ extends RefCounted
 
 enum Star { NONE, SINGLE, DOUBLE, TRIPLE }
 
-const SIZE := 10
+const SIZE := 9
+var extent := Vector3i(SIZE, SIZE, SIZE)
+var origin := Vector3i.ZERO
+
+
+func bounds() -> AABB:
+	return AABB(Vector3(origin), Vector3(extent))
+
+
+func contains(c: Vector3i) -> bool:
+	var p := c - origin
+	return p.x >= 0 and p.y >= 0 and p.z >= 0 and p.x < extent.x and p.y < extent.y and p.z < extent.z
+
+
+func cells() -> Array[Vector3i]:
+	var result: Array[Vector3i] = []
+	for x in extent.x:
+		for y in extent.y:
+			for z in extent.z:
+				result.append(origin + Vector3i(x, y, z))
+	return result
 
 ## 格子坐标 (Vector3i) -> Star
 var stars: Dictionary[Vector3i, int] = {}

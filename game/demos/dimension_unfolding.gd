@@ -1,7 +1,7 @@
 extends Node3D
 ## 独立的空间展开演示。只控制演示布局和相机，不创建或修改正式对局。
 
-const Layout := preload("res://demos/unfolding_layout.gd")
+const Layout := preload("res://rules/unfolding_layout.gd")
 const DURATION := 12.0
 const COLORS: Array[Color] = [Color("5375bd"), Color("647dd4"), Color("7d8ee0"),
 		Color("929ee8"), Color("64b9c7"), Color("54ccb9"), Color("8ad7b2"),

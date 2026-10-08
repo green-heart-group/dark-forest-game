@@ -32,7 +32,7 @@ func check(ok: bool, message: String) -> void:
 func fixture() -> GameState:
 	var s := GameState.new()
 	s.map = StarMap.new()
-	for pos in [Vector3i.ZERO, Vector3i(9, 9, 9)]:
+	for pos in [Vector3i.ZERO, Vector3i(8, 8, 8)]:
 		var civ := Civ.new("你" if s.civs.is_empty() else "Other", false, pos)
 		civ.energy = 1000
 		civ.mineral = 1000
@@ -49,6 +49,7 @@ func show_state(s: GameState) -> void:
 
 func settled_frame() -> void:
 	view._process(map.FLAT_ANIM_SECONDS)
+	map._process(10.0)
 	await process_frame
 
 
@@ -284,6 +285,20 @@ func test_camera() -> void:
 	check(map._focus.is_equal_approx(center), "相机追上目标")
 	key.physical_keycode = KEY_J
 	check(not map._camera_key(key), "别的键不归星图管")
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = Vector2(100, 100)
+	map._unhandled_input(press)
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(150, 120)
+	var yaw: float = map._goal_yaw
+	map._unhandled_input(motion)
+	check(is_equal_approx(map._goal_yaw, yaw - 15.0), "没有 relative 位移的原生拖动事件也能旋转")
+	press.pressed = false
+	press.position = motion.position
+	map._unhandled_input(press)
+	check(map._drag_button == MOUSE_BUTTON_NONE, "松开鼠标结束旋转")
 
 
 ## 只有星图上画出来的东西点得中；选中圈贴着东西的轮廓，东西小圈也小，不闪；点到空处、换局面时取消。
@@ -388,7 +403,7 @@ func _pickable_at(c: Vector3i) -> Dictionary:
 func test_hover_intel() -> void:
 	var s := fixture()
 	var me := s.human()
-	var c := Vector3i(9, 9, 9)
+	var c := Vector3i(8, 8, 8)
 	s.map.stars[c] = StarMap.Star.SINGLE
 	me.intel[c] = s.snapshot(c)
 	me.known[c] = 1
@@ -414,7 +429,7 @@ func test_sightings_drawn() -> void:
 	me.hit_dirs.append({"at": Vector3i.ZERO, "dir": Vector3(1, 0, 0), "turn": s.turn})
 	s.wakes.append({"a": Vector3(5, 5, 5), "b": Vector3(6, 5, 5), "turn": s.turn, "gone": false})
 	me.wakes_seen[0] = true
-	me.heard[Vector3i(9, 9, 9)] = s.turn
+	me.heard[Vector3i(8, 8, 8)] = s.turn
 	view.refresh()
 	await process_frame
 	check(map._markers.get_child_count() >= before + 2 and not map._tube_parts.is_empty(), "航迹、打击方向、听到的广播都画出来")
@@ -448,7 +463,7 @@ func test_intel_on_starless_system() -> void:
 	# 看到过的星系后来恒星被打光了：仍按情报画，画面不能出错
 	var s := fixture()
 	var me := s.human()
-	var c := Vector3i(9, 9, 9)
+	var c := Vector3i(8, 8, 8)
 	s.map.stars[c] = StarMap.Star.DOUBLE
 	me.intel[c] = s.snapshot(c)
 	show_state(s)
@@ -504,7 +519,8 @@ func test_flat_and_line() -> void:
 	actions._go.pressed.emit()
 	check(s.human().foils.size() == 1, "通过执行按钮发射二向箔")
 	s.launch_foil(s.civs[1], Vector3i(7, 7, 7))
-	for i in 40:
+	map._set_hover(_pickable_at(s.human().home))
+	for i in 180:
 		if s.all_flat():
 			break
 		panel._end.pressed.emit()
@@ -512,10 +528,20 @@ func test_flat_and_line() -> void:
 	await settled_frame()
 	check(s.all_flat() and not s.is_over(), "3D 结束后进入可玩的 2D")
 	check(not panel._end.disabled, "二维可以继续结束回合")
+	check(not map._cursor.visible, "换图清除旧坐标的悬停提示")
+	check(overlay._restart.get_global_rect().end.x <= panel.get_global_rect().position.x, "二维状态栏不侵入操作面板")
+	var goal: Vector3i = actions._target_cell()
+	check(Vector3i(actions._coord_boxes[0].value, actions._coord_boxes[1].value, actions._coord_boxes[2].value) == goal, "换图后的坐标输入和实际目标一致")
+	var home: Vector3 = map._warp_point(Vector3(s.human().home))
+	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell") == s.human().home, "换图后在新位置可以点中母星")
 	check(actions._action == actions.Action.LINE_FOIL and actions._action_tiles[actions.Action.LINE_FOIL].visible, "自动切换到单向著")
 	check(not actions._action_tiles[actions.Action.FOIL].visible and not actions._pitch.get_parent().visible, "二维不再显示二向箔和俯仰输入")
 	var segments: Dictionary = map._grid_segments(s.flattened, s.linearized)
-	check(segments.size() == 180, "二维只剩一张完整网格")
+	check(segments.size() == 1404, "二维网格连接全部 729 个格子")
+	check(actions._coord_boxes[0].max_value == 26 and actions._coord_boxes[1].max_value == 26, "二维输入允许 0 到 26")
+	actions.aim_at(Vector3i(26, 26, s.flat_plane))
+	check(actions._target_cell() == Vector3i(26, 26, s.flat_plane), "远端二维目标选取准确")
 	for segment in segments.values():
 		check(segment[0].z == s.flat_plane and segment[1].z == s.flat_plane, "二维每条线段位于同一平面")
 	await capture("two-dimensional")
@@ -532,7 +558,7 @@ func test_flat_and_line() -> void:
 	check(s.human().foils.size() == 1 and s.human().foils[0].to_line, "按钮发出单向著")
 	s.launch_line_foil(s.civs[1], Vector3i(7, 7, s.flat_plane))
 	var captured := false
-	for i in 40:
+	for i in 180:
 		if s.all_linear():
 			break
 		panel._end.pressed.emit()
@@ -550,15 +576,14 @@ func test_flat_and_line() -> void:
 		panel._end.pressed.emit()
 	check(s.winner == "你" and panel._end.text.contains("再来一局") and overlay._status.text.contains("胜利"), "先降到零维的赢")
 	segments = map._grid_segments(s.flattened, s.linearized)
-	check(segments.size() == 9, "最终只有九条相邻线段，组成一条直线")
+	check(segments.size() == 728, "最终有 728 条相邻线段，连接 729 个格子")
 	for segment in segments.values():
 		for point in segment:
 			check(point.y == s.line_y and point.z == s.flat_plane, "最终网格没有残留平面")
-	for c in s.flattened:
-		var point: Vector3 = map._warp_point(Vector3(c))
-		check(point.y == s.line_y and point.z == s.flat_plane, "所有原始网格点都投影到同一条直线")
-	for bounds in map._line_env_new.values():
-		check(bounds.x == s.line_y and bounds.y == s.line_y, "边界曲面也收拢到直线")
+	for c in s.map.cells():
+		var point: Vector3 = map._warp_point(Vector3(c)) - s.visual_offset
+		check(point.y == s.line_y and point.z == s.flat_plane, "729 个格子全部位于同一条直线")
+	check(actions._coord_boxes[0].max_value == 728 and actions._coord_boxes[1].min_value == s.line_y, "坐标输入支持一维的新范围")
 	# F5.2：降到零维时，直线缩成一个亮点
 	check(map.animating() and map._zero_dot.visible, "降到零维时放动画")
 	map.advance_animation(map.ZERO_ANIM_SECONDS * 0.5)

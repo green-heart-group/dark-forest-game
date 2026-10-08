@@ -6,8 +6,8 @@
 代码都在 `game/`（Godot 4.7 项目，GDScript）。最重要的一条：**规则和画面分开**。
 规则代码不知道画面存在，所以能不开窗口跑测试和平衡模拟；画面只读规则数据，要改局面就调用规则的函数。
 
-独立的视觉试验放在 `game/demos/`，不接入正式游戏入口。目前的 [降维展开演示](dimension-unfolding.md)
-将纯数据映射和动画场景分开，并由 `game/tests/run_unfolding_tests.gd` 单独验证。
+独立的视觉试验放在 `game/demos/`。[降维展开](dimension-unfolding.md) 已接入正式规则和星图，
+纯布局由规则和演示共用，演示场景仍可单独运行。
 
 ## 规则代码（`game/rules/`）
 
@@ -19,7 +19,9 @@
 | `civ.gd` | 一个文明：星系、单位、科技，以及它知道的别人的事 |
 | `ship.gd` | 会动的单位（探测器、战舰、殖民船、星舰、吞噬者、智子、飞行中的光粒）；战舰带的武器和受的伤 |
 | `foil.gd` | 飞行中的二向箔、单向著 |
-| `star_map.gd` | 星图生成 |
+| `star_map.gd` | 星图生成，以及每局当前阶段的原点、边长和边界 |
+| `dimension_space.gd` | 3D/2D/1D 一一映射、阶段末原子迁移、只读动画布局 |
+| `unfolding_layout.gd` | 规则和演示共用的 9 格顺时针映射和插值函数 |
 | `tech.gd` | 科技树：编号、名字、等级、前置 |
 | `geometry.gd` | 沿方向飞行、视野圆锥用到的几何计算 |
 | `ai.gd` | AI 每回合怎么行动（顺序见 [原型现在的规则 §11](../design/current-rules.md#11-ai-怎么行动)） |
@@ -51,8 +53,12 @@
   现在有的几处捷径：回合末所有文明看一遍之前，`_begin_view_cache()` 先把这段时间里不会变的东西算好
   （星系格子按位置分好、光速几乎为 0 的格子、星系快照），看完就清空；光走的时间不会比直线距离短，所以直线距离已经太远的不细算（`_light_within`）；
   `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
-- **二向箔**展开后存在 `GameState.foil_zones`（中心 + 展开了几回合），`flattened` 记每个被压的格子和它的平面高度；
-  压成什么形状由 `zone_covers()` 和 `Balance.FOIL_SQUISH` 决定，画面画压平的区域也用同一套函数。
+- **空间阶段**由 `GameState.dimension` 和 `StarMap.extent/origin` 管理，不能再用固定 `StarMap.SIZE`
+  检查对局中的坐标。几何扫描必须传 `map.bounds()`；`SIZE` 只用于生成 9³ 的初始地图。
+- **降维迁移**由 `DimensionSpace.commit()` 一次替换全部坐标容器。波前期间不搬动规则坐标，
+  画面读取 `frame()`；阶段换图用 `last_mapping` 关联前后格子，禁止将渲染坐标写回规则。
+- **回放**版本 2 与旧 10³ 规则不兼容；加载时明确拒绝旧文件，避免悄悄重算为另一局。
+
 
 ## 画面代码（`game/view/`）
 

@@ -157,9 +157,6 @@ static var COST_LINE_FOIL := 30
 static var FOIL_PREPARE_TURNS := 2
 static var FOIL_SPEED := 0.2           # 展开前每回合飞多远（B7）
 static var FOIL_SPREAD := 0.9          # 展开后每回合向外扩散多远（T17）
-# 二向箔展开后的形状：中心那一列完全压平，压平的圆半径每回合加 FOIL_SPREAD。
-# 圆外面离圆边 x 格的地方，平面上下只剩 FOIL_SQUISH × x² 格高的空间，更高、更低的格子被压没。
-static var FOIL_SQUISH := 1.0
 # 奇异点：全图压成直线后，准备这么多回合，完成的文明降到零维，赢得对局
 static var COST_SINGULARITY := 30
 static var SINGULARITY_TURNS := 3
@@ -172,6 +169,7 @@ static var REDUCE_TURNS := 3
 # AI 发现二向箔再过这么多回合以内就会压到自己的星系时，开始降维
 static var AI_REDUCE_ALERT := 4
 # AI 能量攒到这么多、又有已知目标时，先降维再发射二向箔
+static var AI_FOIL_HITS := 2  # 仅剩一个据点时，至少被打多少次才考虑末日武器
 static var AI_FOIL_ENERGY := 60
 
 # ---------- 黑域（游戏设计 §7） ----------
