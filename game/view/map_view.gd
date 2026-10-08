@@ -39,6 +39,8 @@ const COLOR_BUNKER := Color(0.6, 0.65, 0.75)
 ## 自己的视野：星系和星舰是球，探测器是圆锥
 const COLOR_VISION := Color(0.3, 0.6, 1.0, 0.035)
 const COLOR_PROBE_VISION := Color(0.2, 1.0, 1.0, 0.06)
+## 二维、一维里视野和预警范围画成的圆片、长条有多厚
+const FLAT_THICKNESS := 0.08
 ## 看到的别人的舰船、航迹，预警系统报告的东西，被打时知道的打击方向
 const COLOR_SIGHTING := Color(1.0, 0.35, 0.35)
 const COLOR_WAKE := Color(1.0, 0.45, 0.45)
@@ -1472,15 +1474,33 @@ func _instances_at(mesh: Mesh, points: Array[Vector3], colors: Array[Color],
 	return node
 
 
-## 半透明的球：视野、预警范围、广播的扩散。
+## 半透明的球：视野、预警范围。二维里画成平面上的圆片，一维里画成直线上的一段，不伸出平面或直线。
 func _bubble(center: Vector3, radius: float, color: Color) -> MeshInstance3D:
-	var mesh := SphereMesh.new()
-	mesh.radius = maxf(radius, 0.01)
-	mesh.height = maxf(radius, 0.01) * 2.0
-	mesh.radial_segments = 32
-	mesh.rings = 16
+	radius = maxf(radius, 0.01)
+	var mesh: Mesh
+	if state.dimension == 3:
+		var sphere := SphereMesh.new()
+		sphere.radius = radius
+		sphere.height = radius * 2.0
+		sphere.radial_segments = 32
+		sphere.rings = 16
+		mesh = sphere
+	elif state.dimension == 2:
+		var disc := CylinderMesh.new()  # 圆柱默认沿 y 轴，下面转到沿 z
+		disc.top_radius = radius
+		disc.bottom_radius = radius
+		disc.height = FLAT_THICKNESS
+		disc.radial_segments = 32
+		disc.rings = 1
+		mesh = disc
+	else:
+		var bar := BoxMesh.new()
+		bar.size = Vector3(radius * 2.0, FLAT_THICKNESS, FLAT_THICKNESS)
+		mesh = bar
 	var node := MeshInstance3D.new()
 	node.mesh = mesh
+	if state.dimension == 2:
+		node.basis = Basis(Vector3.RIGHT, PI / 2)
 	node.material_override = _flat_material(color)
 	node.position = _warp_point(center)
 	return node
@@ -1494,10 +1514,24 @@ func _farthest_corner(p: Vector3) -> float:
 
 
 
-## 正在扩大的球面：三个互相垂直的圆圈（粗线）。
+## 正在扩大的球面，按现在的维度画：三维是三个互相垂直的圆圈，二维只画平面里那一个，
+## 一维是直线上的一段（两头各一道短竖线）。圆圈围着中心画在画面上的位置，不再一小段一小段地跟着展开变形，
+## 免得展开到一半时被拉得很长。
 func _wave_rings(center: Vector3, radius: float, color: Color) -> void:
 	const SEGMENTS := 48
-	for axis in 3:
+	var at := _warp_point(center)
+	if state.dimension == 1:
+		var lo := Vector3(state.map.origin)
+		var hi := lo + Vector3(state.map.extent - Vector3i.ONE)
+		var left := maxf(center.x - radius, lo.x - Geometry.CELL_HALF)
+		var right := minf(center.x + radius, hi.x + Geometry.CELL_HALF)
+		var shift := at - center
+		_tube(Vector3(left, center.y, center.z) + shift, Vector3(right, center.y, center.z) + shift, color, 0.04, false)
+		for x in [left, right]:
+			var end := Vector3(x, center.y, center.z) + shift
+			_tube(end - Vector3(0, 0.6, 0), end + Vector3(0, 0.6, 0), color, 0.04, false)
+		return
+	for axis in ([2] if state.dimension == 2 else [0, 1, 2]):
 		var u := Vector3.ZERO
 		var v := Vector3.ZERO
 		u[(axis + 1) % 3] = radius
@@ -1505,7 +1539,7 @@ func _wave_rings(center: Vector3, radius: float, color: Color) -> void:
 		for i in SEGMENTS:
 			var a := TAU * i / SEGMENTS
 			var b := TAU * (i + 1) / SEGMENTS
-			_tube(center + u * cos(a) + v * sin(a), center + u * cos(b) + v * sin(b), color, 0.02)
+			_tube(at + u * cos(a) + v * sin(a), at + u * cos(b) + v * sin(b), color, 0.02, false)
 
 
 ## 让网格自带的 +y 轴朝向 facing。
@@ -1581,8 +1615,9 @@ func _remember_trails(me: Civ) -> void:
 
 
 ## 记一段粗线，refresh 最后由 _tubes() 一起画。
-func _tube(from: Vector3, to: Vector3, color: Color, width: float) -> void:
-	_tube_parts.append([from, to, color, width])
+## warp 为假时 from、to 已经是画面上的位置，不再跟着展开变形。
+func _tube(from: Vector3, to: Vector3, color: Color, width: float, warp := true) -> void:
+	_tube_parts.append([from, to, color, width, warp])
 
 
 ## 把记下的粗线画成细圆柱（普通线只有 1 像素宽，看不清）。长线分成小段，跟着压平区域旁边的变形弯曲。
@@ -1591,6 +1626,9 @@ func _tubes() -> MultiMeshInstance3D:
 	for part in _tube_parts:
 		var from: Vector3 = part[0]
 		var to: Vector3 = part[1]
+		if not part[4]:
+			pieces.append([from, to, part[2], part[3]])
+			continue
 		var steps := maxi(1, ceili(from.distance_to(to) * 2.0))
 		for i in steps:
 			var a := _warp_point(from.lerp(to, float(i) / steps))

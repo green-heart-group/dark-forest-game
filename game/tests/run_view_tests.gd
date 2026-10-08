@@ -566,6 +566,7 @@ func test_flat_and_line() -> void:
 	check(actions._target_cell() == Vector3i(26, 26, s.flat_plane), "远端二维目标选取准确")
 	for segment in segments.values():
 		check(segment[0].z == s.flat_plane and segment[1].z == s.flat_plane, "二维每条线段位于同一平面")
+	_check_flat_helpers(s, "二维", 48, func(p: Vector3, at: Vector3) -> bool: return absf(p.z - at.z) < 1e-4)
 	await capture("two-dimensional")
 
 	panel._build_tiles["reduce"].pressed.emit()
@@ -590,6 +591,8 @@ func test_flat_and_line() -> void:
 			captured = true
 	await settled_frame()
 	check(s.all_linear(), "整张星图压成直线")
+	_check_flat_helpers(s, "一维", 3, func(p: Vector3, at: Vector3) -> bool:
+		return absf(p.z - at.z) < 1e-4 and absf(p.y - at.y) <= 0.6 + 1e-4)
 	actions._action_tiles[actions.Action.SINGULARITY].pressed.emit()
 	check(not actions._go.disabled, "一维里可以发射奇异点")
 	actions._go.pressed.emit()
@@ -615,6 +618,29 @@ func test_flat_and_line() -> void:
 	map.redraw_grid()
 	check(not map.animating() and map._zero_dot.visible and not map._grid.visible, "换局面时直接画成零维，不放动画")
 	await capture("zero-dimensional")
+
+
+## 二维、一维里自己发出的广播和视野不伸出平面或直线：广播画成 rings 根粗线，每根的两头都满足
+## in_space(端点, 广播者画在哪)；视野不再画成球。
+func _check_flat_helpers(s: GameState, label: String, rings: int, in_space: Callable) -> void:
+	var me := s.human()
+	var from := Vector3(me.home)
+	s.broadcasts.append({"from": from, "target": me.home, "sender": me, "exposed": false, "radius": 3.0,
+			"heard": {}, "hidden_heard": {}})
+	view.overlay.show_vision.button_pressed = true
+	view.refresh()
+	var at: Vector3 = map._warp_point(from)
+	var parts: Array = map._tube_parts.filter(func(p): return p[2] == Color(map.COLOR_BROADCAST, 0.45))
+	check_eq(parts.size(), rings, "%s的广播画 %d 根粗线" % [label, rings])
+	for p in parts:
+		check(in_space.call(p[0], at) and in_space.call(p[1], at), "%s的广播圆圈不伸出%s（%s → %s）" % [label, label, p[0], p[1]])
+	var balls := 0
+	for node in map._markers.get_children():
+		if node is MeshInstance3D and node.mesh is SphereMesh:
+			balls += 1
+	check(balls == 0, "%s的视野不画成球" % label)
+	s.broadcasts.pop_back()
+	view.refresh()
 
 
 ## 胜负分出以后不再按按钮，画面每帧自己把还没压完的空间压完。
