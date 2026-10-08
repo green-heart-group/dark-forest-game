@@ -98,6 +98,8 @@ func run_tests() -> void:
 	await run(test_ui_helpers)
 	await capture("start")
 	await run(test_research)
+	await run(test_tech_tree)
+	await run(test_map_clarity)
 	await run(test_build_and_dispatch)
 	await run(test_colony)
 	await run(test_hover_intel)
@@ -200,7 +202,8 @@ func test_game_shortcuts_and_compact_layout() -> void:
 	key.alt_pressed = true
 	key.keycode = KEY_1
 	view._on_key(key, root)
-	check_eq(panel._tabs.current_tab, 0, "Alt+1 选择科技页")
+	check(view.tech_tree.visible, "Alt+1 打开全屏科技树")
+	view.tech_tree.close_tree()
 	key.keycode = KEY_RIGHT
 	view._on_key(key, root)
 	check_eq(panel._tabs.current_tab, 2, "选择行动快捷键打开行动页")
@@ -240,6 +243,7 @@ func test_game_shortcuts_and_compact_layout() -> void:
 	await process_frame
 	view.update_layout()
 	check(view.compact and not panel.visible, "竖屏自动收起面板")
+	check(map._aim.is_empty(), "竖屏自动收起面板时也清除隐藏行动的预览")
 	await capture("portrait_map")
 	view.show_panel(2)
 	await process_frame
@@ -301,11 +305,15 @@ func test_panel_layout() -> void:
 	show_state(GameState.new_game(1))
 	check(not view.state.human().discovered, "种子 1 开局还没发现别人（不成立就换一个种子）")
 	check(panel._tabs.get_tab_count() == 4, "面板有科技、建造、行动、情况四页")
-	check(panel._tech_tiles.size() == Tech.ALL.size(), "每项科技一个按钮")
+	check(view.tech_tree.tiles.size() == Tech.ALL.size(), "每项科技一个按钮")
 	check(panel._build_tiles.size() == panel.BUILD_ORDER.size() + 1, "每种建造一个按钮，外加自身降维")
 	check(overlay._status.text.contains("第 1 回合"), "状态栏显示回合")
 	var me: Civ = view.state.human()
-	check(panel._tech_tiles["probe"].disabled and panel._tech_tiles["dyson"].disabled, "已有的和没开放的科技不能点")
+	view.tech_tree.select_tech("probe")
+	check(view.tech_tree._research.disabled, "已有科技不能重复研究")
+	view.tech_tree.select_tech("dyson")
+	check(view.tech_tree._research.disabled, "没开放的科技不能研究")
+	check(not overlay._legend.visible and not overlay.show_vision.button_pressed, "开局收起图例和全体视野")
 	check(panel._tier_labels[1].text.contains("未开放"), "I 级开局未开放")
 	check(not panel._build_tiles["probe"].disabled, "开局可以造探测器")
 	check(panel._build_tiles["warship"].disabled, "没有战舰科技不能造战舰")
@@ -323,7 +331,7 @@ func test_panel_width() -> void:
 				"第 %d 页不把面板撑宽（最小 %.0f，面板 %.0f）" % [tab, panel.get_combined_minimum_size().x, width])
 	panel._tabs.current_tab = shown
 	# 方块按钮的高度跟着里面的字走，字不超出边框
-	var tiles: Array = actions._action_tiles.values() + panel._tech_tiles.values() + panel._upgrade_tiles.values() \
+	var tiles: Array = actions._action_tiles.values() + panel._upgrade_tiles.values() \
 			+ panel._build_tiles.values()
 	var fits := true
 	for tile: Button in tiles:
@@ -363,16 +371,27 @@ func test_research() -> void:
 	var s := fixture()
 	var me := s.human()
 	show_state(s)
-	panel._tech_tiles["warship"].pressed.emit()
+	view.tech_tree.select_tech("warship")
+	view.tech_tree._research.pressed.emit()
 	check(not me.has_tech("warship"), "I 级没开放时按钮不起作用")
 	me.tier1_turn = s.turn
 	view.refresh()
-	check(not panel._tech_tiles["warship"].disabled, "发现别人后可以升 I 级")
+	check(not view.tech_tree._research.disabled, "发现别人后可以升 I 级")
 	var energy := me.energy
-	panel._tech_tiles["warship"].pressed.emit()
+	var ap := me.actions_left
+	view.tech_tree.select_tech("warship")
+	view.tech_tree._research.pressed.emit()
 	check(me.has_tech("warship") and me.energy == energy - Tech.cost("warship")[0], "按钮升级科技并扣资源")
-	check(panel._tech_tiles["warship"].disabled and (panel._tech_tiles["warship"].get_meta("cost") as Label).text == "已有",
+	check(view.tech_tree._research.disabled and view.tech_tree.tiles["warship"].text.contains("已有"),
 			"升级后显示已有")
+	check_eq(me.actions_left, ap, "科技树研究不花行动点")
+	view.tech_tree.select_tech("beam")
+	check(not view.tech_tree._research.disabled, "研究战舰后同级武器解除前置锁定")
+	me.is_ai = true
+	view.refresh()
+	check(view.tech_tree._research.disabled, "AI 视角不能从科技树研究")
+	me.is_ai = false
+	view.refresh()
 	var actions := me.actions_left
 	panel._upgrade_tiles["telescope"].pressed.emit()
 	check(me.telescope == 1 and me.actions_left == actions, "升级射电望远镜不花行动点")
@@ -500,7 +519,7 @@ func test_selection() -> void:
 				return o
 		return {}
 	var home: Dictionary = find.call("c%s" % c)
-	check(not home.is_empty() and is_equal_approx(home["r"], 0.45 * 1.4), "母星系点得中，大小和画出来的光晕一样")
+	check(not home.is_empty() and is_equal_approx(home["r"], 0.35 * 1.4), "母星系点得中，大小和画出来的方块轮廓一样")
 	var hidden_system: Vector3i = map.NO_CELL
 	for sc in s.system_cells:
 		if s.map.star_at(sc) != StarMap.Star.NONE and not me.intel.has(sc) and not me.owns(sc) and not me.known.has(sc):
@@ -569,6 +588,9 @@ func test_ship_paths() -> void:
 	var probe: Ship = me.ships[-1]
 	s.dispatch(me, probe.id, Vector3(1, 0, 0))
 	view.refresh()
+	for obj in map._pickables():
+		if obj["key"] == "s%d" % probe.id:
+			map.select_object(obj)
 	var points: Array[Vector3] = s.predict_path(me, probe, map.PATH_TURNS)
 	check(points.size() == map.PATH_TURNS + 1 and points[1].x > points[0].x, "预测接下来几个回合的位置")
 	var tubes: int = map._tube_parts.size()
@@ -1159,3 +1181,121 @@ func test_debug_after_death() -> void:
 	view.debug.set_view(1)
 	check(view.viewed() == view.state.civs[1], "可以换成活着的 AI 的视角接着看")
 	view.debug.set_view(0)
+
+
+## 规则：V1
+## 全屏依赖树：实际前置始终从左到右，查看锁定节点不扣资源，模态界面不触发星图快捷键。
+func test_tech_tree() -> void:
+	var s := fixture()
+	show_state(s)
+	var tree = view.tech_tree
+	tree.open_tree()
+	await process_frame
+	check(tree.visible and tree.size.is_equal_approx(root.get_visible_rect().size), "科技树覆盖整个逻辑画布")
+	var count := 0
+	for id in Tech.ALL:
+		for need in Tech.ALL[id]["needs"]:
+			count += 1
+			check(tree.edges.has([need, id]), "真实前置都有连线：" + id)
+			check(tree.tiles[need].position.x + tree.tiles[need].size.x < tree.tiles[id].position.x, "前置始终在目标左边：" + id)
+	check_eq(tree.edges.size(), count, "没有凭空添加前置连线")
+	tree.tiles["domain"].pressed.emit()
+	check(tree._research.disabled and tree._details.text.contains("曲率引擎"), "锁定节点可查看前置和研究条件")
+	var before := s.checksum()
+	tree._research.pressed.emit()
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.shift_pressed = true
+	key.keycode = KEY_ENTER
+	view._on_key(key, root)
+	check_eq(s.checksum(), before, "锁定研究和结束回合快捷键不会修改局面")
+	key.physical_keycode = KEY_G
+	var grid: int = map.grid_mode
+	check(not map._camera_key(key) and map.grid_mode == grid, "全屏科技树阻止地图快捷键")
+	s.human().tier1_turn = s.turn
+	s.human().energy = 0
+	tree.select_tech("warship")
+	check(tree._research.disabled and tree._details.text.contains(s.research_error(s.human(), "warship")), "资源不足说明来自规则")
+	view.window_settings.apply_ui_scale(1.0)
+	root.size = Vector2i(1280, 800)
+	await process_frame
+	tree.select_tech("warship")
+	s.human().energy = 1000
+	view.refresh()
+	await capture("tech-tree")
+	root.size = Vector2i(600, 900)
+	await process_frame
+	await process_frame
+	check(tree.size.x <= root.get_visible_rect().size.x + 1, "窄屏科技树在屏幕内，图可滚动")
+	tree._scroll.ensure_control_visible(tree.tiles["domain"])
+	await capture("tech-tree-portrait")
+	key.shift_pressed = false
+	key.keycode = KEY_ESCAPE
+	view._on_key(key, root)
+	check(not tree.visible, "Esc 返回星图")
+	root.size = Vector2i(1280, 800)
+	await process_frame
+	await process_frame
+	view.show_panel(2)
+
+
+## 规则：V2，V3
+## 密集局面：停泊聚合、航线按需、广播有上限，同时保留全部可见舰船和敌情。
+func test_map_clarity() -> void:
+	var s := fixture()
+	var me := s.human()
+	s.turn = 25
+	for i in 36:
+		var ship := Ship.make(Ship.PROBE if i % 2 == 0 else Ship.WARSHIP, Vector3.ZERO, i + 1)
+		if i >= 12:
+			ship.pos = Vector3(1 + i % 6, 1 + (i / 6) % 4, 2 + i % 3)
+			ship.docked = false
+			ship.direction = Vector3.RIGHT
+		me.ships.append(ship)
+	me.dysons[me.home] = 3
+	me.miners[me.home] = 4
+	me.broadcasters[me.home] = true
+	for i in 8:
+		s.broadcasts.append({"from": Vector3(me.home), "target": Vector3i(8, 8, 8), "sender": me, "radius": 1.0 + i * 0.5})
+	me.sightings.append({"pos": Vector3(5, 4, 4), "kind": Ship.WARSHIP, "turn": s.turn})
+	me.alerts.append({"pos": Vector3(2, 2, 2)})
+	me.known[Vector3i(8, 8, 8)] = s.turn
+	me.intel[Vector3i(8, 8, 8)] = s.snapshot(Vector3i(8, 8, 8))
+	show_state(s)
+	view.show_panel(3)
+	overlay.show_details.button_pressed = false
+	overlay.show_vision.button_pressed = false
+	view.refresh()
+	map.reset_view(true)
+	var overview: int = map._tube_parts.size()
+	var keys: Array = map._pickables().map(func(obj): return obj["key"])
+	check_eq(map._wave_nodes.size(), 3, "八条传播只显示最近三条，每条一个圈")
+	for i in map._wave_nodes.size():
+		check(is_equal_approx((map._wave_nodes[i].mesh as TorusMesh).outer_radius, 3.51 + i * 0.5), "显示的是最新广播的半径")
+	s.broadcasts.append({"from": Vector3(8, 8, 8), "target": Vector3i.ZERO, "sender": s.civs[1], "radius": 2.0})
+	view.refresh()
+	check_eq(map.active_broadcasts(me).size(), 8, "概览不会泄露未听到的敌方广播")
+	check_eq(map._wave_nodes.size(), 3, "敌方广播不会挤掉己方波前")
+	check(overlay._broadcast_summary.text.contains("8 条"), "摘要说明实际传播条数")
+	check_eq(keys.filter(func(key): return key.begins_with("s")).size(), 24, "所有飞行单位仍可见可选")
+	check(keys.any(func(key): return key.begins_with("a")), "简洁模式保留预警")
+	check(map._cell_info(me.home).contains("×6") and map._cell_info(me.home).contains("戴森球"), "聚合舰队及设施仍有具体信息")
+	var dock_labels := 0
+	for child in map._markers.get_children():
+		if child is Label3D and child.text == "停泊 12":
+			dock_labels += 1
+	check_eq(dock_labels, 1, "十二艘停泊舰船合并成一个数量标记")
+	await capture("midgame-overview")
+	overlay.show_details.button_pressed = true
+	check(map._tube_parts.size() > overview + 24, "详细模式展开全体航线")
+	check_eq(map._pickables().map(func(obj): return obj["key"]), keys, "显示密度不改变可见情报和点选对象")
+	await capture("midgame-detail")
+	overlay.show_details.button_pressed = false
+	for obj in map._pickables():
+		if obj["key"] == "s13":
+			map.select_object(obj)
+	check(map._tube_parts.size() > overview, "点击单位立即显示其航线")
+	check(map._tube_parts.size() < overview + 24, "选中单位不会展开整支舰队的航线")
+	map.select_object({})
+	check_eq(map._tube_parts.size(), overview, "取消选择立即收起航线")
+	view.show_panel(2)

@@ -11,9 +11,9 @@ const WindowSettings := preload("res://view/window_settings.gd")
 signal cell_clicked(c: Vector3i)
 
 const STAR_COLORS := {
-	StarMap.Star.SINGLE: Color(1.0, 0.9, 0.5, 0.2),
-	StarMap.Star.DOUBLE: Color(1.0, 0.6, 0.2, 0.2),
-	StarMap.Star.TRIPLE: Color(1.0, 0.3, 0.3, 0.2),
+	StarMap.Star.SINGLE: Color(0.72, 0.77, 0.85, 0.35),
+	StarMap.Star.DOUBLE: Color(0.72, 0.77, 0.85, 0.35),
+	StarMap.Star.TRIPLE: Color(0.72, 0.77, 0.85, 0.35),
 }
 const COLOR_MINE := Color(0.3, 0.6, 1.0)
 const COLOR_KNOWN := Color(1.0, 0.15, 0.15)
@@ -32,7 +32,7 @@ const COLOR_FLAT := Color(0.8, 0.75, 1.0, 0.35)
 const COLOR_DYSON := Color(1.0, 0.8, 0.2)
 const COLOR_MINER := Color(0.75, 0.55, 0.35)
 const COLOR_STARSHIP := Color(0.3, 0.9, 1.0)
-const COLOR_DOMAIN := Color(0.25, 0.15, 0.45, 0.55)
+const COLOR_DOMAIN := Color(0.25, 0.22, 0.38, 0.16)
 const COLOR_DOMAIN_EDGE := Color(0.55, 0.45, 0.9)
 const COLOR_BROADCAST := Color(1.0, 0.5, 0.8)
 const COLOR_BUNKER := Color(0.6, 0.65, 0.75)
@@ -105,10 +105,16 @@ const COLOR_GRID_LINE_VISION := Color(0.6, 0.8, 1.0, 0.07)
 const COLOR_DOT := Color(1, 1, 1, 0.22)
 const COLOR_DOT_VISION := Color(0.7, 0.85, 1.0, 0.6)
 
+## 波前数量只限制显示，不限制传播。
+const BROADCAST_LIMIT := 3
 ## 航迹（F4.3）：在飞的单位往后预测几个回合、身后留几个回合的轨迹、线有多粗
 const PATH_TURNS := 4
 const TRAIL_TURNS := 6
 const PATH_WIDTH := 0.03
+
+## 概览保留全部可见单位与敌情，航线和设施按选择展开。
+var detailed := false
+var _wave_nodes: Array[MeshInstance3D] = []
 
 var main: Node
 var state: GameState:
@@ -233,6 +239,8 @@ func _update_camera() -> void:
 	_pivot.rotation_degrees = Vector3(_pitch, _yaw, 0)
 	_camera.position = Vector3(0, 0, _distance)
 	_camera.h_offset = main.panel_width() / 2.0 * _world_per_px()
+	for wave in _wave_nodes:
+		_orient(wave, _world.global_basis.inverse() * _camera.global_basis.z)
 
 
 ## 视角中心那里，画面上 1 像素相当于星图里多长。
@@ -342,6 +350,8 @@ func _process(delta: float) -> void:
 
 ## 按住不放的视角键（WASD、Q/E、R/F、Z/X）。在输入框里打字、按着 Ctrl 或 Alt、焦点在别的窗口时不管。
 func _poll_camera_keys(delta: float) -> void:
+	if main.tech_tree.visible:
+		return
 	if not get_window().has_focus() or get_viewport().gui_get_focus_owner() is LineEdit \
 			or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META):
 		return
@@ -363,6 +373,8 @@ func _poll_camera_keys(delta: float) -> void:
 
 ## 一次性的视角键：H 回到母星、V 重置、T 俯视、G 切换网格。在输入框里打字时不管。
 func _camera_key(key: InputEventKey) -> bool:
+	if main.tech_tree.visible:
+		return false
 	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed or get_viewport().gui_get_focus_owner() is LineEdit:
 		return false
 	match key.physical_keycode:
@@ -398,6 +410,8 @@ func _over_ui() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if main.tech_tree.visible:
+		return
 	if event is InputEventKey:
 		var key := event as InputEventKey
 		if key.pressed and not key.echo and _camera_key(key):
@@ -511,16 +525,16 @@ func _pickables() -> Array[Dictionary]:
 			return
 		seen[key] = true
 		list.append({"key": key, "pos": pos, "r": r, "cell": cell, "text": text})
-	# 星系外面的半透明光晕半径 0.45（母星系放大 1.4 倍）
+	# 星系方块的外接轮廓半径约 0.35（母星系放大 1.4 倍）
 	for c in me.colonies:
-		add.call("c%s" % c, Vector3(c), 0.45 * (1.4 if c == me.home else 1.0))
+		add.call("c%s" % c, Vector3(c), 0.35 * (1.4 if c == me.home else 1.0))
 	for c in me.known:
-		add.call("c%s" % c, Vector3(c), 0.45)
+		add.call("c%s" % c, Vector3(c), 0.35)
 	if _reveal:
 		for civ in state.civs:
 			if civ != me and civ.alive:
 				for c in civ.colonies:
-					add.call("c%s" % c, Vector3(c), 0.45)
+					add.call("c%s" % c, Vector3(c), 0.35)
 	# 看到过的星系：半径 0.1 的小球，选殖民目的地时宜居的放大 1.6 倍
 	var big := {}
 	if _picking_colony():
@@ -540,13 +554,13 @@ func _pickables() -> Array[Dictionary]:
 		if s.kind == Ship.STARSHIP:
 			add.call("s%d" % s.id, s.pos, 0.28, "你的星舰")
 		elif not s.docked:
-			add.call("s%d" % s.id, s.position(), 0.22 if s.kind == Ship.GRAIN else 0.32, "你的" + s.label())
+			add.call("s%d" % s.id, s.position(), 0.18 if s.kind == Ship.GRAIN else 0.24, "你的" + s.label())
 	if _reveal:
 		for civ in state.civs:
 			if civ != me and civ.alive:
 				for s in civ.ships:
 					if not s.dead and not s.docked:
-						add.call("s%d" % s.id, s.position(), 0.32, "%s的%s" % [civ.name, s.label()])
+						add.call("s%d" % s.id, s.position(), 0.24, "%s的%s" % [civ.name, s.label()])
 	# 看到的别人的舰船、预警报告的东西
 	for sight in me.sightings:
 		add.call("v%s%d" % [sight["pos"], sight["turn"]], sight["pos"], 0.18, "第 %d 回合看到的舰船" % sight["turn"])
@@ -602,13 +616,16 @@ func _build_selection() -> void:
 
 
 ## 选中 obj（_pickables 里的一项；空的字典：取消选中）。
-func select_object(obj: Dictionary) -> void:
+func select_object(obj: Dictionary, redraw := true) -> void:
 	selected = obj
 	_selection.visible = not obj.is_empty()
 	_cursor_label.visible = _hover_key() != _selected_key()  # 同一个东西不写两遍
 	if _selection_ring != null:
 		_selection_ring.queue_free()
 		_selection_ring = null
+	if redraw:
+		main.refresh()
+		return
 	if obj.is_empty():
 		return
 	var r: float = obj["r"]
@@ -626,9 +643,9 @@ func _reselect() -> void:
 		return
 	for o in _pickables():
 		if o["key"] == selected["key"]:
-			select_object(o)
+			select_object(o, false)
 			return
-	select_object({})
+	select_object({}, false)
 
 
 func _selected_key() -> String:
@@ -698,6 +715,27 @@ func _cell_info(c: Vector3i) -> String:
 	if ss != null and ss.cell() == c:
 		head += "　你的星舰"
 	var lines: Array[String] = [head]
+	if me.owns(c):
+		var counts := {}
+		for ship in me.ships:
+			if not ship.dead and ship.docked and ship.cell() == c:
+				var kind: String = "星际探测器" if ship.kind == Ship.PROBE and ship.interstellar else Ship.NAMES[ship.kind]
+				counts[kind] = counts.get(kind, 0) + 1
+		var units: Array[String] = []
+		for kind in counts:
+			units.append("%s ×%d" % [kind, counts[kind]])
+		if not units.is_empty():
+			lines.append("停泊：" + "、".join(units))
+		var facilities: Array[String] = []
+		for spec in [["戴森球", me.dysons], ["采矿船", me.miners], ["光粒", me.grains]]:
+			if spec[1].get(c, 0) > 0:
+				facilities.append("%s ×%d" % [spec[0], spec[1][c]])
+		if me.broadcasters.has(c):
+			facilities.append("恒星广播器")
+		if me.bunkers.has(c):
+			facilities.append("掩体")
+		if not facilities.is_empty():
+			lines.append("设施：" + "、".join(facilities))
 	if state.in_black_domain(c):
 		lines.append("在黑域里：光速 %.2f" % state.light_at(c))
 	if me.intel.has(c) and not me.owns(c):
@@ -751,7 +789,7 @@ func redraw_grid() -> void:
 	_zero_t = 1.0
 	_apply_zero()
 	_trails.clear()
-	select_object({})
+	select_object({}, false)
 	_rebuild_warped()
 	# 换到一个一维的局面（比如回放跳过去）时对准自己的据点一次；之后由玩家自己移
 	if state.dimension != 1:
@@ -1027,6 +1065,7 @@ func _draw_axes() -> void:
 ## 重画星图上会变的标记。me：正在看的文明；aim：行动页的瞄准（见 ActionPage.preview()）；
 ## show_vision：画自己的视野；reveal：上帝视角，画出所有星系和别人的舰船。
 func refresh(me: Civ, aim: Dictionary, show_vision: bool, reveal: bool) -> void:
+	_wave_nodes.clear()
 	for child in _markers.get_children():
 		_markers.remove_child(child)
 		child.queue_free()
@@ -1180,8 +1219,8 @@ func _draw_own(me: Civ) -> void:
 	for s in me.ships:
 		if s.dead:
 			continue
-		if not s.docked:
-			_draw_path(s, SHIP_COLORS[s.kind])
+		if not s.docked and (detailed or _selected_key() == "s%d" % s.id or _aim.get("unit") == s):
+			_draw_path(s, COLOR_MINE)
 		if s.kind == Ship.STARSHIP:
 			var gem := SphereMesh.new()
 			gem.radius = 0.28
@@ -1194,29 +1233,21 @@ func _draw_own(me: Civ) -> void:
 			ship_node.position = _warp_point(s.pos)
 			_markers.add_child(ship_node)
 		elif not s.docked:
-			_draw_ship(s, SHIP_COLORS[s.kind])
+			_draw_ship(s, SHIP_COLORS[s.kind] if detailed else COLOR_MINE)
 
-	# 停在星系里的单位：星系旁边一排小方块，颜色是单位的种类
-	var docked_points: Array[Vector3] = []
-	var docked_colors: Array[Color] = []
+	# 停泊单位按星系聚合，不再一艘一个彩色方块；种类和数量在悬停说明里。
 	var per_cell := {}
 	for s in me.ships:
-		if s.dead or not s.docked or s.kind == Ship.STARSHIP:
-			continue
-		var c := s.cell()
-		var k: int = per_cell.get(c, 0)
-		per_cell[c] = k + 1
-		docked_points.append(Vector3(c) + Vector3(-0.4 + 0.16 * k, -0.42, 0.3))
-		docked_colors.append(SHIP_COLORS[s.kind])
-	var small := BoxMesh.new()
-	small.size = Vector3.ONE * 0.12
-	_markers.add_child(_instances_at(small, docked_points, docked_colors, _fill_f(docked_points.size(), 1.0)))
+		if not s.dead and s.docked and s.kind != Ship.STARSHIP:
+			per_cell[s.cell()] = per_cell.get(s.cell(), 0) + 1
+	for c in per_cell:
+		_markers.add_child(_label3d("停泊 %d" % per_cell[c], _warp_point(Vector3(c)) + Vector3(0, 0, -0.48), Color(COLOR_MINE, 0.8), 30))
 
 	# 戴森球：星系外面套金色圆环，个数越多环越大
 	var dyson_cells: Array[Vector3i] = []
 	var dyson_sizes: Array[float] = []
 	for c in me.dysons:
-		if me.dysons[c] > 0:
+		if me.dysons[c] > 0 and _detail_at(c):
 			dyson_cells.append(c)
 			dyson_sizes.append(0.85 + 0.15 * me.dysons[c])
 	var dyson_ring := TorusMesh.new()
@@ -1229,7 +1260,7 @@ func _draw_own(me: Civ) -> void:
 			[me.grains.keys(), SHIP_COLORS[Ship.GRAIN], Vector3(-0.42, 0.42, 0.0)],
 			[me.broadcasters.keys(), COLOR_BROADCAST, Vector3(0.42, -0.42, 0.0)]]:
 		var cells: Array[Vector3i] = []
-		cells.assign(spec[0])
+		cells.assign(spec[0].filter(_detail_at))
 		var mark := BoxMesh.new()
 		mark.size = Vector3.ONE * 0.16
 		var node := _instances(mark, cells, _fill(cells.size(), spec[1]), _fill_f(cells.size(), 1.0))
@@ -1238,7 +1269,7 @@ func _draw_own(me: Civ) -> void:
 
 	# 掩体：星系下方一块灰色方片
 	var bunker_cells: Array[Vector3i] = []
-	bunker_cells.assign(me.bunkers.keys())
+	bunker_cells.assign(me.bunkers.keys().filter(_detail_at))
 	var disc := BoxMesh.new()
 	disc.size = Vector3(0.6, 0.6, 0.04)
 	var bunker_node := _instances(disc, bunker_cells, _fill(bunker_cells.size(), COLOR_BUNKER), _fill_f(bunker_cells.size(), 1.0))
@@ -1254,18 +1285,33 @@ func _draw_own(me: Civ) -> void:
 		node.material_override = _flat_material(COLOR_FOIL)
 		node.position = _warp_point(foil.position())
 		_markers.add_child(node)
-		_markers.add_child(_segment(foil.position(), Vector3(foil.target), Color(COLOR_FOIL, 0.4)))
+		if detailed or selected_cell() == foil.target:
+			_markers.add_child(_segment(foil.position(), Vector3(foil.target), Color(COLOR_FOIL, 0.4)))
 
 	for d in me.pending_domains:
 		_markers.add_child(_domain_box(d["center"], Color(COLOR_DOMAIN_EDGE, 0.15)))
 
-	# 自己发出的广播：以广播者为中心、正在扩大的球，只画三个互相垂直的圆圈（实心球会把整张星图染成粉色，F5.1）；
-	# 传出星图以后不再画圆圈。被广播的坐标画方框
+	# 最近几条波前只画单环。所有己方广播目标仍显示，并按坐标去重。
+	var active := active_broadcasts(me)
+	for b in active.slice(-BROADCAST_LIMIT):
+		_wave_rings(b["from"], b["radius"], Color(COLOR_BROADCAST, 0.45))
+	var targets := {}
 	for b in state.broadcasts:
-		if b["sender"] == me:
-			if b["radius"] < _farthest_corner(b["from"]):
-				_wave_rings(b["from"], b["radius"], Color(COLOR_BROADCAST, 0.45))
-			_markers.add_child(_broadcast_mark(b["target"], 0.8))
+		if b["sender"] == me and not targets.has(b["target"]):
+			targets[b["target"]] = true
+			_markers.add_child(_broadcast_mark(b["target"], 0.55))
+
+
+func active_broadcasts(me: Civ) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for b in state.broadcasts:
+		if b["sender"] == me and b["radius"] < _farthest_corner(b["from"]):
+			result.append(b)
+	return result
+
+
+func _detail_at(c: Vector3i) -> bool:
+	return detailed or selected_cell() == c
 
 
 ## 知道的别人的事：星系（传回来的情报）、看到的舰船和航迹、预警、打击方向、听到的广播。
@@ -1376,14 +1422,6 @@ func _draw_intel(me: Civ) -> void:
 	var marker := BoxMesh.new()
 	marker.size = Vector3.ONE * 0.5
 	_markers.add_child(_instances(marker, cells, box_colors, box_sizes))
-	# 外面套一层半透明的光晕，远远也看得出是谁的
-	var halo := SphereMesh.new()
-	halo.radius = 0.45
-	halo.height = 0.9
-	var halo_colors: Array[Color] = []
-	for col in box_colors:
-		halo_colors.append(Color(col, col.a * 0.22))
-	_markers.add_child(_instances(halo, cells, halo_colors, box_sizes))
 	# 文字标签：自己的母星系、已知的敌方星系
 	if me.alive and not me.colonies.is_empty():
 		var home_name := "你的母星" if me == state.human() and not state.spectator else me.name + " 的母星"
@@ -1395,6 +1433,8 @@ func _draw_intel(me: Civ) -> void:
 				_markers.add_child(_label3d(civ.name, _warp_point(Vector3(civ.home)) + Vector3(0, 0, 0.6),
 						COLOR_HIDDEN_AI, 36))
 	for c in me.known:
+		if not _detail_at(c):
+			continue
 		var info: Dictionary = me.intel.get(c, {})
 		var owner: int = info.get("owner", -1)
 		var name := state.civs[owner].name if owner >= 0 else "敌人"
@@ -1406,7 +1446,7 @@ func _colony_targets(me: Civ) -> Array[Vector3i]:
 	return state.known_habitable(me)
 
 
-## 画成小球（颜色表示几颗恒星）外加绿圈。
+## 宜居候选画成小球外加绿圈。
 func _colony_candidates(me: Civ) -> Node3D:
 	var cells := _colony_targets(me)
 	var group := Node3D.new()
@@ -1420,30 +1460,7 @@ func _colony_candidates(me: Civ) -> Node3D:
 
 ## 图例：星图上每种标记的颜色和意思。
 static func legend_text() -> String:
-	var hex := func(c: Color) -> String: return c.to_html(false)
-	var lines: Array[String] = []
-	lines.append("[color=#%s]■[/color] 你的星系（大的是母星）　[color=#%s]■[/color] 已知的敌方星系（越旧越淡）" % [
-		hex.call(COLOR_MINE), hex.call(COLOR_KNOWN)])
-	lines.append("[color=#%s]●[/color] 单星　[color=#%s]●[/color] 双星　[color=#%s]●[/color] 三星：看到过的星系（鼠标停上去看情报）" % [
-		hex.call(STAR_COLORS[StarMap.Star.SINGLE]), hex.call(STAR_COLORS[StarMap.Star.DOUBLE]),
-		hex.call(STAR_COLORS[StarMap.Star.TRIPLE])])
-	lines.append("你的单位：[color=#%s]▲[/color] 探测器　[color=#%s]▲[/color] 战舰　[color=#%s]▲[/color] 殖民船　[color=#%s]▲[/color] 吞噬者　[color=#%s]▲[/color] 光粒　[color=#%s]▲[/color] 智子　[color=#%s]◆[/color] 星舰" % [
-		hex.call(SHIP_COLORS[Ship.PROBE]), hex.call(SHIP_COLORS[Ship.WARSHIP]), hex.call(SHIP_COLORS[Ship.COLONY]),
-		hex.call(SHIP_COLORS[Ship.DEVOURER]), hex.call(SHIP_COLORS[Ship.GRAIN]), hex.call(SHIP_COLORS[Ship.SOPHON]),
-		hex.call(COLOR_STARSHIP)])
-	lines.append("星系旁的小方块：停着的单位　[color=#%s]■[/color] 采矿船　[color=#%s]■[/color] 恒星广播器　[color=#%s]○[/color] 戴森球" % [
-		hex.call(COLOR_MINER), hex.call(COLOR_BROADCAST), hex.call(COLOR_DYSON)])
-	lines.append("[color=#%s]◆[/color] 看到的别人的舰船　[color=#%s]━[/color] 航迹　[color=#%s]◆[/color] 预警　[color=#%s]━[/color] 打击来的方向" % [
-		hex.call(COLOR_SIGHTING), hex.call(COLOR_WAKE), hex.call(COLOR_ALERT), hex.call(COLOR_HIT_DIR)])
-	lines.append("[color=#%s]○[/color] 打中过　[color=#%s]○[/color] 打击经过的空格子　[color=#%s]■[/color] 广播的坐标" % [
-		hex.call(COLOR_RECORD_HIT), hex.call(COLOR_RECORD_EMPTY), hex.call(COLOR_BROADCAST)])
-	lines.append("[color=#%s]▬[/color] 你的降维箔　[color=#%s]▬[/color] 被压缩的区域　[color=#%s]■[/color] 黑域（光速变慢，越暗越慢；带边框的是光速为 0 的中心）" % [
-		hex.call(COLOR_FOIL), hex.call(COLOR_FLAT), hex.call(COLOR_DOMAIN_EDGE)])
-	lines.append("坐标轴：[color=#%s]x[/color]　[color=#%s]y[/color]　[color=#%s]z（向上）[/color]，右手系，每格一个整数" % [
-		hex.call(AXIS_COLORS[0]), hex.call(AXIS_COLORS[1]), hex.call(AXIS_COLORS[2])])
-	lines.append("[color=#%s]━[/color] 航线：实线是下一回合，点是每回合的落点，虚线通到目的地，淡线是走过的路" % hex.call(SHIP_COLORS[Ship.PROBE]))
-	lines.append("[color=#%s]○[/color] 单击选中的东西（黄圈）；单击空处可以瞄准那一格；点不准时在面板里输入坐标" % hex.call(COLOR_SELECTED))
-	return "\n".join(lines)
+	return "[color=#4d99ff]■ / ▲[/color] 己方星系 / 飞行单位；停泊舰队按数量合并。\n" + 			"[color=#ff5959]■ / ◆[/color] 已知敌方星系 / 舰船；[color=#ff991a]◆[/color] 当前预警。旧情报越旧越淡。\n" + 			"[color=#b8c4d9]●[/color] 已探索星系；[color=#ff80cc]□ / ○[/color] 广播目标 / 最近三条传播波前。\n" + 			"[color=#fff259]○[/color] 当前选择；悬停看详情，选中看航线与设施；详细星图显示全部。\n" + 			"白片是降维箔，淡紫区域是降维或黑域；黑域中心有框。x / y / z 是坐标轴。"
 
 
 # ---------- 绘图小工具 ----------
@@ -1561,7 +1578,7 @@ func _farthest_corner(p: Vector3) -> float:
 
 
 
-## 正在扩大的球面，按现在的维度画：三维是三个互相垂直的圆圈，二维只画平面里那一个，
+## 广播波前：三维用朝向相机的单环示意半径，二维画平面里的一个圆，
 ## 一维是直线上的一段（两头各一道短竖线）。圆圈围着中心画在画面上的位置，不再一小段一小段地跟着展开变形，
 ## 免得展开到一半时被拉得很长。
 func _wave_rings(center: Vector3, radius: float, color: Color) -> void:
@@ -1578,7 +1595,21 @@ func _wave_rings(center: Vector3, radius: float, color: Color) -> void:
 			var end := Vector3(x, center.y, center.z) + shift
 			_tube(end - Vector3(0, 0.6, 0), end + Vector3(0, 0.6, 0), color, 0.04, false)
 		return
-	for axis in ([2] if state.dimension == 2 else [0, 1, 2]):
+	if state.dimension == 3:
+		var ring := TorusMesh.new()
+		ring.inner_radius = maxf(0.001, radius - 0.01)
+		ring.outer_radius = maxf(0.02, radius + 0.01)
+		ring.rings = SEGMENTS
+		ring.ring_segments = 4
+		var wave := MeshInstance3D.new()
+		wave.mesh = ring
+		wave.material_override = _flat_material(color)
+		wave.position = at
+		_markers.add_child(wave)
+		_orient(wave, _world.global_basis.inverse() * _camera.global_basis.z)
+		_wave_nodes.append(wave)
+		return
+	for axis in [2]:
 		var u := Vector3.ZERO
 		var v := Vector3.ZERO
 		u[(axis + 1) % 3] = radius
@@ -1601,8 +1632,8 @@ func _orient(node: Node3D, facing: Vector3) -> void:
 func _draw_ship(ship: Ship, color: Color) -> void:
 	var cone := CylinderMesh.new()
 	cone.top_radius = 0.0
-	cone.bottom_radius = 0.25 if ship.kind != Ship.GRAIN else 0.14
-	cone.height = 0.6 if ship.kind != Ship.GRAIN else 0.4
+	cone.bottom_radius = 0.17 if ship.kind != Ship.GRAIN else 0.12
+	cone.height = 0.42 if ship.kind != Ship.GRAIN else 0.3
 	var node := MeshInstance3D.new()
 	node.mesh = cone
 	node.material_override = _flat_material(color)
@@ -1713,9 +1744,27 @@ func _tubes() -> MultiMeshInstance3D:
 	return node
 
 
-## 广播的坐标：一个粉色方块。
+## 广播坐标只画空心边框，避免遮住这里已有的星系。
 func _broadcast_mark(c: Vector3i, alpha: float) -> MeshInstance3D:
-	return _target_mark(c, Color(COLOR_BROADCAST, 0.35 * alpha))
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	for axis in 3:
+		for i in [-1, 1]:
+			for j in [-1, 1]:
+				var a := Vector3.ZERO
+				a[axis] = -0.38
+				a[(axis + 1) % 3] = 0.38 * i
+				a[(axis + 2) % 3] = 0.38 * j
+				var b := a
+				b[axis] = 0.38
+				mesh.surface_add_vertex(a)
+				mesh.surface_add_vertex(b)
+	mesh.surface_end()
+	var node := MeshInstance3D.new()
+	node.mesh = mesh
+	node.position = _warp_point(Vector3(c))
+	node.material_override = _flat_material(Color(COLOR_BROADCAST, alpha))
+	return node
 
 
 ## 目标格子：一个半透明的方块。

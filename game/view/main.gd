@@ -12,6 +12,7 @@ const WindowSettings := preload("res://view/window_settings.gd")
 const DebugPanel := preload("res://view/debug_panel.gd")
 const Tip := preload("res://view/tip.gd")
 const WebFiles := preload("res://view/web_files.gd")
+const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
@@ -23,6 +24,7 @@ var panel := SidePanel.new()
 var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
 var saves := SavedGames.new()
+var tech_tree := TechTree.new()
 var panel_toggle := Button.new()
 var compact := false
 var _layout_ready := false
@@ -79,6 +81,8 @@ func _ready() -> void:
 	panel_toggle.focus_mode = Control.FOCUS_NONE
 	panel_toggle.pressed.connect(toggle_panel)
 	_layer.add_child(panel_toggle)
+	tech_tree.setup(self)
+	_layer.add_child(tech_tree)
 	panel.offset_top = 46
 	add_child(window_settings)
 	window_settings.setup(self)
@@ -127,10 +131,14 @@ func blocked() -> bool:
 
 ## 规则状态变了以后调用：刷新面板，重画星图上的标记，刷新叠加层。
 func refresh() -> void:
+	if not _layout_ready:
+		return
 	var me := viewed()
 	panel.refresh(me)
-	map.refresh(me, panel.actions.preview(), overlay.show_vision.button_pressed, reveal.button_pressed)
+	var aim: Dictionary = panel.actions.preview() if panel.visible and panel._tabs.current_tab == 2 else {}
+	map.refresh(me, aim, overlay.show_vision.button_pressed, reveal.button_pressed)
 	overlay.refresh(me)
+	tech_tree.refresh(me)
 	if debug != null:
 		debug.refresh_panel()
 
@@ -214,6 +222,11 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	var key := event as InputEventKey
+	if tech_tree.visible and from == get_viewport():
+		if key.keycode == KEY_ESCAPE:
+			tech_tree.close_tree()
+			from.set_input_as_handled()
+		return
 	if saves.busy:
 		if key.keycode == KEY_ESCAPE:
 			saves.cancel()
@@ -264,6 +277,7 @@ func panel_width() -> float:
 func toggle_panel() -> void:
 	panel.visible = not panel.visible
 	update_layout()
+	refresh()
 
 
 func show_panel(tab := -1) -> void:
@@ -271,13 +285,15 @@ func show_panel(tab := -1) -> void:
 	if tab >= 0:
 		panel._tabs.current_tab = tab
 	update_layout()
+	refresh()
 
 
 func update_layout() -> void:
 	if not _layout_ready:
 		return
 	var narrow := get_viewport().get_visible_rect().size.x < 1000
-	if narrow != compact:
+	var changed := narrow != compact
+	if changed:
 		compact = narrow
 		panel.visible = not compact
 		if compact:
@@ -285,6 +301,8 @@ func update_layout() -> void:
 	panel_toggle.text = "收起面板" if panel.visible else "操作面板"
 	overlay.update_layout()
 	map._update_camera()
+	if changed:
+		refresh()
 
 
 func _game_key(key: InputEventKey) -> bool:
@@ -303,7 +321,10 @@ func _game_key(key: InputEventKey) -> bool:
 			_:
 				return false
 	elif key.alt_pressed and key.keycode in [KEY_1, KEY_2, KEY_3, KEY_4]:
-		show_panel(key.keycode - KEY_1)
+		if key.keycode == KEY_1:
+			tech_tree.open_tree()
+		else:
+			show_panel(key.keycode - KEY_1)
 	elif key.alt_pressed and key.keycode in [KEY_LEFT, KEY_RIGHT]:
 		show_panel(2)
 		panel.actions.cycle_action(-1 if key.keycode == KEY_LEFT else 1)

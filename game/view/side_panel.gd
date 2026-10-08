@@ -24,8 +24,6 @@ var _res_values: Dictionary[String, Label] = {}
 var _origin_pick := OptionButton.new()
 ## 科技、建造、行动、情况四页
 var _tabs := TabContainer.new()
-## 科技页：每项科技一个按钮，键是 Tech.ALL 里的名字
-var _tech_tiles: Dictionary[String, Button] = {}
 ## 射电望远镜和预警范围的升级按钮
 var _upgrade_tiles: Dictionary[String, Button] = {}
 ## 每一级科技现在开没开放
@@ -74,6 +72,7 @@ func setup(p_main: Node) -> void:
 		_tabs.add_child(Widgets.scroll_page(page[1]))
 		_tabs.set_tab_title(_tabs.get_tab_count() - 1, page[0])
 	_tabs.current_tab = 2
+	_tabs.tab_changed.connect(func(_tab): main.refresh())
 
 	_feedback.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_feedback.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
@@ -118,24 +117,19 @@ func _resource_bar() -> HBoxContainer:
 	return bar
 
 
-## 科技页：按等级排的科技按钮，下面是射电望远镜和预警范围的升级。
+## 科技页：打开完整依赖图、等级状态，以及射电望远镜和预警范围的升级。
 func _build_tech_page() -> VBoxContainer:
 	var box := Widgets.page_box()
-	box.add_child(Widgets.hint_label("只花资源，不花行动点，马上生效。悬停看说明。"))
+	var open := Button.new()
+	open.text = "打开全屏科技树 · Alt+1"
+	open.custom_minimum_size.y = 48
+	open.pressed.connect(func(): main.tech_tree.open_tree())
+	box.add_child(open)
 	for tier in Tech.TIER_NAMES.size():
 		var label := Widgets.title("")
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART  # 开放条件写得长，不折行会把右侧面板撑宽
 		_tier_labels.append(label)
 		box.add_child(label)
-		var grid := Widgets.tile_grid(3)
-		box.add_child(grid)
-		for id in Tech.ALL:
-			if Tech.tier(id) != tier:
-				continue
-			var tile := Widgets.tile(Tech.ALL[id]["code"], Tech.ALL[id]["name"], "")
-			tile.pressed.connect(_on_research.bind(id))
-			grid.add_child(tile)
-			_tech_tiles[id] = tile
 	box.add_child(Widgets.title("升级　不花行动点"))
 	var grid := Widgets.tile_grid(3)
 	box.add_child(grid)
@@ -244,16 +238,6 @@ func _refresh_tech_tiles(me: Civ) -> void:
 		_tier_labels[tier].tooltip_text = "条件要按顺序达到；II、III 级至少比上一级晚 %d 回合开放。" % Balance.TIER_GAP
 		_tier_labels[tier].add_theme_color_override("font_color",
 				Color(0.6, 0.8, 1.0) if open else Color(0.6, 0.6, 0.65))
-	for id in _tech_tiles:
-		var tile := _tech_tiles[id]
-		var has := me.has_tech(id)
-		var reason := "" if has else state.research_error(me, id)
-		tile.disabled = has or reason != ""
-		tile.modulate = Color(0.55, 1.0, 0.65) if has else Color(1, 1, 1, 1.0 if reason == "" else 0.5)
-		var cost := Tech.cost(id)
-		Widgets.set_tile_cost(tile, "已有" if has else Widgets.cost_text(Vector2i(cost[0], cost[1])))
-		var status := "已经有了" if has else ("现在不能升级：" + reason if reason != "" else "点一下升级")
-		tile.tooltip_text = "%s\n%s\n\n%s" % [Tech.title(id), _tech_desc(id), status]
 	for kind in _upgrade_tiles:
 		var tile := _upgrade_tiles[kind]
 		var reason := state.upgrade_error(me, kind)

@@ -16,6 +16,8 @@ var _restart_dialog := ConfirmationDialog.new()
 var _legend := RichTextLabel.new()
 ## 显示自己的视野范围
 var show_vision := CheckBox.new()
+var show_details := CheckBox.new()
+var _broadcast_summary := Label.new()
 ## 网格画法（F4.2），G 键也能切换
 var _grid_pick := OptionButton.new()
 var _log := RichTextLabel.new()
@@ -76,13 +78,14 @@ func setup(p_main: Node) -> void:
 	_legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_legend.add_theme_font_size_override("normal_font_size", 13)
 	_legend.text = MapView.legend_text()
+	_legend.hide()
 	var fold := Widgets.fold_title("🗺️ 图例", _legend)
 	fold.add_theme_font_size_override("font_size", 13)
 	top.add_child(fold)
 	top.add_child(_legend)
 	# 视角操作说明，平时收起
 	var controls := Label.new()
-	controls.text = MapView.CONTROLS_TEXT + "\n操作：Alt+1～4 切页；Alt+←/→ 选行动\nCtrl+Enter 执行；Shift+Enter 结束回合\nCtrl+B 收起面板；Ctrl+S 保存；Ctrl+O 读取"
+	controls.text = MapView.CONTROLS_TEXT + "\n操作：Alt+1 科技树；Alt+2～4 切页；Alt+←/→ 选行动\nCtrl+Enter 执行；Shift+Enter 结束回合\nCtrl+B 收起面板；Ctrl+S 保存；Ctrl+O 读取"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_font_size_override("font_size", 13)
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -93,10 +96,22 @@ func setup(p_main: Node) -> void:
 	top.add_child(controls_fold)
 	top.add_child(controls)
 	show_vision.text = "显示自己的视野"
-	show_vision.button_pressed = true
+	show_vision.button_pressed = false
 	show_vision.add_theme_font_size_override("font_size", 13)
 	show_vision.toggled.connect(func(_on): main.refresh())
 	top.add_child(show_vision)
+	show_details.text = "详细星图"
+	show_details.tooltip_text = "显示所有己方航线、设施和敌方星系名称。概览只展开选中的对象；敌情和预警始终保留。"
+	show_details.add_theme_font_size_override("font_size", 13)
+	show_details.toggled.connect(func(on):
+		main.map.detailed = on
+		main.refresh())
+	top.add_child(show_details)
+	_broadcast_summary.tooltip_text = "三维单环仅示意传播半径；只显示最近三条仍在星图内的己方广播。全部广播仍按规则传播，目标标记保留。"
+	_broadcast_summary.add_theme_font_size_override("font_size", 13)
+	_broadcast_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_broadcast_summary.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.add_child(_broadcast_summary)
 	var grid_row := HBoxContainer.new()
 	grid_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var grid_label := Label.new()
@@ -184,6 +199,9 @@ func refresh(me: Civ) -> void:
 	if state.dev_used:
 		_status.text += "　🛠 改过数值"
 
+	var total: int = main.map.active_broadcasts(me).size()
+	_broadcast_summary.text = "广播传播中 %d 条 · 显示最近 %d 条波前" % [total, mini(total, MapView.BROADCAST_LIMIT)]
+	_broadcast_summary.visible = total > 0
 	_log.clear()
 	_log.get_parent().visible = not state.log_lines.is_empty() and not (main.compact and main.panel.visible)
 	for line in state.log_lines.slice(-8):
