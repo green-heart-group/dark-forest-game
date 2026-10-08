@@ -115,15 +115,32 @@ static func commit(s: GameState, to_line: bool) -> void:
 	s.add_log("宇宙展开为 %s，729 格完整保留；旧情报失效，需要重新探索" % ("729 格直线" if to_line else "27×27 平面"))
 
 
+## 有目的地的重新对准搬过去的目的地。没有目的地的保留原来的方向，只去掉压掉的轴（U3）：
+## 固定映射里相邻的两格搬过去不一定还在同一个方向上相邻，按「前方一格」搬过去再对准会突然拐弯。
+## 图外飞来的仍朝搬过去以后的入口飞。
 static func _move_ship(ship: Ship, anchor: Vector3i, to_line: bool, old: StarMap) -> void:
+	var inside := old.contains(Vector3i(ship.pos.round()))
 	var ahead := point(_heading_point(ship.pos, ship.direction, old), anchor, to_line, old)
 	ship.pos = point(ship.pos, anchor, to_line, old)
 	ship.target = point(ship.target, anchor, to_line, old)
 	if ship.direction != Vector3.ZERO:
-		ship.direction = (ship.target - ship.pos if ship.has_target else ahead - ship.pos).normalized()
+		if ship.has_target:
+			ship.direction = (ship.target - ship.pos).normalized()
+		elif inside:
+			ship.direction = flatten_direction(ship.direction, to_line)
+		else:
+			ship.direction = (ahead - ship.pos).normalized()
 	ship.lock = -1
 	if ship.direction == Vector3.ZERO:
 		ship.speed = 0.0
+
+
+## 换坐标后的方向：进二维去掉 z，进一维只留 x。正好沿压掉的轴飞的变成零（停下）。
+static func flatten_direction(direction: Vector3, to_line: bool) -> Vector3:
+	direction.z = 0.0
+	if to_line:
+		direction.y = 0.0
+	return direction.normalized() if direction.length() > 1e-6 else Vector3.ZERO
 
 
 ## 所有键均为本阶段的逻辑坐标；渲染的位置绝不写回规则。

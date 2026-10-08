@@ -252,7 +252,7 @@ func test_unfold_preserves_systems_assets_and_environment() -> void:
 	check(me.bunkers.has(dest) and me.broadcasters.has(dest) and me.pending[0]["at"] == dest, "防御和待建队列迁移")
 	check(me.pending_domains[0]["center"] == dest and s.black_domains[0]["center"] == dest, "黑域准备和中心迁移")
 	check(s.light_at(dest) == 0.25 and s.map.is_habitable(dest) and s.map.rocky[dest] == 1, "光速、行星及宜居信息保留")
-	check(scout.pos.z == 4 and scout.direction.z == 0 and scout.direction.length() > 0, "浮点舰船和竖直航向转入二维")
+	check(scout.pos.z == 4 and scout.direction == Vector3.ZERO and scout.speed == 0.0, "浮点舰船转入二维；正好竖着飞的没有平面里的方向，停下（U3）")
 	check(s.cell_exists(Vector3i(26, 26, 4)) and not s.cell_exists(Vector3i(27, 0, 4)), "新边界生效")
 	check(not s.cell_exists(Vector3i(26, 26, 5)), "二维平面外不是有效格子")
 
@@ -357,3 +357,31 @@ func test_line_spreads_as_circle_and_keeps_curve_order() -> void:
 	for i in s.civs.size():
 		check_eq(s.civs[i].home.x, DimensionSpace.Layout.plane_to_line(Vector2i(before[i].x, before[i].y)),
 				"直线上的位置沿二维时同一条曲线")
+
+
+## 规则：二向箔，U3
+func test_ship_without_destination_keeps_heading_when_flattened() -> void:
+	var s := _collapse_match()
+	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2, 3, 4), Vector3(0, 1, 1).normalized())
+	_finish_flat(s)
+	check(s.all_flat(), "测试准备：压平")
+	check(ship.direction.is_equal_approx(Vector3(0, 1, 0)), "朝 +y 斜上飞的换坐标后朝 +y（去掉 z），实际 %s" % ship.direction)
+	var up := _ship(s, s.human(), Ship.PROBE, Vector3(5, 5, s.flat_plane), Vector3(1, -1, 0).normalized())
+	for civ in s.civs:
+		civ.line_reduced = true
+	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
+	for i in 40:
+		if s.all_linear():
+			break
+		s._spread_flat()
+	check(s.all_linear(), "测试准备：压成直线")
+	check(up.direction.is_equal_approx(Vector3(1, 0, 0)), "进一维只留 x，实际 %s" % up.direction)
+
+
+## 规则：二向箔，U3
+func test_straight_up_ship_stops_when_flattened() -> void:
+	var s := _collapse_match()
+	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2, 3, 4), Vector3(0, 0, 1))
+	ship.speed = 0.5
+	_finish_flat(s)
+	check(ship.direction == Vector3.ZERO and ship.speed == 0.0, "正好沿 z 飞的换坐标后停下")
