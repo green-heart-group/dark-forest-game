@@ -1,7 +1,7 @@
 class_name Foil
 extends RefCounted
 ## 一片降维箔（二向箔 / 单向著）：先在发射源准备几个回合，然后沿直线飞向目标坐标，每回合前进一段。
-## 到达目标（最后一步直接落在目标上），或途中碰到别人的星系，就展开。
+## 到达目标（最后一步直接落在目标上）就展开；单向著途中碰到别人的星系也会提前展开，二向箔不会（U2）。
 
 var origin: Vector3
 var target: Vector3i
@@ -13,7 +13,7 @@ var traveled := 0.0
 var to_line := false
 ## 每回合飞多远
 var speed := Balance.FOIL_SPEED
-## 隐藏文明发的：只在目标展开，路上不停
+## 隐藏文明发的：只在目标展开，路上不停（二向箔本来就这样，只对单向著有用）
 var precise := false
 
 

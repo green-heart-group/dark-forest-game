@@ -22,6 +22,7 @@
 | F5.1～F5.3 | E7F6 第五次试玩意见的第 1～3 条 | 2026-10-07 | [feedback-play-test-5.md](../proposals/feedback-play-test-5.md) |
 | （没有 F6、F7） | E7F6 第六、七次试玩意见：要改规则的几条整理成问题 G14、T23 来定，所以没有单独的 F 编号 | 2026-10-07 | [feedback-play-test-6.md](../proposals/feedback-play-test-6.md)、[feedback-play-test-7.md](../proposals/feedback-play-test-7.md) |
 | U1 | hrwu1 在聊天里给的展开草图，先做成动画演示，看过以后决定做进对局 | 2026-10-07 | [PR #3](https://github.com/green-heart-group/dark-forest-game/pull/3)、[开发日志](../devlog/2026-10.md#u1把降维展开接入真实对局) |
+| U2 | 降维展开做进对局后的讨论（E7F6 提，RainZL、hrwu1 补充），整理在降维后续待办里 | 2026-10-08 | [降维后续待办](../proposals/dimension-followup-tasks.md) |
 
 G1～G13、T1～T16 的结论都已经写进上面的 §3～§9（括号里标了编号），这里不再逐条列；其余的列在下面。
 
@@ -99,3 +100,4 @@ G1～G13、T1～T16 的结论都已经写进上面的 §3～§9（括号里标�
 | 编号 | 问题 | 决定 |
 | --- | --- | --- |
 | U1 | 压平时同一列的星系挤到一格、互相覆盖 | 每列展开铺平，729 格一个不少，全图展开完再一起换坐标、重新探索；AI 只在走投无路时才用降维武器。取代原来的「压到一起」和「压过的格子光速回到 1」。见 [§9 二向箔](game-design.md#二向箔) |
+| U2 | 二向箔在路上碰到别人的星系就提前展开，打不了指定坐标 | 二向箔是打指定坐标的武器：路上不停，到了目标格子才展开；目标可以是空格子，比如两个文明中间。单向著、光粒、战舰的命中不变。见 [§9 二向箔](game-design.md#二向箔) |

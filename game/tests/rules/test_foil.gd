@@ -2,7 +2,7 @@ extends "res://tests/rules/rule_suite.gd"
 ## 自身降维和三维里的二向箔：飞行、展开、压平、搬到平面上。
 
 
-## 规则：二向箔
+## 规则：二向箔，B7
 func test_foil_prepares_flies_and_unfolds() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
@@ -25,15 +25,40 @@ func test_foil_prepares_flies_and_unfolds() -> void:
 	check(not s.flattened.has(Vector3i(2, 0, 1)), "0.9 格尚未覆盖相邻列")
 
 
-## 规则：二向箔，B7
-func test_foil_unfolds_on_enemy_in_path() -> void:
+## 规则：二向箔，U2
+func test_foil_flies_past_enemy_to_empty_target() -> void:
 	var s := _two_civs(Vector3i(1, 0, 0))
 	var me := s.human()
 	_give(me, ["dimension"])
-	s.launch_foil(me, Vector3i(3, 0, 0))
-	_turns(s, Balance.FOIL_PREPARE_TURNS + 5)
-	check(s.flattened.has(Vector3i(1, 0, 0)), "途中碰到别人的星系，提前展开")
-	check(not s.civs[1].alive and s.winner == "你", "没降维的文明被压平，灭亡")
+	var target := Vector3i(3, 0, 0)
+	check(s.launch_foil(me, target)["error"] == "", "空格子可以当目标")
+	_turns(s, Balance.FOIL_PREPARE_TURNS + 6)
+	check(me.foils.size() == 1 and me.foils[0].traveled > 1.0, "测试准备：已经飞过别人的星系")
+	check(s.flattened.is_empty() and s.civs[1].alive, "路上经过别人的星系不展开")
+	_turns(s, 9)
+	check(me.foils.is_empty() and s.flattened.has(target), "到了目标格子才展开")
+
+
+## 规则：二向箔，U2
+func test_foil_between_two_civs_hits_nearer_first() -> void:
+	var s := _three_civs()  # 你 (0,0,0)，AI (8,8,8)，第三方 (8,0,0)
+	var me := s.human()
+	me.reduced = true
+	_give(me, ["dimension"])
+	Balance.FOIL_SPEED = 1.0
+	var target := Vector3i(8, 3, 4)  # 空格子：水平方向离第三方 3 格，离 AI 5 格
+	check(s.launch_foil(me, target)["error"] == "", "两个文明之间的空格子可以当目标")
+	var third_out := -1
+	var ai_out := -1
+	for turn in 40:
+		s.end_turn()
+		if third_out < 0 and not s.civs[2].alive:
+			third_out = turn
+		if ai_out < 0 and not s.civs[1].alive:
+			ai_out = turn
+	check(third_out >= 0 and ai_out >= 0, "两边都被波及")
+	check(third_out < ai_out, "离落点近的第三方先被压平（第 %d 回合），AI 后被压平（第 %d 回合）" % [third_out, ai_out])
+	check(me.alive, "自身降维的发射者活下来")
 
 
 ## 规则：二向箔

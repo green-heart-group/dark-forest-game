@@ -50,6 +50,25 @@ func test_line_foil_requires_two_dimensional_world() -> void:
 	check(s.launch_foil(s.human(), Vector3i(3, 3, 4))["error"] != "", "二维后不能再发二向箔")
 
 
+## 二向箔改成只在目标展开（U2），单向著仍然在路上碰到别人的星系就展开。
+## 规则：二维、单向著和奇异点，U2
+func test_line_foil_still_unfolds_on_enemy_in_path() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	var enemy := s.civs[1].home
+	# 从停在 AI 母星系左边一格的星舰发射，目标在 AI 母星系右边一格，正好穿过它
+	var from := enemy - Vector3i(1, 0, 0)
+	var target := enemy + Vector3i(1, 0, 0)
+	check(s.map.contains(from) and s.map.contains(target), "测试准备：两格都在平面上")
+	_ship(s, me, Ship.STARSHIP, Vector3(from))
+	check(s.launch_line_foil(me, target, from)["error"] == "", "从星舰发射单向著")
+	for i in Balance.FOIL_PREPARE_TURNS + 20:
+		if s.line_y >= 0:
+			break
+		s.end_turn()
+	check_eq(s.line_anchor, enemy, "单向著在路上碰到的别人的母星系展开")
+
+
 ## 规则：自身降维
 func test_second_self_reduction() -> void:
 	var s := _two_dimensional_match()

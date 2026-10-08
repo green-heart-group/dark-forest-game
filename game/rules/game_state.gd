@@ -2148,7 +2148,8 @@ func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -
 
 
 ## 每片箔：还在准备的，准备回合减一；已经起飞的，前进一段。
-## 碰到别人的星系（隐藏文明的不会），或到达目标（最后一步直接落在目标上），就在那里展开。
+## 二向箔只在到达目标（最后一步直接落在目标上）时展开，路上不停（U2）；
+## 单向著途中碰到别人的星系（隐藏文明的不会）就在那里展开。
 func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
 	var still_flying: Array[Foil] = []
 	for foil: Foil in list.duplicate():
@@ -2166,7 +2167,7 @@ func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
 		foil.traveled = minf(foil.traveled + foil.speed, foil.total_distance())
 		var arrived := foil.traveled >= foil.total_distance() - 1e-6
 		var at := NO_HIT
-		if not foil.precise:
+		if foil.to_line and not foil.precise:
 			# 多算一点点，免得浮点误差把目标格子漏掉
 			for c in Geometry.cylinder_cells_between(foil.origin, foil.direction(), from_t,
 					foil.traveled + 1e-4, 0.0, map.bounds()):
