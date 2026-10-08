@@ -29,3 +29,11 @@ jobs:
       # 和本地是同一条命令
       - name: 导入并跑测试
         run: uv run game/tools/test.py
+
+      # 全部通过时 test.py 会更新文档里由代码决定的部分（测试个数、数值、科技表）；这里变了，说明提交的文档是旧的
+      - name: 检查文档里由代码决定的部分是不是最新的
+        run: |
+          git diff --exit-code -- docs/ || {
+            echo "::error::文档过时了：本地跑 uv run game/tools/test.py（只改了数值时跑 uv run game/tools/update_docs.py），把改动的文档一起提交"
+            exit 1
+          }

@@ -27,7 +27,7 @@
 
 - 每一条按内容挪走：
   - 定下来的规则：给它一个编号（提议用提议里的问题编号；第 k 次试玩意见的第 n 条是 Fk.n），
-    在 [游戏设计 §14 决定记录](../design/game-design.md#14-决定记录) 加一行，
+    在 [决定记录](../design/decision-log.md) 加一行，
     再写进 [design/game-design.md](../design/game-design.md) 的正文，括号里标上编号；改了原型的话，也更新 `design/current-rules.md`。
   - 要做的事：写进 [路线图](../roadmap.md)。
   - 说不清、要再问的：在 [要确定的问题](../open-questions.md) 加一条。

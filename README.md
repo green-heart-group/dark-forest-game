@@ -188,7 +188,7 @@ godot_console --headless --path game --export-release "Web" ../build/web/index.h
 - [现状](docs/status.md)：做到哪一步、测试和平衡模拟结果。
 - [路线图](docs/roadmap.md)：接下来要做什么。
 - [要确定的问题](docs/open-questions.md)：还没定、要大家回答的问题。
-- [决定记录](docs/design/game-design.md#14-决定记录)：每条规则是谁、什么时候、为什么定的。
+- [决定记录](docs/design/decision-log.md)：每条规则是谁、什么时候、为什么定的。
 
 ## 旧版本
 
