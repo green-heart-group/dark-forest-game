@@ -82,6 +82,7 @@
 | `action_page.gd` | 右侧面板的「行动」页：选行动、给方向或目标、执行 |
 | `angle_dial.gd` | 「行动」页上调方向的两个圆盘（水平角、俯仰角）。目标 = 发射源 + 方向 × 距离 |
 | `overlay.gd` | 盖在星图左边的一层：回合状态、重开、图例、视角操作说明、网格画法、日志、短暂提示 |
+| `saved_games.gd` | 普通游戏存读档界面：对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
 | `window_settings.gd` | 窗口位置和大小、界面大小，存在 `user://settings.cfg`；网页版改用随游戏带的字体 |
 | `debug_panel.gd` | 开发者调试面板（用法见 [调试模式](debug-tools.md)） |
 | `web_files.gd` | 网页版专用：读网址里的参数（`?debug&seed=123`），把文件下载到电脑、让玩家上传文件 |
@@ -98,10 +99,11 @@
 - **能不能做、要花多少，问规则**（上一节的 `xxx_error()`、`action_cost()`），不在画面里另写判断。
   画面要用的其他规则上的答案也问规则：单位接下来飞到哪（`predict_path()`）、箔压到哪一层（`foil_plane_for()`、`line_y_for()`）、
   哪些格子在黑域里（`in_black_domain()`）、哪些单位能派出或转向（`Ship.AIMED`、`Ship.TURNABLE`、`Ship.waiting()`）。
+- **面板可收起**：星图镜头与点选用 `main.panel_width()` 读取实际占用宽度，不能写死面板宽度。窄屏切换逻辑画布并自动收起，读档完成后重新定位镜头。
 - **按「正在看的文明」画**：用 `main.viewed()`，不要写死 `state.human()`。调试时可以换成别的文明的视角，
   以后多人对战也靠它。
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
-- **快捷键**：Ctrl 组合键和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
+- **快捷键**：Ctrl / Alt 组合键、Shift+Enter 和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
   视角键在 `map_view.gd`（按住的 WASD 等每帧查，H、V、T、G 在 `_camera_key`）。新加快捷键前先看这两处，别撞键；
   认键的位置（`physical_keycode`），在输入框里打字时不响应。
 - **界面大小**：按 1280×800 等比缩放（项目设置 `canvas_items` + `expand`），再乘上 `ui_scale`
@@ -146,7 +148,7 @@
 | `game/tests/run_view_tests.gd` | 画面测试：检查界面和星图显示的东西和规则一致。按 `run_tests()` 里写的顺序跑 |
 | `game/tests/run_unfolding_tests.gd` | 展开演示的测试：格子一个不少、相邻的列展开时不重叠、控件和关键画面。`test.py` 也跑它 |
 | `game/tests/test_log.gd` | 各套测试共用的记结果的部分：数测试和检查、失败时写出是哪个测试、最后的汇总；命令行参数 `only=`、`tests=`、`report=`、`stop_on_fail`（说明在文件开头） |
-| `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计对局怎么发展 |
+| `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计各维度首次进入、最高已开放科技等级停留回合及全体文明淘汰原因；淘汰事件只用于统计，不参与规则 |
 | `game/tools/sync_balance.py` | 按 `game/balance.cfg` 重新生成 `balance.gd` 里的数值声明；`--check` 只检查（见上面「数值」） |
 | `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.cfg` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |

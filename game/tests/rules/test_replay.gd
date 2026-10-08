@@ -2,6 +2,21 @@ extends "res://tests/rules/rule_suite.gd"
 ## 对局记录和回放、调试面板改数值、AI 的想法记录。
 
 
+func test_replay_validates_external_commands() -> void:
+	var s := GameState.new_game(1)
+	s.build(s.human(), "probe")
+	var data := Replay.from_state(s).to_dict()
+	check(Replay.valid_data(data), "有效的记录可以导入")
+	for patch in [{"name": "free"}, {"step": -1}, {"civ": 999}, {"args": [42]}, {"args": ["probe", "不是坐标"]}]:
+		var bad := data.duplicate(true)
+		bad["commands"][0].merge(patch, true)
+		check(not Replay.valid_data(bad), "损坏的命令参数在执行前被拒绝")
+	var r := Replay.from_state(s)
+	r.commands[0]["args"][0] = "starship"
+	r.play_to(0)
+	check_eq(r.desync_step, 0, "最后一个未结束回合操作失败也报告不一致")
+
+
 ## 「你」照固定的做法行动（不用随机数）：能升的科技升一项，造探测器朝固定方向派出，有已知目标就派战舰。
 func _scripted_player_turn(s: GameState) -> void:
 	var me := s.human()

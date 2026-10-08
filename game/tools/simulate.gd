@@ -130,6 +130,12 @@ func _play_parallel(first: int, runs: int, jobs: int) -> Array:
 func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
 	var s := GameState.new_game(seed_value, Balance.AI_COUNT, true)
 	s.profiling = profiling
+	var eliminations := {}
+	s.civilization_eliminated.connect(func(_civ, cause): eliminations[cause] = eliminations.get(cause, 0) + 1)
+	var dimensions := {"3": 1}
+	var tier_durations := []
+	for c in s.civs:
+		tier_durations.append([0, 0, 0, 0])
 	var first_death := -1
 	var alive_at := {}
 	var systems_at := {}
@@ -138,7 +144,18 @@ func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
 	## 每个文明 I、II、III 级开放的回合
 	var tiers := [[], [], []]
 	for t in max_turns:
+		for i in s.civs.size():
+			var c: Civ = s.civs[i]
+			if not c.alive:
+				continue
+			var highest := 0
+			for tier in [1, 2, 3]:
+				if s.tier_open(c, tier):
+					highest = tier
+			tier_durations[i][highest] += 1
 		s.end_turn()
+		if not dimensions.has(str(s.dimension)):
+			dimensions[str(s.dimension)] = s.turn
 		var living := s.civs.filter(func(c): return c.alive)
 		if first_death < 0 and living.size() < s.civs.size():
 			first_death = s.turn
@@ -175,7 +192,7 @@ func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
 	return {
 		"seed": seed_value, "checksum": s.checksum(), "turn": s.turn, "draw": s.winner == "平局", "over": s.is_over(),
 		"first_death": first_death, "tiers": tiers, "checkpoints": checkpoints, "techs": techs, "causes": causes,
-		"profile": s.profile,
+		"profile": s.profile, "dimensions": dimensions, "tier_durations": tier_durations, "eliminations": eliminations,
 	}
 
 
@@ -195,6 +212,9 @@ func _report(games: Array, profiling: bool) -> void:
 	var systems_sum := {}
 	var energy_sum := {}
 	var causes := {}
+	var eliminations := {}
+	var dimension_turns := {"3": [], "2": [], "1": []}
+	var durations := [[], [], [], []]
 	var profile := {}
 	## 每局最后的校验值：改代码只为提速时，前后应该完全一样
 	var checksums: Array[int] = []
@@ -204,6 +224,15 @@ func _report(games: Array, profiling: bool) -> void:
 		energy_sum[k] = 0.0
 	for g in games:
 		checksums.append(int(g["checksum"]))
+		for dim in dimension_turns:
+			if g["dimensions"].has(dim):
+				dimension_turns[dim].append(int(g["dimensions"][dim]))
+		for civ_durations in g["tier_durations"]:
+			for tier in 4:
+				if civ_durations[tier] > 0:
+					durations[tier].append(int(civ_durations[tier]))
+		for cause in g["eliminations"]:
+			eliminations[cause] = eliminations.get(cause, 0) + int(g["eliminations"][cause])
 		for tier in [1, 2, 3]:
 			for t in g["tiers"][tier - 1]:
 				tier_turns[tier].append(int(t))
@@ -225,6 +254,12 @@ func _report(games: Array, profiling: bool) -> void:
 		if g["first_death"] > 0:
 			first_death_turns.append(int(g["first_death"]))
 
+	for dim in ["3", "2", "1"]:
+		print("  进入 %s 维：%d / %d 局（%.1f%%），首次进入中位数第 %s 回合" % [dim,
+				dimension_turns[dim].size(), runs, 100.0 * dimension_turns[dim].size() / runs, _median(dimension_turns[dim])])
+	for tier in 4:
+		print("  最高已开放 %s 停留：%d 个文明，中位数 %s 回合（含终局或截尾）" % [Tech.TIER_NAMES[tier], durations[tier].size(), _median(durations[tier])])
+	print("  文明淘汰原因（全体文明，每次只计一次）：%s" % str(eliminations))
 	var civ_total := runs * (Balance.AI_COUNT + 1)
 	for tier in [1, 2, 3]:
 		print("  可以升 %s：%d / %d 个文明，中位数第 %s 回合" % [Tech.TIER_NAMES[tier], tier_turns[tier].size(),
@@ -250,7 +285,7 @@ func _report(games: Array, profiling: bool) -> void:
 			print("    %s %.1f" % [k, profile[k] / 1e6])
 
 
-func _median(values: Array[int]) -> String:
+func _median(values: Array) -> String:
 	if values.is_empty():
 		return "-"
 	var v := values.duplicate()

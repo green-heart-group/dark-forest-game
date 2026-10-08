@@ -120,6 +120,9 @@ func run_tests() -> void:
 	await run(test_debug_edit_values)
 	await run(test_debug_presets)
 	await run(test_debug_after_death)
+	await run(test_save_load)
+	await run(test_save_across_dimensions)
+	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
 	await capture("debug_panel", view.debug.window)
 	view.queue_free()
@@ -130,6 +133,167 @@ func run_tests() -> void:
 			results.fail("没写进 run_tests() 的列表，没有跑", name)
 	DirAccess.remove_absolute("user://_test_debug.cfg")  # 测试时面板设置存在这里，用完删掉
 	quit(results.finish("画面测试"))
+
+
+func test_save_load() -> void:
+	view.debug.pause()
+	view.debug.replay = null
+	view.debug.view_idx = 0
+	var defaults := Balance.values()
+	var s := GameState.new_game(1)
+	s.end_turn()
+	s.dev_balance("FOIL_SPREAD", 0.4)
+	s.build(s.human(), "probe")  # 保存未结束回合里的操作
+	show_state(s)
+	var path := "user://_test_save.forest"
+	check_eq(view.saves.save_file(path), OK, "普通对局可以保存")
+	check_eq(view.saves.save_file(path), OK, "可以安全覆盖同名存档")
+	var expected := s.checksum()
+	show_state(GameState.new_game(2))
+	await view.saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "读取恢复保存回合和回合内操作")
+	check_eq(Balance.FOIL_SPREAD, 0.4, "读取恢复当时的数值")
+	check(not view.debug.replaying(), "读档后能继续操作")
+	view.state.end_turn()
+	s.end_turn()
+	check_eq(view.state.checksum(), s.checksum(), "读取后下一回合仍与原局一致")
+	var kept = view.state
+	var f := FileAccess.open(path, FileAccess.READ)
+	var data: Dictionary = f.get_var()
+	f.close()
+	data["checksum"] += 1
+	f = FileAccess.open(path, FileAccess.WRITE)
+	f.store_var(data)
+	f.close()
+	await view.saves.load_file(path)
+	check(view.state == kept, "校验不一致保留原对局")
+	check_eq(Balance.FOIL_SPREAD, 0.4, "失败不会改变原对局数值")
+	data["replay"]["commands"].append({"step": 1, "civ": 0, "ai": false, "name": "free", "args": []})
+	f = FileAccess.open(path, FileAccess.WRITE)
+	f.store_var(data)
+	f.close()
+	await view.saves.load_file(path)
+	check(view.state == kept, "损坏文件不能执行非玩家操作")
+	# 强制分帧，在重建期间取消，检查既不替换状态也不污染数值。
+	show_state(s)
+	view.saves.save_file(path)
+	show_state(GameState.new_game(3))
+	kept = view.state
+	Balance.apply(defaults)
+	view.saves.slice_msec = 0
+	view.saves.load_file(path)
+	check(view.saves.busy, "长读档显示进度并让出界面")
+	view.saves.cancel()
+	await process_frame
+	check(view.state == kept and not view.saves.busy, "取消读档后保留原对局")
+	check_eq(Balance.values(), defaults, "取消恢复读档前的数值")
+	view.saves.slice_msec = 50
+	DirAccess.remove_absolute(path)
+
+
+func test_game_shortcuts_and_compact_layout() -> void:
+	show_state(GameState.new_game(1))
+	map.reset_view(true)
+	view.debug.view_idx = 0
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.alt_pressed = true
+	key.keycode = KEY_1
+	view._on_key(key, root)
+	check_eq(panel._tabs.current_tab, 0, "Alt+1 选择科技页")
+	key.keycode = KEY_RIGHT
+	view._on_key(key, root)
+	check_eq(panel._tabs.current_tab, 2, "选择行动快捷键打开行动页")
+	var action_before: int = actions._action
+	key.keycode = KEY_LEFT
+	view._on_key(key, root)
+	check(actions._action != action_before, "左右快捷键切换行动")
+	key.alt_pressed = false
+	key.ctrl_pressed = true
+	key.keycode = KEY_B
+	view._on_key(key, root)
+	check(not panel.visible and view.panel_width() == 0.0, "Ctrl+B 收起面板并释放地图宽度")
+	check_eq(map._camera.h_offset, 0.0, "收起面板后镜头居中")
+	view._on_key(key, root)
+	check(panel.visible and view.panel_width() > 0.0, "再次按键展开面板")
+	view.state.build(view.state.human(), "probe")
+	view.refresh()
+	key.keycode = KEY_ENTER
+	view._on_key(key, root)
+	check(not view.state.human().ships[0].docked, "Ctrl+Enter 通过规则执行所选行动")
+	key.ctrl_pressed = false
+	key.shift_pressed = true
+	var step: int = view.state.steps
+	view._on_key(key, root)
+	check_eq(view.state.steps, step + 1, "Shift+Enter 结束回合")
+	key.ctrl_pressed = true
+	key.shift_pressed = false
+	key.keycode = KEY_B
+	var edit: LineEdit = actions._coord_boxes[0].get_line_edit()
+	edit.grab_focus()
+	view._on_key(key, root)
+	check(panel.visible, "在输入框里不抢操作快捷键")
+	edit.release_focus()
+	var old_size := root.size
+	root.size = Vector2i(600, 900)
+	view.window_settings._responsive_size()
+	await process_frame
+	view.update_layout()
+	check(view.compact and not panel.visible, "竖屏自动收起面板")
+	await capture("portrait_map")
+	view.show_panel(2)
+	await process_frame
+	check(panel.get_global_rect().end.x <= root.get_visible_rect().size.x + 1, "竖屏面板在窗口以内")
+	check(not overlay._top.visible, "展开面板时隐藏会重叠的地图工具")
+	await capture("portrait_panel")
+	root.size = old_size
+	if _output != "":
+		root.size = Vector2i(1280, 800)
+	view.window_settings._responsive_size()
+	await process_frame
+	view.update_layout()
+	view.show_panel(2)
+	await capture("game_controls")
+
+
+func test_save_across_dimensions() -> void:
+	var defaults := Balance.values()
+	var s := GameState.new_game(1, 1)
+	s.set_autoplay(s.civs[1], false)
+	for c in s.civs:
+		s.dev_set(c, "energy", 10000)
+		s.dev_tech(c, "dimension", true)
+		s.start_reduce(c)
+	for i in Balance.REDUCE_TURNS:
+		s.end_turn()
+	s.dev_balance("FOIL_SPEED", 10.0)
+	check_eq(s.launch_foil(s.human(), Vector3i(4, 4, 4))["error"], "", "通过记录里的正式行动展开")
+	for dim in [3, 2, 1]:
+		if dim == 3:
+			for i in Balance.FOIL_PREPARE_TURNS + 2:
+				s.end_turn()
+		else:
+			for i in 90:
+				if s.dimension == dim:
+					break
+				s.end_turn()
+		check_eq(s.dimension, dim, "保存各阶段局面")
+		show_state(s)
+		var expected := s.checksum()
+		var path := "user://_test_dimension_save.forest"
+		check_eq(view.saves.save_file(path), OK, "降维中或完成后可以保存")
+		await view.saves.load_file(path)
+		check_eq(view.state.checksum(), expected, "降维存档回放与保存状态一致")
+		check_eq(view.state.foil_zones, s.foil_zones, "多回合半格半径完整恢复")
+		DirAccess.remove_absolute(path)
+		s = view.state
+		if dim == 2:
+			for c in s.civs:
+				s.start_reduce(c)
+			for i in Balance.REDUCE_TURNS:
+				s.end_turn()
+			check_eq(s.launch_line_foil(s.human(), Vector3i(13, 13, s.flat_plane))["error"], "", "二维发射单向著")
+	Balance.apply(defaults)
 
 
 func test_panel_layout() -> void:

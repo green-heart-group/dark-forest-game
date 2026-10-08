@@ -29,6 +29,8 @@ func setup(p_main: Node) -> void:
 	main = p_main
 	_use_web_fonts()
 	_load_ui_scale(_place_window())
+	get_window().size_changed.connect(_responsive_size)
+	_responsive_size()
 
 
 func _use_web_fonts() -> void:
@@ -150,3 +152,13 @@ func apply_ui_scale(value: float) -> void:
 	get_window().content_scale_factor = ui_scale
 	if main.debug != null:
 		main.debug.set_ui_scale(effective_ui_scale())
+
+
+## 竖屏使用较窄的逻辑画布，防止把桌面界面整体缩成看不清的小字。
+func _responsive_size() -> void:
+	var win := get_window()
+	var target := Vector2i(720, 800) if win.size.x < win.size.y * 1.25 else Vector2i(1280, 800)
+	if DisplayServer.get_name() == "headless" and win.size == Vector2i(64, 64):
+		target = Vector2i(1280, 800)
+	if win.content_scale_size != target:
+		win.content_scale_size = target

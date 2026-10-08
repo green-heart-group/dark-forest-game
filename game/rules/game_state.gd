@@ -1,5 +1,8 @@
 class_name GameState
 extends RefCounted
+
+## 仅供模拟统计；不参与规则状态或回放校验。
+signal civilization_eliminated(civ: Civ, cause: String)
 ## 一局游戏的全部规则状态。画面只读取它，通过它的方法来行动。
 ## 日志只写玩家应该知道的事：自己的行动、自己被打、有文明灭亡。
 ## AI 怎么行动在 ai.gd。
@@ -1533,7 +1536,7 @@ func _grain_hit(c: Vector3i, owner: Civ, g: Ship, shooter: Civ) -> void:
 		var ss := civ.starship()
 		if civ.alive and ss != null and ss.cell() == c and ss.direction == Vector3.ZERO:
 			_destroy(civ, ss, "光粒")
-	_lose_system(c, owner)
+	_lose_system(c, owner, "光粒")
 
 
 ## 戴森球不能比恒星多。
@@ -1593,8 +1596,8 @@ func _combat() -> void:
 			continue
 		if a[0] == human() or b[0] == human():
 			add_log("%s的%s和%s的%s相遇，一起毁掉了" % [a[0].name, a[1].label(), b[0].name, b[1].label()])
-		_destroy(a[0], a[1], "")
-		_destroy(b[0], b[1], "")
+		_destroy(a[0], a[1], "舰船交战")
+		_destroy(b[0], b[1], "舰船交战")
 	for u in units:
 		var civ: Civ = u[0]
 		var s: Ship = u[1]
@@ -1655,13 +1658,13 @@ func _fire_weapons(units: Array) -> void:
 			"beam":
 				if told:
 					add_log("%s用高能粒子束毁掉了%s" % [who, whom])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 			"torpedo":
 				t.damage += 1
 				if t.damage >= Balance.TORPEDO_HITS:
 					if told:
 						add_log("%s用星际鱼雷打中%s，%s毁掉了" % [who, whom, t.label()])
-					_destroy(other, t, "")
+					_destroy(other, t, "战舰")
 				elif told:
 					add_log("%s用星际鱼雷打中%s（%d/%d）" % [who, whom, t.damage, Balance.TORPEDO_HITS])
 			"hbomb":
@@ -1669,7 +1672,7 @@ func _fire_weapons(units: Array) -> void:
 				civ.mineral += t.cost[1]
 				if told:
 					add_log("%s用次声波氢弹杀死了%s的船员，收回 %dE、%dM" % [who, whom, t.cost[0], t.cost[1]])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 
 
 ## 开一次火的钱够不够（够时为 false）。
@@ -1688,7 +1691,7 @@ func _warship_strike(civ: Civ, s: Ship) -> void:
 			if not t.dead and t.kind == Ship.COLONY and t.pos.distance_to(s.pos) <= r:
 				if other == human() or civ == human():
 					add_log("%s的%s打掉了%s的%s" % [civ.name, s.label(), other.name, t.label()])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 				return
 	for other in civs:
 		if other == civ or not other.alive or other.antimatter > 0:
@@ -1703,7 +1706,7 @@ func _warship_strike(civ: Civ, s: Ship) -> void:
 					add_log("敌方战舰打到你的星系 %s，那里的文明被抹掉了" % c)
 				elif civ == human():
 					add_log("%s抹掉了 %s 在 %s 的星系" % [s.label(), other.name, c])
-				_lose_system(c, other)
+				_lose_system(c, other, "战舰")
 				return
 
 
@@ -1716,7 +1719,7 @@ func _destroy(civ: Civ, s: Ship, cause: String) -> void:
 		if civ == human() and cause != "":
 			add_log("你的星舰被%s毁掉" % cause)
 		if civ.colonies.is_empty():
-			_die(civ)
+			_die(civ, cause)
 
 
 func _remove_ship(civ: Civ, s: Ship) -> void:
@@ -2227,7 +2230,7 @@ func _compress_cell(c: Vector3i, to_line: bool) -> void:
 	if owner != null and not (owner.line_reduced if to_line else owner.reduced):
 		if owner == human():
 			add_log("你的星系 %s 被%s扫过，文明失去该据点" % [c, weapon])
-		_lose_system(c, owner)
+		_lose_system(c, owner, weapon)
 	for civ in civs:
 		if civ.line_reduced if to_line else civ.reduced:
 			continue
@@ -2655,7 +2658,7 @@ func _check_hiding() -> void:
 			all_in = all_in and light_at(c) < Balance.SHIP_MIN_SPEED
 		if all_in:
 			add_log("%s 把自己全部困在了光速为 0 的黑域里，再也出不来，算输" % civ.name)
-			_die(civ)
+			_die(civ, "黑域")
 
 
 ## 这个格子在不在黑域里：光速低到光粒没有杀伤力（G14）。在里面的星系产出只有 1/10。
@@ -2696,7 +2699,7 @@ func _may_block(lo: Vector3, hi: Vector3) -> bool:
 # ---------- 失去星系和灭亡 ----------
 
 ## 文明失去一个星系，那里的设施和停着的单位（星舰除外）也没了。星系全丢了、又没有星舰，文明灭亡。
-func _lose_system(c: Vector3i, owner: Civ) -> void:
+func _lose_system(c: Vector3i, owner: Civ, cause := "其他") -> void:
 	owner.colonies.erase(c)
 	owner.dysons.erase(c)
 	owner.miners.erase(c)
@@ -2713,18 +2716,19 @@ func _lose_system(c: Vector3i, owner: Civ) -> void:
 			owner.home = owner.starship().cell()
 			add_log("%s 失去了所有星系，只剩星舰" % owner.name)
 		else:
-			_die(owner)
+			_die(owner, cause)
 	elif owner.home == c:
 		owner.home = owner.colonies[0]
 
 
 ## 文明灭亡，准备中和在飞的东西也随之消失（已经发出的光粒除外）。
-func _die(owner: Civ) -> void:
+func _die(owner: Civ, cause := "其他") -> void:
 	if not owner.alive:
 		return
 	for s in sophons_on(owner):
 		s.dead = true
 	owner.alive = false
+	civilization_eliminated.emit(owner, cause if cause != "" else "其他")
 	for s in owner.ships:
 		if s.kind != Ship.GRAIN:
 			s.dead = true

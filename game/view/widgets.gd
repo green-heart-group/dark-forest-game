@@ -72,7 +72,10 @@ static func tile(icon: String, name: String, cost: String) -> Button:
 	col.add_theme_constant_override("separation", 0)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(col)
-	col.minimum_size_changed.connect(func(): button.custom_minimum_size.y = col.get_combined_minimum_size().y + 4)
+	var fit := func(): button.custom_minimum_size.y = col.get_combined_minimum_size().y + 4
+	col.minimum_size_changed.connect(fit)
+	col.visibility_changed.connect(fit)
+	button.ready.connect(fit)
 	for spec in [[icon, 20, Color.WHITE], [name, 13, Color.WHITE], [cost, 12, Color(0.75, 0.75, 0.8)]]:
 		var l := Label.new()
 		l.text = spec[0]
@@ -112,6 +115,7 @@ static func fold_title(text: String, target: Control) -> Button:
 	b.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
 	var update := func(): b.text = ("▾ " if target.visible else "▸ ") + text
 	update.call()
+	target.visibility_changed.connect(update)
 	b.pressed.connect(func(): target.visible = not target.visible; update.call())
 	return b
 

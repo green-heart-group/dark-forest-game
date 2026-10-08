@@ -232,7 +232,7 @@ func _update_camera() -> void:
 	_pivot.position = _world.transform * _focus
 	_pivot.rotation_degrees = Vector3(_pitch, _yaw, 0)
 	_camera.position = Vector3(0, 0, _distance)
-	_camera.h_offset = Widgets.PANEL_WIDTH / 2.0 * _world_per_px()
+	_camera.h_offset = main.panel_width() / 2.0 * _world_per_px()
 
 
 ## 视角中心那里，画面上 1 像素相当于星图里多长。
@@ -454,7 +454,7 @@ func _unhandled_input(event: InputEvent) -> void:
 ## 鼠标所指的东西。只有正在看的文明画在星图上的东西才点得中（见 _pickables），点在屏幕上离东西的
 ## 轮廓最近的那个；附近没有东西时返回空的字典。
 func _pick_object(pos: Vector2) -> Dictionary:
-	if pos.x > get_viewport().get_visible_rect().size.x - Widgets.PANEL_WIDTH:
+	if pos.x > get_viewport().get_visible_rect().size.x - main.panel_width():
 		return {}
 	var best := {}
 	var best_score := INF
@@ -478,7 +478,7 @@ func _pick_object(pos: Vector2) -> Dictionary:
 ## 鼠标附近的格子（瞄准空格子用，例如殖民船盲飞、广播任意坐标）。不算选中，也不画框。
 ## 选屏幕上离鼠标最近的格子；差不多近时选离相机近的（前面的）。点不准时可以在面板里直接输入坐标。
 func _nearest_cell(pos: Vector2) -> Vector3i:
-	if pos.x > get_viewport().get_visible_rect().size.x - Widgets.PANEL_WIDTH:
+	if pos.x > get_viewport().get_visible_rect().size.x - main.panel_width():
 		return NO_CELL
 	var best := NO_CELL
 	var best_score := INF

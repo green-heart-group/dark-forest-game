@@ -2,6 +2,20 @@ extends "res://tests/rules/rule_suite.gd"
 ## 全图压平以后：共同平面、二维、单向著、一维、奇异点和平局。
 
 
+## 规则：二维、单向著和奇异点，U5
+func test_line_wave_accumulates_half_steps() -> void:
+	var s := _two_dimensional_match()
+	for c in s.civs:
+		c.line_reduced = true
+	var at := Vector3i(13, 13, s.flat_plane)
+	s._unfold_line_foil(at)
+	s._spread_flat()
+	check_eq(s.line_zones[0]["age"], 0.5, "单向著也保留半格进度")
+	check(not s.linearized.has(at + Vector3i.RIGHT), "第一回合不波及邻格")
+	s._spread_flat()
+	check(s.linearized.has(at + Vector3i.RIGHT), "第二回合到达邻格")
+
+
 ## 规则：二向箔，U1
 func test_foils_share_one_plane() -> void:
 	var s := _collapse_match()
@@ -104,7 +118,7 @@ func test_singularity_wins() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(4, 4, s.flat_plane))
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -144,7 +158,7 @@ func test_hidden_weapon_matches_dimension() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(4, 4, s.flat_plane))
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -268,7 +282,7 @@ func test_dimension_mapping_bijection_and_movement() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		s._spread_flat()
 	check(s.all_linear() and s.map.extent == Vector3i(729, 1, 1), "二维再次展开为 729 格直线")
 	check(s.map.cells().size() == 729 and s.civs[0].home != s.civs[1].home, "一维仍没有坐标覆盖")
@@ -292,7 +306,7 @@ func test_unprepared_ship_entering_flattened_cell_dies() -> void:
 
 func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
 	s._unfold_foil(anchor)
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_flat():
 			break
 		s._spread_flat()
@@ -349,7 +363,7 @@ func test_line_spreads_as_circle_and_keeps_curve_order() -> void:
 	s._apply_line_zone(s.line_zones[0])
 	check(s.linearized.has(at + Vector3i(0, 3, 0)) and s.linearized.has(at + Vector3i(2, 2, 0)), "平面上按圆形扫到 3 格以内")
 	check(not s.linearized.has(at + Vector3i(4, 0, 0)), "超过 3 格的不扫")
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -370,7 +384,7 @@ func test_ship_without_destination_keeps_heading_when_flattened() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s._spread_flat()

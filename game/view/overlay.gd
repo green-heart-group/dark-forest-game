@@ -21,13 +21,15 @@ var _grid_pick := OptionButton.new()
 var _log := RichTextLabel.new()
 ## 改界面大小后在星图上方短暂显示的提示
 var _toast := Label.new()
+var _top := VBoxContainer.new()
+var _log_panel := PanelContainer.new()
 
 
 func setup(p_main: Node) -> void:
 	main = p_main
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var top := VBoxContainer.new()
+	var top := _top
 	top.anchor_right = 1.0
 	top.offset_left = 16
 	top.offset_right = -Widgets.PANEL_WIDTH - 16
@@ -48,6 +50,17 @@ func setup(p_main: Node) -> void:
 	_restart.pressed.connect(_ask_restart)
 	status_row.add_child(_restart)
 	top.add_child(status_row)
+	var files := HBoxContainer.new()
+	files.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for spec in [["保存", true], ["读取", false]]:
+		var button := Button.new()
+		button.text = spec[0]
+		button.tooltip_text = "保存当前对局（Ctrl+S）" if spec[1] else "读取存档并接着玩（Ctrl+O）"
+		button.pressed.connect(func(): main.saves.open_dialog(spec[1]))
+		if not spec[1]:
+			main.WebFiles.make_pick_button(button)
+		files.add_child(button)
+	top.add_child(files)
 	_restart_dialog.title = "重开一局"
 	_restart_dialog.ok_button_text = "🗺️ 新的星图"
 	_restart_dialog.cancel_button_text = "取消"
@@ -60,7 +73,7 @@ func setup(p_main: Node) -> void:
 	_legend.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_legend.bbcode_enabled = true
 	_legend.fit_content = true
-	_legend.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_legend.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_legend.add_theme_font_size_override("normal_font_size", 13)
 	_legend.text = MapView.legend_text()
 	var fold := Widgets.fold_title("🗺️ 图例", _legend)
@@ -69,7 +82,7 @@ func setup(p_main: Node) -> void:
 	top.add_child(_legend)
 	# 视角操作说明，平时收起
 	var controls := Label.new()
-	controls.text = MapView.CONTROLS_TEXT
+	controls.text = MapView.CONTROLS_TEXT + "\n操作：Alt+1～4 切页；Alt+←/→ 选行动\nCtrl+Enter 执行；Shift+Enter 结束回合\nCtrl+B 收起面板；Ctrl+S 保存；Ctrl+O 读取"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_font_size_override("font_size", 13)
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -100,7 +113,7 @@ func setup(p_main: Node) -> void:
 	top.add_child(grid_row)
 	sync_grid_mode()
 
-	var log_panel := PanelContainer.new()
+	var log_panel := _log_panel
 	log_panel.anchor_top = 1.0
 	log_panel.anchor_bottom = 1.0
 	log_panel.offset_left = 16
@@ -172,7 +185,7 @@ func refresh(me: Civ) -> void:
 		_status.text += "　🛠 改过数值"
 
 	_log.clear()
-	_log.get_parent().visible = not state.log_lines.is_empty()
+	_log.get_parent().visible = not state.log_lines.is_empty() and not (main.compact and main.panel.visible)
 	for line in state.log_lines.slice(-8):
 		_log.append_text(line + "\n")
 
@@ -183,3 +196,13 @@ func _ask_restart() -> void:
 	if not state.is_over():
 		_restart_dialog.dialog_text += "\n\n这一局还没打完，重开后就回不来了。"
 	_restart_dialog.popup_centered()
+
+
+## 面板收起以后，把原来被遮住的区域还给星图；窄屏面板展开时隐藏底层叠加控件。
+func update_layout() -> void:
+	_top.visible = not (main.compact and main.panel.visible)
+	_top.offset_right = -maxf(main.panel_width() + 16, 140)
+	_toast.offset_right = -main.panel_width()
+	_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_log_panel.offset_right = minf(476, get_viewport_rect().size.x - main.panel_width() - 16)
+	_log_panel.visible = not state.log_lines.is_empty() and not (main.compact and main.panel.visible)

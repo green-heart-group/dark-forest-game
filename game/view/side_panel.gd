@@ -83,6 +83,7 @@ func setup(p_main: Node) -> void:
 	_end.add_theme_font_size_override("font_size", 18)
 	_end.custom_minimum_size.y = 40
 	_end.pressed.connect(main.end_turn)
+	_end.tooltip_text = "结束回合（Shift+Enter）"
 	outer.add_child(_end)
 
 
@@ -192,7 +193,7 @@ func refresh(me: Civ) -> void:
 	actions.refresh(me)
 	var finished := state.is_over() and not state.collapse_pending()
 	_end.text = "🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合"
-	_end.disabled = (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
+	_end.disabled = main.saves.busy or (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
 
 	_res_values["energy"].text = "%d  +%d" % [me.energy, state.energy_income(me)]
 	_res_values["mineral"].text = "%d  +%d" % [me.mineral, state.mineral_income(me)]

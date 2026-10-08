@@ -577,3 +577,14 @@ func _on_go() -> void:
 			r = state.launch_singularity(me)
 	main.panel.set_feedback("无法执行：" + r["error"] if r["error"] != "" else "")
 	main.refresh()
+
+
+## 快捷键按屏幕上的顺序循环选择行动，隐藏的维度武器跳过；执行仍走同一个按钮。
+func cycle_action(direction: int) -> void:
+	var choices := []
+	for a in _action_tiles:
+		if _action_tiles[a].visible:
+			choices.append(a)
+	_action = choices[posmod(choices.find(_action) + direction, choices.size())]
+	main.panel.set_feedback("")
+	main.refresh()

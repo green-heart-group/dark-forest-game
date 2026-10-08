@@ -12,6 +12,7 @@ const WindowSettings := preload("res://view/window_settings.gd")
 const DebugPanel := preload("res://view/debug_panel.gd")
 const Tip := preload("res://view/tip.gd")
 const WebFiles := preload("res://view/web_files.gd")
+const SavedGames := preload("res://view/saved_games.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -21,6 +22,10 @@ var map := MapView.new()
 var panel := SidePanel.new()
 var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
+var saves := SavedGames.new()
+var panel_toggle := Button.new()
+var compact := false
+var _layout_ready := false
 ## 调试面板（调试版或带 debug 参数时才有，平时为 null）
 var debug: DebugPanel = null
 ## 上帝视角开关：画出所有文明和星系。放在调试面板里，平时不显示。
@@ -61,8 +66,25 @@ func _ready() -> void:
 	_layer.add_child(overlay)
 	panel.setup(self)
 	_layer.add_child(panel)
+	add_child(saves)
+	saves.setup(self)
+	panel_toggle.text = "收起面板"
+	panel_toggle.tooltip_text = "展开或收起操作面板（Ctrl+B）"
+	panel_toggle.anchor_left = 1.0
+	panel_toggle.anchor_right = 1.0
+	panel_toggle.offset_left = -120
+	panel_toggle.offset_right = -12
+	panel_toggle.offset_top = 8
+	panel_toggle.offset_bottom = 40
+	panel_toggle.focus_mode = Control.FOCUS_NONE
+	panel_toggle.pressed.connect(toggle_panel)
+	_layer.add_child(panel_toggle)
+	panel.offset_top = 46
 	add_child(window_settings)
 	window_settings.setup(self)
+	_layout_ready = true
+	get_viewport().size_changed.connect(update_layout)
+	update_layout()
 	if OS.is_debug_build() or args.has("debug") or args.has("watch") or replay_path != "":
 		debug = DebugPanel.new()
 		debug.setup(self, reveal)
@@ -87,6 +109,8 @@ func viewed() -> Civ:
 
 ## 现在不能操作的原因（调试时在看别人的视角、在回放，或者交给 AI 代打了）。可以操作时为空。
 func locked_reason() -> String:
+	if saves.busy:
+		return "正在读取存档"
 	var reason := debug.locked_reason() if debug != null else ""
 	if reason == "" and viewed().is_ai:
 		reason = "%s 现在由 AI 控制（调试面板里可以接管）" % viewed().name
@@ -128,6 +152,8 @@ func autosave() -> void:
 
 ## 结束回合对所有文明都一样，在看别人的视角时也可以按（回放中不行）。对局结束后变成「再来一局」。
 func end_turn() -> void:
+	if saves.busy:
+		return
 	if debug != null and (debug.replaying() or debug.seeking):
 		return
 	if state.is_over():
@@ -149,9 +175,12 @@ static func new_game_note(seed_value: int) -> String:
 
 ## 新开一局（seed_value 一样就是同一张星图）。观战局重开后还是观战局。
 func new_game(seed_value: int) -> void:
+	if saves.busy:
+		return
 	if debug != null:
 		debug.new_game(seed_value, state.spectator)  # 调试面板还要换回数值、清掉回放
 		return
+	Balance.apply(Balance.file_values())
 	var s := GameState.new_game(seed_value)
 	s.add_log(new_game_note(seed_value))
 	set_state(s)
@@ -166,6 +195,8 @@ func _on_map_click(c: Vector3i) -> void:
 
 ## 压平的动画放完以后，如果胜负已分但空间还没压完，每帧再压一步（不再有回合和收入）。
 func _process(delta: float) -> void:
+	if saves.busy:
+		return
 	if map.animating():
 		map.advance_animation(delta)
 		return
@@ -183,6 +214,19 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	var key := event as InputEventKey
+	if saves.busy:
+		if key.keycode == KEY_ESCAPE:
+			saves.cancel()
+		from.set_input_as_handled()
+		return
+	if from == get_viewport() and (saves._dialog.visible or overlay._restart_dialog.visible):
+		return
+	# 只在游戏窗口接游戏操作键；输入框和弹窗保留原有键盘操作。
+	if from == get_viewport() and not from.gui_get_focus_owner() is LineEdit and not from.gui_get_focus_owner() is TextEdit \
+			and not saves._dialog.visible and not overlay._restart_dialog.visible:
+		if _game_key(key):
+			from.set_input_as_handled()
+			return
 	if key.ctrl_pressed and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
 		var step := 0.0 if key.keycode in [KEY_0, KEY_KP_0] else (-0.1 if key.keycode in [KEY_MINUS, KEY_KP_SUBTRACT] else 0.1)
 		window_settings.set_ui_scale(window_settings.default_ui_scale() if step == 0.0
@@ -211,3 +255,61 @@ func _on_node_added(node: Node) -> void:
 	if node is Control and node.get_script() == null and _layer.is_ancestor_of(node) \
 			and node.get_parent().get_children().has(node):
 		node.set_script.call_deferred(Tip)
+
+
+func panel_width() -> float:
+	return maxf(panel.size.x, SidePanel.Widgets.PANEL_WIDTH) if panel.visible else 0.0
+
+
+func toggle_panel() -> void:
+	panel.visible = not panel.visible
+	update_layout()
+
+
+func show_panel(tab := -1) -> void:
+	panel.show()
+	if tab >= 0:
+		panel._tabs.current_tab = tab
+	update_layout()
+
+
+func update_layout() -> void:
+	if not _layout_ready:
+		return
+	var narrow := get_viewport().get_visible_rect().size.x < 1000
+	if narrow != compact:
+		compact = narrow
+		panel.visible = not compact
+		if compact:
+			overlay._legend.hide()
+	panel_toggle.text = "收起面板" if panel.visible else "操作面板"
+	overlay.update_layout()
+	map._update_camera()
+
+
+func _game_key(key: InputEventKey) -> bool:
+	if key.ctrl_pressed:
+		match key.keycode:
+			KEY_B:
+				toggle_panel()
+			KEY_S:
+				saves.open_dialog(true)
+			KEY_O:
+				saves.open_dialog(false)
+			KEY_ENTER, KEY_KP_ENTER:
+				show_panel(2)
+				if not panel.actions._go.disabled:
+					panel.actions._on_go()
+			_:
+				return false
+	elif key.alt_pressed and key.keycode in [KEY_1, KEY_2, KEY_3, KEY_4]:
+		show_panel(key.keycode - KEY_1)
+	elif key.alt_pressed and key.keycode in [KEY_LEFT, KEY_RIGHT]:
+		show_panel(2)
+		panel.actions.cycle_action(-1 if key.keycode == KEY_LEFT else 1)
+	elif key.shift_pressed and key.keycode in [KEY_ENTER, KEY_KP_ENTER]:
+		if not panel._end.disabled:
+			end_turn()
+	else:
+		return false
+	return true

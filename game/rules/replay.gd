@@ -104,7 +104,8 @@ func advance(s: GameState, snaps: Snapshots = null, target := -1) -> void:
 ## 走到记录末尾时，补上最后一回合里已经做过的操作。
 func finish(s: GameState) -> void:
 	if s.steps >= last_step():
-		apply_pending(s)
+		if not apply_pending(s) and desync_step < 0:
+			desync_step = s.steps
 
 
 ## 记录比 n 晚的部分全部丢掉（从第 n 次结束回合之后另开一条路）。
@@ -145,9 +146,52 @@ static func load_file(path: String) -> Replay:
 	if f == null:
 		return null
 	var d = f.get_var()
-	if not d is Dictionary or d.get("version", 0) != VERSION:
+	if not valid_data(d):
 		return null
 	return from_dict(d)
+
+
+## 外部文件只能重做已登记的玩家操作；先验证结构和参数，再调用规则函数。
+static func valid_data(d: Variant) -> bool:
+	if not d is Dictionary or d.get("version") != VERSION:
+		return false
+	if not d.get("seed") is int or not d.get("ai_count") is int or d["ai_count"] < 0 or d["ai_count"] > 32:
+		return false
+	if not d.get("spectator") is bool or not d.get("commands") is Array or not d.get("checksums") is Array or not d.get("balance") is Dictionary:
+		return false
+	for value in d["checksums"]:
+		if not value is int:
+			return false
+	for name in d["balance"]:
+		if not name is String or Balance.value_error(name, d["balance"][name]) != "":
+			return false
+	var allowed := ["research", "upgrade", "build", "dispatch", "turn_ship", "send_colony", "move_starship",
+			"settle_starship", "launch_grain", "use_antimatter", "send_sophon", "broadcast", "launch_foil",
+			"launch_line_foil", "start_reduce", "launch_singularity", "launch_black_domain", "set_autoplay",
+			"set_play_on_after_death", "dev_balance", "dev_set", "dev_tech"]
+	var signatures := {}
+	for method in GameState.new().get_method_list():
+		if method["name"] in allowed:
+			signatures[method["name"]] = method["args"]
+	var previous := 0
+	for command in d["commands"]:
+		if not command is Dictionary or not command.get("name") in allowed:
+			return false
+		if not command.get("step") is int or command["step"] < previous or command["step"] > d["checksums"].size():
+			return false
+		previous = command["step"]
+		if not command.get("civ") is int or not command.get("args") is Array or command.get("ai") != false:
+			return false
+		var global_command: bool = command["name"] in ["dev_balance", "set_play_on_after_death"]
+		if (global_command and command["civ"] != -1) or (not global_command and (command["civ"] < 0 or command["civ"] > d["ai_count"])):
+			return false
+		var args: Array = signatures[command["name"]].slice(0 if global_command else 1)
+		if command["args"].size() != args.size():
+			return false
+		for i in args.size():
+			if args[i]["type"] != TYPE_NIL and typeof(command["args"][i]) != args[i]["type"]:
+				return false
+	return true
 
 
 ## 记录里的数值和现在的数值不一样的地方：{名字: [记录时, 现在]}。

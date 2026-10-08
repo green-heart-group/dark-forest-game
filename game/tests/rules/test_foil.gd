@@ -2,6 +2,55 @@ extends "res://tests/rules/rule_suite.gd"
 ## 自身降维和三维里的二向箔：飞行、展开、压平、搬到平面上。
 
 
+## 规则：二向箔，U5
+func test_half_light_speed_spread() -> void:
+	check_eq(Balance.FOIL_SPREAD, 0.5, "已定的默认扩散速度是每回合半格")
+	var s := _two_civs(Vector3i(8, 8, 8))
+	for c in s.civs:
+		c.reduced = true
+	s._unfold_foil(Vector3i.ZERO)
+	check_eq(s.flattened.size(), 1, "刚展开只覆盖落点")
+	s._spread_flat()
+	check_eq(s.foil_zones[0]["age"], 0.5, "半格进度不能截成整数")
+	check(not s.flattened.has(Vector3i(1, 0, 0)), "第一回合够不到邻格")
+	s._spread_flat()
+	check(s.flattened.has(Vector3i(1, 0, 0)), "第二回合累积到一格")
+	check(not s.flattened.has(Vector3i(1, 1, 0)), "一格还够不到面对角")
+	s._unfold_foil(Vector3i(8, 8, 8))
+	s._spread_flat()
+	check_eq(s.foil_zones[1]["age"], 0.5, "后来的原点独立累积")
+	check(s.flattened.has(Vector3i(1, 1, 0)), "半径一点五覆盖面对角")
+	check(not s.flattened.has(Vector3i(1, 1, 1)), "半径一点五不覆盖体对角")
+	s._spread_flat()
+	check(s.flattened.has(Vector3i(1, 1, 1)), "半径二覆盖体对角")
+
+
+## 规则：二向箔，移动
+func test_warp_ship_escapes_half_speed_wave() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	s.human().reduced = true
+	var ship := _ship(s, s.civs[1], Ship.WARSHIP, Vector3(1, 0, 0), Vector3.RIGHT)
+	ship.warp = true
+	s._unfold_foil(Vector3i.ZERO)
+	for i in 4:
+		s.end_turn()
+		check(not ship.dead, "曲率舰船持续逃离半光速波前")
+		check(ship.pos.x > s.foil_zones[0]["age"], "飞船位置领先扩散半径")
+
+
+## 规则：灭亡和胜负
+func test_elimination_reports_cause_once() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var causes := []
+	check(s.has_signal("civilization_eliminated"), "模拟可以监听全体文明的淘汰原因")
+	if not s.has_signal("civilization_eliminated"):
+		return
+	s.connect("civilization_eliminated", func(_civ, cause): causes.append(cause))
+	s._unfold_foil(Vector3i.ZERO)
+	s._unfold_foil(Vector3i.ZERO)
+	check_eq(causes, ["二向箔"], "重叠波前不重复统计同一次淘汰")
+
+
 ## 规则：二向箔，B7
 func test_foil_prepares_flies_and_unfolds() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))
@@ -22,7 +71,7 @@ func test_foil_prepares_flies_and_unfolds() -> void:
 	check(s.map.star_at(Vector3i(1, 0, 2)) == StarMap.Star.DOUBLE, "展开保留原星系")
 	check(not s.flattened.has(Vector3i(2, 0, 1)) and not s.flattened.has(Vector3i(2, 0, 2)), "波前按整列传播")
 	s.end_turn()
-	check(not s.flattened.has(Vector3i(2, 0, 1)), "0.9 格尚未覆盖相邻列")
+	check(not s.flattened.has(Vector3i(2, 0, 1)), "半格尚未覆盖相邻格")
 
 
 ## 规则：二向箔，U2
@@ -83,8 +132,8 @@ func test_reduced_civ_survives_flattening() -> void:
 	check(me.alive and s.map.star_at(Vector3i.ZERO) == StarMap.Star.SINGLE, "降维的文明不受压平影响")
 	s._spread_flat()
 	check(s.civs[1].alive, "扩散一回合，还没压到 2 格外的 AI")
-	s._spread_flat()
-	s._spread_flat()
+	for i in ceili(2.0 / Balance.FOIL_SPREAD) - 1:
+		s._spread_flat()
 	check(not s.civs[1].alive and s.winner == "你", "压到以后，没降维的 AI 灭亡")
 
 
