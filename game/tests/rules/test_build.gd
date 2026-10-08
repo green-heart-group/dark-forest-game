@@ -17,6 +17,11 @@ func test_build_needs_tech_and_respects_limits() -> void:
 	for i in Balance.MAX_COLONY_SHIPS:
 		s.build(me, "colony")
 	check(s.build(me, "colony")["error"] != "", "殖民船最多 %d 艘" % Balance.MAX_COLONY_SHIPS)
+	_give(me, ["starship", "devourer", "sophon"])
+	for limit in [["starship", Balance.MAX_STARSHIPS], ["devourer", Balance.MAX_DEVOURERS], ["sophon", Balance.MAX_SOPHONS]]:
+		for i in limit[1]:
+			check(s.build(me, limit[0])["error"] == "", "造第 %d 个%s" % [i + 1, limit[0]])
+		check(s.build(me, limit[0])["error"] != "", "%s最多 %d 个" % limit)
 	check(s.build(me, "probe", Vector3i(5, 5, 5))["error"] != "", "只能建在自己的星系")
 
 
@@ -59,6 +64,43 @@ func test_facilities_next_turn_and_dyson_cap() -> void:
 	_set_star(s, Vector3i(1, 0, 0), StarMap.Star.DOUBLE)
 	me.colonies.append(Vector3i(1, 0, 0))
 	check(s.build(me, "dyson", Vector3i.ZERO)["error"] == "", "上限按所有星系的恒星总数，可以都建在母星系")
+
+
+## 掩体、恒星广播器每个星系一个，预警系统整个文明一个：下了单还没建好、建好以后，都不能再建。
+## 反物质最多存 1 份。建不成时不扣资源和行动点。
+## 规则：建造
+func test_build_refuses_second_one() -> void:
+	var s := _two_civs(Vector3i(9, 9, 9))
+	var me := s.human()
+	_give(me, ["bunker", "antimatter"])
+	me.energy = 1000
+	me.mineral = 1000
+	me.actions_left = 99
+	var home := me.home
+	var refused := func(kind: String, what: String) -> void:
+		var before := [me.energy, me.mineral, me.actions_left, me.pending.size(), me.antimatter]
+		check(s.build(me, kind)["error"] != "", what)
+		check_eq([me.energy, me.mineral, me.actions_left, me.pending.size(), me.antimatter], before, what + "：不扣资源和行动点")
+	refused.call("bunker", "没有类木行星不能建掩体")
+	s.map.gas[home] = 1
+	for kind in ["bunker", "broadcaster", "warning"]:
+		check(s.build(me, kind)["error"] == "", "可以建" + kind)
+		refused.call(kind, "%s 下了单还没建好，不能再建" % kind)
+	check(s.build(me, "antimatter")["error"] == "", "可以造反物质")
+	refused.call("antimatter", "反物质最多存 %d 份" % Balance.MAX_ANTIMATTER)
+	s.end_turn()
+	check(me.bunkers.has(home) and me.broadcasters.has(home) and me.has_warning, "下一回合建好了")
+	me.actions_left = 99
+	for kind in ["bunker", "broadcaster", "warning"]:
+		refused.call(kind, "%s 建好以后，不能再建" % kind)
+	# 每个星系一个：另一个星系还可以建
+	var other := Vector3i(0, 3, 0)
+	_set_star(s, other, StarMap.Star.SINGLE)
+	s.map.gas[other] = 1
+	me.colonies.append(other)
+	check(s.build(me, "bunker", other)["error"] == "", "另一个星系还可以建掩体")
+	check(s.build(me, "broadcaster", other)["error"] == "", "另一个星系还可以建恒星广播器")
+	check(s.build(me, "warning", other)["error"] != "", "预警系统整个文明只有一个")
 
 
 ## 预警系统是整个文明的：下单的星系在建好前丢了，换个星系照样建好。

@@ -1,10 +1,20 @@
 extends RefCounted
 ## 记下一次测试的结果，规则测试和画面测试共用：
-## 数测试和检查；失败时写出是哪个测试；只跑名字里带某个词的测试（命令行最后加 -- only=词）；
-## 最后打印一行汇总和最慢的几个测试，返回退出码（有失败时是 1）。
+## 数测试和检查；失败时写出是哪个测试；最后打印一行汇总和最慢的几个测试，返回退出码（有失败时是 1）。
+## 命令行最后（-- 后面）可以加：
+##   only=词         只跑名字里带这个词的测试
+##   tests=文件      只跑文件里列出的测试（一行一个名字），规则测试还按文件里的顺序跑
+##   report=文件     结束时把结果写成 JSON（tools/test.py 分几个进程跑时用它合并结果）
+##   stop_on_fail    第一次失败就停（变异测试只要知道有没有失败）
 
 ## 只跑名字里带这个词的测试；空的时候全跑
 var only := ""
+## 只跑这些测试；空的时候不限
+var listed: Array[String] = []
+var report_path := ""
+var stop_on_fail := false
+## stop_on_fail 时已经失败过，后面的测试都不跑了
+var stopped := false
 var tests := 0
 var checks := 0
 ## 失败的测试名（同一个测试失败几次只记一次）
@@ -22,11 +32,22 @@ func _init() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("only="):
 			only = arg.trim_prefix("only=")
+		elif arg.begins_with("tests="):
+			for line in FileAccess.get_file_as_string(arg.trim_prefix("tests=")).split("\n", false):
+				listed.append(line.strip_edges())
+		elif arg.begins_with("report="):
+			report_path = arg.trim_prefix("report=")
+		elif arg == "stop_on_fail":
+			stop_on_fail = true
 	_all_started_at = Time.get_ticks_msec()
 
 
 ## 这个测试要不要跑。
 func wants(name: String) -> bool:
+	if stopped:
+		return false
+	if not listed.is_empty() and not listed.has(name):
+		return false
 	return only == "" or name.contains(only)
 
 
@@ -63,6 +84,8 @@ func fail(what: String, where := "") -> void:
 	var name := _name if _name != "" else where
 	if not failed.has(name):
 		failed.append(name)
+	if stop_on_fail:
+		stopped = true
 	push_error("失败：[%s] %s" % [name, what])
 
 
@@ -79,6 +102,9 @@ func finish(title: String) -> int:
 		print("最慢的：" + "，".join(parts))
 	if not failed.is_empty():
 		print("失败的测试：" + "，".join(failed))
+	if report_path != "":
+		var f := FileAccess.open(report_path, FileAccess.WRITE)
+		f.store_string(JSON.stringify({"tests": tests, "checks": checks, "failed": failed, "times": _times}))
 	return 1 if not failed.is_empty() else 0
 
 

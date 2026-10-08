@@ -43,6 +43,7 @@
 - [x] 自动发布 Windows exe 和网页版；运行时不再读 `balance.gd` 的原文
 - [x] 把 `feature/prototype` 合并回 `master`，以后用 GitHub Flow：改动通过 PR 合并，PR 自动跑测试（[decisions/0003](decisions/0003-github-flow.md)）
 - [x] 整理测试：规则测试按规则分成 20 个文件，一条命令跑全部（本地和 GitHub 一样），检查每条规则都有测试，写测试的规矩写进 [代码结构](guides/code.md#写测试的规矩)
+- [x] 测试分几个进程同时跑（本地约 4 秒）；加了变异测试（`game/tools/mutate.py`），找出规则代码里出错时测试发现不了的地方
 
 ## 已完成：光速和科技树（阶段 3）
 
