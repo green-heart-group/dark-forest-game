@@ -21,6 +21,8 @@ uv run game/tools/test.py unfolding
 ## 操作
 
 - 打开时是暂停的，先显示一列。选「全图」看整张星图一起展开。
+- 「固定映射」开头的四个场景是新的展开方式：每个格子最后的位置和打击点无关，从一个或两个原点按球形扩张，先铺成局部平面再合到一起。白色是原点。
+  第二个原点的位置跟着锚点算，不能单独设。
 - 打击点（展开的起点）的 x、y、z 填 0～8；方块上的 1～9 是它原来在第几层。
 - 播放、暂停、重播，前后拖动进度条，0.5 / 1 / 2 倍速。
 - 左键拖动旋转，滚轮缩放，可以切到俯视或重置视角。
@@ -41,6 +43,6 @@ godot_console --path game --script res://tests/run_unfolding_tests.gd -- output=
 
 | 文件 | 管什么 |
 | --- | --- |
-| `game/rules/unfolding_layout.gd` | 规则和演示共用：一列 9 格怎样排成 3×3，以及展开到一半时每个方块画在哪里 |
+| `game/rules/unfolding_layout.gd` | 规则和演示共用：一列 9 格怎样排成 3×3，以及展开到一半时每个方块画在哪里；固定映射（皮亚诺曲线）和多原点球形扩张 |
 | `game/demos/dimension_unfolding.gd`、`.tscn` | 演示场景：方块、镜头、控件 |
 | `game/tests/run_unfolding_tests.gd` | 演示的测试：格子一个不少、能还原、相邻的列展开时不重叠、控件和关键画面 |

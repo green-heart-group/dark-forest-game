@@ -7,10 +7,15 @@ const COLORS: Array[Color] = [Color("5375bd"), Color("647dd4"), Color("7d8ee0"),
 		Color("929ee8"), Color("64b9c7"), Color("54ccb9"), Color("8ad7b2"),
 		Color("b4df9b"), Color("d7df9b")]
 const GOLD := Color("ffc875")
+## 球形扩张的场景，原点见 origins()。第一个原点总是锚点输入框里的格子。
+const SCENES := ["固定映射 · 单原点", "固定映射 · 同时两个原点", "固定映射 · 先后两个原点", "固定映射 · 范围重叠"]
+const OWNER_COLORS: Array[Color] = [Color("ffc875"), Color("f08aa8")]
 
 var progress := 0.0
 var playing := false
 var single := true
+## 0 单列，1 全图按列展开，2 起是 SCENES 里的球形扩张场景。
+var scene := 0
 var anchor := Vector3i(4, 4, 4)
 var speed := 1.0
 var layout := {}
@@ -154,6 +159,8 @@ func _build_ui() -> void:
 	mode = OptionButton.new()
 	mode.add_item("单列 · 9 → 3×3")
 	mode.add_item("全图 · 729 → 27×27")
+	for text in SCENES:
+		mode.add_item(text)
 	mode.custom_minimum_size = Vector2(220, 40)
 	mode.item_selected.connect(set_mode)
 	options.add_child(mode)
@@ -200,6 +207,7 @@ func _button(parent: Node, text: String, action: Callable) -> Button:
 
 func set_mode(index: int) -> void:
 	single = index == 0
+	scene = index
 	mode.select(index)
 	playing = false
 	reset_view()
@@ -239,6 +247,9 @@ func set_progress(value: float) -> void:
 	progress = clampf(value, 0.0, 1.0)
 	if progress >= 1.0:
 		playing = false
+	if scene >= 2:
+		_show_spread()
+		return
 	layout = Layout.sample(progress, anchor, single)
 	var points: PackedVector3Array = layout["positions"]
 	instances.multimesh.visible_instance_count = points.size()
@@ -260,6 +271,44 @@ func set_progress(value: float) -> void:
 	_counter.text = "%d 格 · 全部保留" % points.size()
 	_status.text = "%d / %d 列已展开" % [layout["finished"], 1 if single else 81]
 	_note.text = "金色为固定锚点 · 颜色对应原 z 层 · 拖动旋转 / 滚轮缩放 · 空格播放 · ← → 逐步查看"
+	_update_camera()
+
+
+## 当前场景的原点和开始时间（单位和扩张半径相同，每单位时间扩张 1 格）。
+func origins() -> Array:
+	var second := Vector3i(8 - anchor.x, 8 - anchor.y, (anchor.z + 4) % 9)
+	match scene - 2:
+		1: return [{"at": anchor, "start": 0.0}, {"at": second, "start": 0.0}]
+		2: return [{"at": anchor, "start": 0.0}, {"at": second, "start": 5.0}]
+		3: return [{"at": anchor, "start": 0.0},
+				{"at": (anchor + Vector3i(3, 2, 2)).clamp(Vector3i.ZERO, Vector3i.ONE * 8), "start": 1.5}]
+	return [{"at": anchor, "start": 0.0}]
+
+
+func _show_spread() -> void:
+	var list := origins()
+	var time := lerpf(-Layout.SPACE_LEAD, Layout.spread_duration(list), progress)
+	layout = Layout.sample_spread(time, list)
+	var points: PackedVector3Array = layout["positions"]
+	instances.multimesh.visible_instance_count = points.size()
+	for i in points.size():
+		var c: Vector3i = layout["cells"][i]
+		var q: float = layout["amounts"][i]
+		var size := Vector3(lerpf(0.48, 0.87, q), lerpf(0.48, 0.87, q), lerpf(0.48, 0.055, q * q))
+		instances.multimesh.set_instance_transform(i, Transform3D(Basis.from_scale(size), points[i]))
+		var color := COLORS[c.z].lerp(OWNER_COLORS[layout["owners"][i] % OWNER_COLORS.size()], q * 0.55)
+		if list.any(func(o): return o["at"] == c):
+			color = Color.WHITE
+		instances.multimesh.set_instance_color(i, color)
+	for number in _numbers:
+		number.visible = false
+	_guides.mesh = null
+	timeline.set_value_no_signal(progress)
+	_percent.text = "%d%%" % floori(progress * 100)
+	play_button.text = "暂停" if playing else "播放"
+	_counter.text = "%d 格 · 全部保留" % points.size()
+	_status.text = "%d / %d 格已落到平面" % [layout["finished"], Layout.COUNT]
+	_note.text = "白色为打击原点 · 颜色对应原 z 层，铺平后偏向所属原点 · 最终位置和打击点无关"
 	_update_camera()
 
 

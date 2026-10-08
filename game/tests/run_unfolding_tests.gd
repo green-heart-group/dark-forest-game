@@ -45,6 +45,9 @@ func run() -> void:
 		return
 	await run_test(test_bijection)
 	await run_test(test_expansion)
+	await run_test(test_fixed_mapping)
+	await run_test(test_spread)
+	await run_test(test_spread_origins)
 	demo = load("res://demos/dimension_unfolding.tscn").instantiate()
 	root.add_child(demo)
 	await process_frame
@@ -131,6 +134,100 @@ func test_expansion() -> void:
 							"单列方块没有相交")
 
 
+func test_fixed_mapping() -> void:
+	var cubes := {}
+	var planes := {}
+	for i in Layout.COUNT:
+		var c := Layout.line_origin(i)
+		var p := Layout.fixed_plane(c)
+		check(c.clamp(Vector3i.ZERO, Vector3i.ONE * 8) == c, "三维坐标在 9×9×9 里")
+		check(p.clamp(Vector2i.ZERO, Vector2i.ONE * 26) == p, "二维坐标在 27×27 里")
+		check(not cubes.has(c) and not planes.has(p), "三维、二维都没有重复的格子")
+		cubes[c] = true
+		planes[p] = true
+		check_eq(Layout.line_index(c), i, "三维到一维可还原")
+		check_eq(Layout.plane_to_line(p), i, "二维到一维和三维到一维一致")
+		check_eq(Layout.plane_origin(p), c, "二维可还原到原来的三维格子")
+		if i > 0:
+			var before := Layout.line_origin(i - 1)
+			check_eq(absi(c.x - before.x) + absi(c.y - before.y) + absi(c.z - before.z), 1, "直线上相邻的格子在三维里也相邻")
+			var flat := Layout.fixed_plane(before)
+			check_eq(absi(p.x - flat.x) + absi(p.y - flat.y), 1, "直线上相邻的格子在平面上也相邻")
+	check(cubes.size() == 729 and planes.size() == 729, "不丢格子")
+	# 选这种排法的原因：原来相距 4 格以上、展开后在平面上紧挨着的格子对很少（按列展开时有 378 对）。
+	var far_neighbors := 0
+	for p in planes:
+		for step in [Vector2i(1, 0), Vector2i(0, 1)]:
+			if planes.has(p + step) and Vector3(Layout.plane_origin(p) - Layout.plane_origin(p + step)).length() >= 4.0:
+				far_neighbors += 1
+	check(far_neighbors <= 18, "原来远的格子很少在平面上变成紧挨着（%d 对）" % far_neighbors)
+
+
+func test_spread() -> void:
+	var cases: Array = [
+		[{"at": Vector3i(4, 4, 4), "start": 0.0}],
+		[{"at": Vector3i(0, 0, 8), "start": 0.0}],
+		[{"at": Vector3i(1, 2, 3), "start": 0.0}, {"at": Vector3i(7, 6, 6), "start": 0.0}],
+		[{"at": Vector3i(1, 2, 3), "start": 0.0}, {"at": Vector3i(7, 6, 6), "start": 5.0}],
+		[{"at": Vector3i(4, 4, 4), "start": 0.0}, {"at": Vector3i(6, 5, 6), "start": 1.5}],
+	]
+	for origins in cases:
+		var start: Dictionary = Layout.sample_spread(-Layout.SPACE_LEAD, origins)
+		var end := Layout.spread_duration(origins)
+		var final := Layout.sample_spread(end, origins)
+		var base: Vector3 = final["base"]
+		check_eq(final["finished"], Layout.COUNT, "最后每个格子都落到平面")
+		var spots := {}
+		for i in Layout.COUNT:
+			var c: Vector3i = final["cells"][i]
+			check(start["positions"][i].is_equal_approx(Vector3(c)), "开始时是原来的三维格子")
+			var p := Layout.fixed_plane(c)
+			check(final["positions"][i].is_equal_approx(Vector3(p.x + base.x, p.y + base.y, base.z)),
+					"最后落在固定映射的位置")
+			spots[final["positions"][i]] = true
+		check_eq(spots.size(), Layout.COUNT, "最后没有两个格子重叠")
+		var almost := Layout.sample_spread(end - 0.001, origins)
+		for i in Layout.COUNT:
+			check(almost["positions"][i].distance_to(final["positions"][i]) < 0.01, "结束前后没有跳变")
+		var reversed: Array = origins.duplicate()
+		reversed.reverse()
+		for time in [1.0, 3.7, end]:
+			var a := Layout.sample_spread(time, origins)
+			var b := Layout.sample_spread(time, reversed)
+			var same: bool = a["amounts"] == b["amounts"]
+			for i in Layout.COUNT:
+				same = same and a["positions"][i].is_equal_approx(b["positions"][i])
+			check(same, "原点的先后顺序不改变结果")
+	# 同时展开的原点 z 平均是半整数时往上取
+	check_eq(Layout.base_plane([{"at": Vector3i(1, 2, 3), "start": 0.0}, {"at": Vector3i(7, 6, 6), "start": 0.0}]).z,
+			5.0, "基准平面取同时展开的原点 z 的平均，.5 往上")
+	check_eq(Layout.base_plane([{"at": Vector3i(1, 2, 3), "start": 0.0}, {"at": Vector3i(7, 6, 6), "start": 2.0}]).z,
+			3.0, "后来的原点不改变基准平面")
+
+
+func test_spread_origins() -> void:
+	var near := {"at": Vector3i(2, 2, 2), "start": 0.0}
+	var late := {"at": Vector3i(8, 8, 8), "start": 6.0}
+	var hit := Layout.arrivals([near, late])
+	var alone := Layout.arrivals([near])
+	var owners := {}
+	for c in hit["owner"]:
+		owners[hit["owner"][c]] = true
+		var own: Dictionary = [near, late][hit["owner"][c]]
+		check(is_equal_approx(hit["time"][c], own["start"] + Vector3(c - own["at"]).length()), "波及时间按自己的原点算")
+		check(hit["time"][c] <= alone["time"][c] + 1e-6, "多一个原点只会让格子更早或同时被波及")
+		if hit["owner"][c] == 0:
+			check(is_equal_approx(hit["time"][c], alone["time"][c]), "先被近处原点波及的格子不受另一个原点影响")
+	check(owners.size() == 2, "两个原点各自波及一部分格子")
+	# 远处的格子不会因为另一个原点的动画提前铺平
+	for time in [2.0, 5.0]:
+		var both := Layout.sample_spread(time, [near, late])
+		var single := Layout.sample_spread(time, [near])
+		check(both["amounts"] == single["amounts"], "第二个原点开始前，展开进度和只有一个原点时一样")
+	var same_time := Layout.arrivals([{"at": Vector3i(2, 4, 4), "start": 0.0}, {"at": Vector3i(6, 4, 4), "start": 0.0}])
+	check_eq(same_time["owner"][Vector3i(4, 4, 4)], 0, "同时到达时归坐标小的原点")
+
+
 func test_controls() -> void:
 	check(not demo.playing and demo.single, "启动暂停，先展示单列")
 	demo.play_button.pressed.emit()
@@ -203,6 +300,17 @@ func test_frames() -> void:
 	demo.seek(0.55)
 	check(is_equal_approx(demo.progress, 0.55), "关键帧场景停在指定进度")
 	await capture("corner-wave")
+	demo.anchor_inputs[0].value = 2
+	demo.anchor_inputs[1].value = 3
+	demo.anchor_inputs[2].value = 2
+	for scene in demo.SCENES.size():
+		demo.set_mode(scene + 2)
+		check_eq(demo.origins().size(), 1 if scene == 0 else 2, "场景的原点个数")
+		for t in [0.3, 0.6, 1.0]:
+			demo.seek(t)
+			check(demo.instances.multimesh.visible_instance_count == 729, "球形扩张也画 729 个格子")
+			await capture("spread%d-%03d" % [scene, roundi(t * 100)])
+		check_eq(demo.layout["finished"], 729, "播完时全部落到平面")
 
 
 func capture(label: String) -> void:
