@@ -542,11 +542,16 @@ func test_flat_and_line() -> void:
 	check(s.human().foils.size() == 1, "通过执行按钮发射二向箔")
 	s.launch_foil(s.civs[1], Vector3i(7, 7, 7))
 	map._set_hover(_pickable_at(s.human().home))
+	var plane_captured := false
 	for i in 180:
 		if s.all_flat():
 			break
 		panel._end.pressed.emit()
 		await process_frame
+		if not plane_captured and s.flattened.size() > 150:
+			await settled_frame()
+			await capture("collapsing-to-plane")
+			plane_captured = true
 	await settled_frame()
 	check(s.all_flat() and not s.is_over(), "3D 结束后进入可玩的 2D")
 	check(not panel._end.disabled, "二维可以继续结束回合")

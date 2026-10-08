@@ -8,14 +8,20 @@ const PLANE_SIZE := Layout.SIZE * 3
 const COUNT := Layout.COUNT
 
 
+## 三维格子在平面上的坐标：固定映射（U3），和打击点无关，平面高度是 layer。
 static func plane_cell(c: Vector3i, layer: int) -> Vector3i:
-	var p := Layout.to_plane(c, layer)
+	var p := Layout.fixed_plane(c)
 	return Vector3i(p.x, p.y, layer)
 
 
+## 平面上的格子在直线上的坐标：沿同一条曲线（U3），直线所在的行是 row。
 static func line_cell(c: Vector3i, row: int) -> Vector3i:
-	# 蛇形遍历：相邻列的端点相接，保留平面上连续路径。
-	return Vector3i(c.x * PLANE_SIZE + (c.y if c.x % 2 == 0 else PLANE_SIZE - 1 - c.y), row, c.z)
+	return Vector3i(Layout.plane_to_line(Vector2i(c.x, c.y)), row, c.z)
+
+
+## 展开中的箔换成 Layout 用的原点：每片箔已经扩散了 age 格，相当于在 -age 时开始扩张。
+static func zone_origins(zones: Array[Dictionary]) -> Array:
+	return zones.map(func(z): return {"at": z["center"], "start": -z["age"]})
 
 
 static func map_cell(c: Vector3i, anchor: Vector3i, to_line: bool) -> Vector3i:
@@ -99,8 +105,11 @@ static func commit(s: GameState, to_line: bool) -> void:
 			s.system_cells.append(c)
 	s._view_cache.clear()
 	s.last_mapping = mapping
-	# 只改变坐标标签；渲染位置仍固定在第一打击点，不在换图时跳动。
-	s.visual_offset += Vector3(anchor - map_cell(anchor, anchor, to_line))
+	# 画面上整张图落在展开动画的终点（固定映射再整体平移 base_plane），换坐标时不跳动。
+	var zones := s.line_zones if to_line else s.foil_zones
+	if not zones.is_empty():
+		var base := Layout.base_plane(zone_origins(zones), to_line)
+		s.visual_offset += base - (Vector3(map_cell(anchor, anchor, to_line)) - Layout.target(anchor, to_line))
 	s.dimension = 1 if to_line else 2
 	s.space_epoch += 1
 	s.add_log("宇宙展开为 %s，729 格完整保留；旧情报失效，需要重新探索" % ("729 格直线" if to_line else "27×27 平面"))
@@ -118,6 +127,7 @@ static func _move_ship(ship: Ship, anchor: Vector3i, to_line: bool, old: StarMap
 
 
 ## 所有键均为本阶段的逻辑坐标；渲染的位置绝不写回规则。
+## 展开中用和演示一样的球形扩张（Layout.sample_spread）；规则压平的格子画面上也已铺平。
 static func frame(s: GameState) -> Dictionary:
 	var positions := {}
 	var amounts := {}
@@ -128,45 +138,13 @@ static func frame(s: GameState) -> Dictionary:
 			positions[c] = Vector3(c) + s.visual_offset
 			amounts[c] = 0.0
 		return {"positions": positions, "amounts": amounts}
-	var anchor := s.line_anchor if to_line else s.fold_anchor
-	var n := PLANE_SIZE if to_line else SIZE
-	var widths := PackedFloat32Array()
-	var heights := PackedFloat32Array()
-	widths.resize(n)
-	heights.resize(n)
-	widths.fill(1.0)
-	heights.fill(1.0)
-	var q := {}
-	for x in n:
-		for y in (1 if to_line else n):
-			var value := 0.0
-			var reserved := 0.0
-			for zone in zones:
-				var center: Vector3i = zone["center"]
-				var distance := GameState.zone_distance(center, Vector3i(x, y, 0), to_line)
-				value = maxf(value, Layout.smooth_amount((zone["age"] - distance + Layout.WAVE_WIDTH) / Layout.WAVE_WIDTH))
-				reserved = maxf(reserved, Layout.spread(Layout.smooth_amount((zone["age"] - distance + Layout.WAVE_WIDTH + Layout.SPACE_LEAD) / Layout.WAVE_WIDTH)))
-			q[Vector2i(x, y)] = value
-			widths[x] = maxf(widths[x], 1.0 + (26.0 if to_line else 2.0) * reserved)
-			if not to_line:
-				heights[y] = maxf(heights[y], 1.0 + 2.0 * reserved)
-	var cx := Layout.centers(widths, anchor.x)
-	var cy := Layout.centers(heights, anchor.y if not to_line else 0)
-	for c in s.map.cells():
-		var t: float = q[Vector2i(c.x, 0 if to_line else c.y)]
-		var p: Vector3
-		if to_line:
-			# 奇偶列的中心不同；统一以 13 为中心，保证最终映射和连续动画一致。
-			var anchor_slot := anchor.y if anchor.x % 2 == 0 else 26 - anchor.y
-			var slot := c.y if c.x % 2 == 0 else 26 - c.y
-			p = Vector3(cx[c.x] + (slot - anchor_slot) * Layout.spread(t), lerpf(c.y, anchor.y, t * t), c.z)
-		else:
-			var offset := Vector2(Layout.slot(c.z, anchor.z)) * Layout.spread(t)
-			p = Vector3(cx[c.x] + offset.x, cy[c.y] + offset.y, lerpf(c.z, anchor.z, t * t))
-		positions[c] = p + s.visual_offset
-		amounts[c] = t
+	# 时间取 WAVE_WIDTH：波前扫到的格子（离落点不超过 age）正好铺平
+	var sample := Layout.sample_spread(Layout.WAVE_WIDTH, zone_origins(zones), to_line)
+	for i in sample["cells"].size():
+		var c: Vector3i = sample["cells"][i]
+		positions[c] = sample["positions"][i] + s.visual_offset
+		amounts[c] = sample["amounts"][i]
 	return {"positions": positions, "amounts": amounts}
-
 
 ## 图外来袭使用射线进入旧星图的位置作新航向，不能把位置和方向都夹到同一边缘后停住。
 static func _heading_point(p: Vector3, direction: Vector3, map: StarMap) -> Vector3:

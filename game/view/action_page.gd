@@ -291,7 +291,7 @@ func _refresh_aim_inputs() -> void:
 		Action.FOIL:
 			_dist_row.tooltip_text = "离发射源多远（以目标格子为中心压平）"
 		Action.LINE_FOIL:
-			_dist_row.tooltip_text = "离发射源多远（沿 x 扩散，最终展开为 %d 格直线）" % DimensionSpace.COUNT
+			_dist_row.tooltip_text = "离发射源多远（在平面上向四周扩散，最终展开为 %d 格直线）" % DimensionSpace.COUNT
 		Action.DOMAIN:
 			_dist_row.tooltip_text = "离发射源多远（黑域的中心）"
 		Action.BROADCAST:
@@ -357,7 +357,7 @@ func _action_specs() -> Dictionary:
 				"从有广播器的发射源把一个坐标以光速告诉所有人。那里的文明可能被听到的人（包括看不见的隐藏文明）打。离目标越近，越容易暴露自己。",
 				Aim.TARGET],
 		Action.FOIL: ["📄", "二向箔",
-				"准备 %d 回合后飞向目标格子，路上不停，到了才展开（可以打空格子）：每列 9 格展开为 3×3，波前持续扩散。全图完成后得到 %d×%d 新坐标并重新探索。未自身降维的文明会被消灭。" % [Balance.FOIL_PREPARE_TURNS, DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE],
+				"准备 %d 回合后飞向目标格子，路上不停，到了才展开（可以打空格子）：从落点向四周球形扩散，扫过的格子铺到平面上固定的位置。全图完成后得到 %d×%d 新坐标并重新探索。未自身降维的文明会被消灭。" % [Balance.FOIL_PREPARE_TURNS, DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE],
 				Aim.TARGET],
 		Action.LINE_FOIL: ["━", "单向著",
 				"二维里用。准备 %d 回合后起飞，展开后沿 x 轴扩散，把平面压成直线。只有再次降维的文明能活。" % Balance.FOIL_PREPARE_TURNS,

@@ -137,30 +137,48 @@ const MAX_PUSH := 6.0
 
 ## 每个格子被哪个原点先波及、什么时候波及。origins 里每项是 {"at": Vector3i, "start": float}，
 ## 扩张速度是每单位时间 1 格。同时到达时按原点坐标比大小，所以原点的先后顺序不影响结果。
-static func arrivals(origins: Array) -> Dictionary:
+## to_line 为真时是平面压成直线：格子是 27×27 平面上的，高度取原点的 z。
+static func arrivals(origins: Array, to_line := false) -> Dictionary:
 	var owner := {}
 	var time := {}
-	for x in SIZE:
-		for y in SIZE:
-			for z in SIZE:
-				var c := Vector3i(x, y, z)
-				var best := -1
-				for i in origins.size():
-					var t: float = origins[i]["start"] + Vector3(c - origins[i]["at"]).length()
-					if best < 0 or t < time[c] - 1e-6 or (absf(t - time[c]) <= 1e-6 and _before(origins[i]["at"], origins[best]["at"])):
-						best = i
-						time[c] = t
-				owner[c] = best
+	for c in stage_cells(origins, to_line):
+		var best := -1
+		for i in origins.size():
+			var t: float = origins[i]["start"] + Vector3(c - origins[i]["at"]).length()
+			if best < 0 or t < time[c] - 1e-6 or (absf(t - time[c]) <= 1e-6 and _before(origins[i]["at"], origins[best]["at"])):
+				best = i
+				time[c] = t
+		owner[c] = best
 	return {"owner": owner, "time": time}
+
+
+## 这一步展开前的全部格子：9×9×9 的体，或者高度为原点 z 的 27×27 平面。
+static func stage_cells(origins: Array, to_line: bool) -> Array[Vector3i]:
+	var cells: Array[Vector3i] = []
+	var n := SIZE * 3 if to_line else SIZE
+	for x in n:
+		for y in n:
+			for z in (1 if to_line else SIZE):
+				cells.append(Vector3i(x, y, origins[0]["at"].z if to_line else z))
+	return cells
 
 
 static func _before(a: Vector3i, b: Vector3i) -> bool:
 	return a.x < b.x or (a.x == b.x and (a.y < b.y or (a.y == b.y and a.z < b.z)))
 
 
-## 最早一批原点决定基准平面：高度取它们 z 的平均（四舍五入，.5 往上），
-## 水平位置让这批原点的格子平均起来不动。之后的原点铺好局部平面后向它靠拢。
-static func base_plane(origins: Array) -> Vector3:
+## 格子最后在低一维里的坐标，压掉的轴是 0：体到平面是 (平面 x, 平面 y, 0)，平面到直线是 (直线上的位置, 0, 0)。
+static func target(c: Vector3i, to_line: bool) -> Vector3:
+	if to_line:
+		return Vector3(plane_to_line(Vector2i(c.x, c.y)), 0, 0)
+	var p := fixed_plane(c)
+	return Vector3(p.x, p.y, 0)
+
+
+## 最早一批原点决定基准平面（或直线）：压掉的轴取它们坐标的平均（.5 往上取），
+## 另外的轴让这批原点的格子平均起来不动。之后的原点铺好局部平面后向它靠拢。
+## 规则也用它定平面的高度（GameState.flat_plane）和直线所在的行（line_y）。
+static func base_plane(origins: Array, to_line := false) -> Vector3:
 	var first := INF
 	for o in origins:
 		first = minf(first, o["start"])
@@ -168,16 +186,15 @@ static func base_plane(origins: Array) -> Vector3:
 	var n := 0
 	for o in origins:
 		if absf(o["start"] - first) <= 1e-6:
-			shift += _local_shift(o["at"])
+			shift += _local_shift(o["at"], to_line)
 			n += 1
 	shift /= n
-	return Vector3(roundf(shift.x), roundf(shift.y), floorf(shift.z + 0.5))
+	return (shift + Vector3.ONE * 0.5).floor()
 
 
-## 让原点所在格子留在原地的局部平面：平面坐标加上这个偏移就是画的位置，高度是原点的 z。
-static func _local_shift(at: Vector3i) -> Vector3:
-	var p := fixed_plane(at)
-	return Vector3(at.x - p.x, at.y - p.y, at.z)
+## 让原点所在格子留在原地的局部平面：target 加上这个偏移就是画的位置。
+static func _local_shift(at: Vector3i, to_line: bool) -> Vector3:
+	return Vector3(at) - target(at, to_line)
 
 
 ## 扩张半径 r 的球铺成平面后大约多宽，比 r 多出来的部分就是周围空间要推开的距离。
@@ -189,52 +206,50 @@ static func _push(r: float) -> float:
 
 ## 多个原点各自按球形扩张，被波及的格子先铺到自己原点的局部平面，再一起靠拢到基准平面，
 ## 最后每个格子都落在固定映射的位置上（再整体平移 base_plane）。time 是从最早的原点开始算的时间。
-static func sample_spread(time: float, origins: Array) -> Dictionary:
-	var hit := arrivals(origins)
-	var base := base_plane(origins)
+## 对局里每片箔的 start 是负的已扩散距离（见 DimensionSpace.frame）。
+static func sample_spread(time: float, origins: Array, to_line := false) -> Dictionary:
+	var hit := arrivals(origins, to_line)
+	var base := base_plane(origins, to_line)
 	var cells: Array[Vector3i] = []
 	var positions := PackedVector3Array()
 	var amounts := PackedFloat32Array()
 	var owners := PackedInt32Array()
 	var finished := 0
-	for x in SIZE:
-		for y in SIZE:
-			for z in SIZE:
-				var c := Vector3i(x, y, z)
-				var o: Dictionary = origins[hit["owner"][c]]
-				var q := smooth_amount((time - hit["time"][c]) / WAVE_WIDTH)
-				var standing := Vector3(c)
-				for other in origins:
-					var away := Vector3(c - other["at"])
-					var r: float = time - other["start"]
-					if away.length() > r and away.length() > 0.0:
-						standing += away.normalized() * _push(r) * clampf(r / maxf(away.length(), 1.0), 0.0, 1.0)
-				var merge := smooth_amount((time - o["start"] - MERGE_DELAY) / MERGE_TIME)
-				var shift := _local_shift(o["at"]).lerp(base, merge)
-				var p := fixed_plane(c)
-				var flat := Vector3(p.x + shift.x, p.y + shift.y, shift.z)
-				var at := standing.lerp(flat, q)
-				at.z = lerpf(standing.z, flat.z, q * q)
-				if q >= 1.0 and merge >= 1.0:
-					finished += 1
-				cells.append(c)
-				positions.append(at)
-				amounts.append(q)
-				owners.append(hit["owner"][c])
+	for c in stage_cells(origins, to_line):
+		var o: Dictionary = origins[hit["owner"][c]]
+		var q := smooth_amount((time - hit["time"][c]) / WAVE_WIDTH)
+		var standing := Vector3(c)
+		for other in origins:
+			var away := Vector3(c - other["at"])
+			var r: float = time - other["start"]
+			if away.length() > r and away.length() > 0.0:
+				standing += away.normalized() * _push(r) * clampf(r / maxf(away.length(), 1.0), 0.0, 1.0)
+		var merge := smooth_amount((time - o["start"] - MERGE_DELAY) / MERGE_TIME)
+		var flat := target(c, to_line) + _local_shift(o["at"], to_line).lerp(base, merge)
+		var at := standing.lerp(flat, q)
+		# 压掉的轴慢一些落下，先向外铺开再落平
+		at.z = lerpf(standing.z, flat.z, q * q)
+		if to_line:
+			at.y = lerpf(standing.y, flat.y, q * q)
+		if q >= 1.0 and merge >= 1.0:
+			finished += 1
+		cells.append(c)
+		positions.append(at)
+		amounts.append(q)
+		owners.append(hit["owner"][c])
 	return {"cells": cells, "positions": positions, "amounts": amounts, "owners": owners,
 			"finished": finished, "base": base}
 
 
 ## sample_spread 要播多久才全部落定。
-static func spread_duration(origins: Array) -> float:
-	var hit := arrivals(origins)
+static func spread_duration(origins: Array, to_line := false) -> float:
+	var hit := arrivals(origins, to_line)
 	var last := 0.0
 	for c in hit["time"]:
 		last = maxf(last, hit["time"][c] + WAVE_WIDTH)
 	for o in origins:
 		last = maxf(last, o["start"] + MERGE_DELAY + MERGE_TIME)
 	return last
-
 
 ## 同一进度总是得到同一布局，允许任意回放、倒放、拖动。
 ## 只固定首个打击点；其他列的中心随扩张移动。锚点层在每个局部 3×3 的中心。

@@ -75,11 +75,11 @@ var hidden_foils: Array[Foil] = []
 var broadcasts: Array[Dictionary] = []
 ## 航迹：每项是 {"a": 起点, "b": 终点, "turn": 第几回合留下, "gone": 被降维抹掉了}
 var wakes: Array[Dictionary] = []
-## 展开的二向箔：每项是 {"center": 展开的格子, "age": 压平的圆的半径（每回合加 FOIL_SPREAD）}
+## 展开的二向箔：每项是 {"center": 展开的格子, "age": 压平的球的半径（每回合加 FOIL_SPREAD）}
 var foil_zones: Array[Dictionary] = []
-## 第一片二向箔确定全图共同平面，后续展开不会再产生不同高度的平面。
+## 全图共同平面的高度：第一回合展开的二向箔 z 的平均（U3），后续展开不会再产生不同高度的平面。
 var flat_plane := -1
-## 二维格子压到共同直线的 y；z 始终为 flat_plane，直线沿 x 轴。
+## 二维格子压到共同直线的 y（第一回合展开的单向著 y 的平均）；z 始终为 flat_plane，直线沿 x 轴。
 var linearized: Dictionary[Vector3i, int] = {}
 var line_zones: Array[Dictionary] = []
 var line_y := -1
@@ -2205,10 +2205,7 @@ static func foil_kind(f: Foil) -> String:
 func _flatten_cell(c: Vector3i, plane: int) -> void:
 	if dimension != 3 or flattened.has(c) or not map.contains(c):
 		return
-	if flat_plane < 0:
-		flat_plane = plane
-		fold_anchor = Vector3i(c.x, c.y, plane)
-	flattened[c] = flat_plane
+	flattened[c] = plane
 	_compress_cell(c, false)
 	if flattened.size() == DimensionSpace.COUNT:
 		DimensionSpace.commit(self, false)
@@ -2285,15 +2282,18 @@ func line_y_for(target: Vector3i) -> int:
 	return line_y if line_y >= 0 else target.y
 
 
-## 二向箔在格子 at 展开：平面的高度是第一片箔定下的，马上压平它能压到的格子。
+## 二向箔在格子 at 展开，从这里按球形向外扩散（U3），马上压平它能压到的格子。
+## 平面的高度由第一回合展开的箔定下：同一回合有几片时取它们 z 的平均，之后的箔不再改。
 func _unfold_foil(at: Vector3i) -> void:
 	if dimension != 3 or not map.contains(at):
 		return
-	if flat_plane < 0:
-		flat_plane = foil_plane_for(at)
-		fold_anchor = at
-	var zone := {"center": Vector3i(at.x, at.y, flat_plane), "age": 0.0}
+	var zone := {"center": at, "age": 0.0}
 	foil_zones.append(zone)
+	if foil_zones.all(func(z): return z["age"] == 0.0):
+		flat_plane = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(foil_zones)).z)
+		fold_anchor = Vector3i(foil_zones[0]["center"].x, foil_zones[0]["center"].y, flat_plane)
+		for c in flattened:
+			flattened[c] = flat_plane
 	_apply_zone(zone)
 
 
@@ -2323,23 +2323,25 @@ func _spread_flat() -> void:
 func _unfold_line_foil(at: Vector3i) -> void:
 	if dimension != 2 or not map.contains(at):
 		return
-	if line_y < 0:
-		line_y = line_y_for(at)
-		line_anchor = at
-	var zone := {"center": Vector3i(at.x, line_y, flat_plane), "age": 0.0}
+	var zone := {"center": at, "age": 0.0}
 	line_zones.append(zone)
+	if line_zones.all(func(z): return z["age"] == 0.0):
+		line_y = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(line_zones), true).y)
+		line_anchor = Vector3i(line_zones[0]["center"].x, line_y, flat_plane)
+		for c in linearized:
+			linearized[c] = line_y
 	_apply_line_zone(zone)
 
 
-## 二维里沿 x 扩散，每列 27 格展开到一维。
+## 二维里在平面上按圆形扩散，扫过的格子压到一维（U3）。
 static func line_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c, true) <= age
+	return zone_distance(center, c) <= age
 
 
-## 箔的波前离格子 c 多远：三维里看水平距离（along_x 为假），二维里只看 x。
-## 规则（压没哪些格子）和展开画面（DimensionSpace.frame）都用它，两边不会对不上。
-static func zone_distance(center: Vector3i, c: Vector3i, along_x: bool) -> float:
-	return absf(c.x - center.x) if along_x else Vector2(c.x - center.x, c.y - center.y).length()
+## 箔的波前离格子 c 多远：从落点算的直线距离（三维里是球形，二维里是圆形，U3）。
+## 规则（压没哪些格子）和展开画面（DimensionSpace.frame 用的 Layout.arrivals）算法一样，两边不会对不上。
+static func zone_distance(center: Vector3i, c: Vector3i) -> float:
+	return Vector3(c - center).length()
 
 
 func _apply_line_zone(zone: Dictionary) -> void:
@@ -2353,9 +2355,9 @@ func _apply_line_zone(zone: Dictionary) -> void:
 	_check_winner()
 
 
-## 波前按原三维坐标的水平距离推进，覆盖后整列完成二维展开。
+## 波前从落点按球形推进，扫过的格子展开到二维（U3）。
 static func zone_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c, false) <= age
+	return zone_distance(center, c) <= age
 
 
 ## 按波前处理整列；同时展开多片箔时只处理尚未展开的格子。
@@ -2376,7 +2378,7 @@ func turns_until_flat(c: Vector3i) -> float:
 	var zones := line_zones if all_flat() else foil_zones
 	for zone in zones:
 		var center: Vector3i = zone["center"]
-		var distance := zone_distance(center, c, all_flat())
+		var distance := zone_distance(center, c)
 		best = minf(best, maxf(0.0, (distance - zone["age"]) / Balance.FOIL_SPREAD))
 	return best
 
