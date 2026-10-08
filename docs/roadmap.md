@@ -111,3 +111,7 @@ E7F6 在 2026-10-05 提的两份提议（[光速、移动和情报](proposals/li
 
 旧 Python 版从此冻结，不再加功能，代码只在 `archive/python` 分支上；已知 bug 不修，见
 [decisions/0002-archive-python.md](decisions/0002-archive-python.md)。
+
+## 已完成：降维移动与连线检查
+
+- [x] 体素提前逐回合向固定终点移动；演示显示贯穿全部体素的皮亚诺曲线及两个端点，支持体到面、面到线，见[演示指南](guides/dimension-unfolding.md)。

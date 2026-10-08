@@ -48,12 +48,14 @@ func run() -> void:
 	await run_test(test_fixed_mapping)
 	await run_test(test_spread)
 	await run_test(test_spread_origins)
+	await run_test(test_anticipatory_motion)
 	demo = load("res://demos/dimension_unfolding.tscn").instantiate()
 	root.add_child(demo)
 	await process_frame
 	demo.set_process(false)
 	await run_test(test_controls)
 	await run_test(test_frames)
+	await run_test(test_curve_display)
 	for m in get_method_list():
 		var name: String = m["name"]
 		if name.begins_with("test_") and not _ran.has(name):
@@ -320,3 +322,64 @@ func capture(label: String) -> void:
 	await RenderingServer.frame_post_draw
 	DirAccess.make_dir_recursive_absolute(output)
 	check(root.get_texture().get_image().save_png(output.path_join(label + ".png")) == OK, "保存截图")
+
+
+## 规则：V4
+## 远处体素在波前到达之前逐回合向固定终点移动，不把主要位移挤在末尾。
+func test_anticipatory_motion() -> void:
+	for to_line in [false, true]:
+		var origin := Vector3i(13, 13, 4) if to_line else Vector3i(4, 4, 4)
+		var far := Vector3i(26, 26, 4) if to_line else Vector3i(8, 8, 8)
+		var origins := [{"at": origin, "start": 0.0}]
+		var initial := Layout.sample_spread(0.0, origins, to_line)
+		var index: int = initial["cells"].find(far)
+		var end := Layout.sample_spread(Layout.spread_duration(origins, to_line), origins, to_line)
+		var target: Vector3 = end["positions"][index]
+		var before: Vector3 = initial["positions"][index]
+		for time in [0.5, 1.0, 1.5, 2.0]:
+			var sample := Layout.sample_spread(time, origins, to_line)
+			var point: Vector3 = sample["positions"][index]
+			check(sample["amounts"][index] > 0.0, "波前到达前已经开始朝终点展开")
+			check(point.distance_to(target) < before.distance_to(target), "连续半格扩散都更接近最终位置")
+			before = point
+		var halfway := Layout.sample_spread(Vector3(far - origin).length() / 2.0, origins, to_line)
+		check(halfway["amounts"][index] > 0.1, "扩散走到一半时远处体素已有明显进度")
+
+
+## 规则：V4
+## 同一条曲线覆盖全部体素，中间展开不产生新端点，二维到一维沿用原编号。
+func test_curve_display() -> void:
+	for input in demo.anchor_inputs:
+		input.value = 4
+	for mode_index in [demo.CURVE_MODE, demo.LINE_MODE]:
+		demo.set_mode(mode_index)
+		check(demo.curve_toggle.button_pressed, "曲线场景默认显示连线")
+		for t in [0.0, 0.4, 1.0]:
+			demo.seek(t)
+			check_eq(demo.curve_points.size(), 729, "连线始终经过全部 729 个体素")
+			var expected := {}
+			for i in demo.layout["cells"].size():
+				expected[demo.layout["cells"][i]] = demo.layout["positions"][i]
+			for i in 729:
+				var cell := Layout.line_origin(i)
+				if mode_index == demo.LINE_MODE:
+					var p := Layout.fixed_plane(cell)
+					cell = Vector3i(p.x, p.y, demo.anchor.z)
+				check(demo.curve_points[i].is_equal_approx(expected[cell]), "曲线按原始线序连接当前体素中心")
+			if DisplayServer.get_name() != "headless":
+				var vertices: PackedVector3Array = demo._curve.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+				check_eq(vertices.size(), 1456, "渲染网格实际包含 728 段")
+				for i in 728:
+					check(vertices[i * 2].is_equal_approx(demo.curve_points[i]) and vertices[i * 2 + 1].is_equal_approx(demo.curve_points[i + 1]), "实际绘制连续链，不额外分支或跳格")
+			check_eq(demo._ends.size(), 2, "界面只标两个真正的端点")
+			if mode_index == demo.LINE_MODE and t == 1.0:
+				for i in 728:
+					check(demo.curve_points[i + 1].is_equal_approx(demo.curve_points[i] + Vector3.RIGHT), "终态是一格相连的唯一线段")
+			await capture("curve-%s-%03d" % ["line" if mode_index == demo.LINE_MODE else "3d", roundi(t * 100)])
+	demo.cells_toggle.button_pressed = false
+	check(not demo.instances.visible, "可以隐藏体素单独检查连线")
+	demo.curve_toggle.button_pressed = false
+	check(not demo._curve.visible and not demo._ends[0].visible, "关连线也收起端点标签")
+	demo.cells_toggle.button_pressed = true
+	demo.set_mode(0)
+	check(not demo._curve.visible, "旧单列模式不残留曲线")

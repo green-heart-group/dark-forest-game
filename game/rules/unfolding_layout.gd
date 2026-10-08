@@ -131,8 +131,6 @@ static func centers(widths: PackedFloat32Array, anchor: int) -> PackedFloat32Arr
 ## 球形扩张时，每个原点铺好自己的局部平面后，再过多久开始向基准平面靠拢、靠拢要多久（单位和扩张半径相同）。
 const MERGE_DELAY := 4.0
 const MERGE_TIME := 6.0
-## 周围还没展开的空间最多被推开多远，给平面腾地方。
-const MAX_PUSH := 6.0
 
 
 ## 每个格子被哪个原点先波及、什么时候波及。origins 里每项是 {"at": Vector3i, "start": float}，
@@ -197,18 +195,15 @@ static func _local_shift(at: Vector3i, to_line: bool) -> Vector3:
 	return Vector3(at) - target(at, to_line)
 
 
-## 扩张半径 r 的球铺成平面后大约多宽，比 r 多出来的部分就是周围空间要推开的距离。
-static func _push(r: float) -> float:
-	if r <= 0.0:
-		return 0.0
-	return minf(sqrt(4.0 / 3.0 * r * r * r) - r, MAX_PUSH) if r > 1.0 else 0.0
-
-
-## 多个原点各自按球形扩张，被波及的格子先铺到自己原点的局部平面，再一起靠拢到基准平面，
+## 多个原点各自按球形扩张，格子从原点开始后提前移向局部平面，再一起靠拢到基准平面，
 ## 最后每个格子都落在固定映射的位置上（再整体平移 base_plane）。time 是从最早的原点开始算的时间。
 ## 对局里每片箔的 start 是负的已扩散距离（见 DimensionSpace.frame）。
 static func sample_spread(time: float, origins: Array, to_line := false) -> Dictionary:
-	var hit := arrivals(origins, to_line)
+	# 只预演已经开始的原点，不让演示里尚未发生的第二次打击抢走格子。
+	var active: Array = origins.filter(func(o): return o["start"] <= time)
+	if active.is_empty():
+		active = origins
+	var hit := arrivals(active, to_line)
 	var base := base_plane(origins, to_line)
 	var cells: Array[Vector3i] = []
 	var positions := PackedVector3Array()
@@ -216,14 +211,12 @@ static func sample_spread(time: float, origins: Array, to_line := false) -> Dict
 	var owners := PackedInt32Array()
 	var finished := 0
 	for c in stage_cells(origins, to_line):
-		var o: Dictionary = origins[hit["owner"][c]]
-		var q := smooth_amount((time - hit["time"][c]) / WAVE_WIDTH)
+		var o: Dictionary = active[hit["owner"][c]]
+		# 从原点开始扩散就向已知终点逐渐移动；越远的格子分摊到越多回合。
+		# 到达时间仍为 distance + WAVE_WIDTH，正式扩散与伤害不变。
+		var duration: float = hit["time"][c] - o["start"] + WAVE_WIDTH
+		var q := smooth_amount((time - o["start"]) / duration)
 		var standing := Vector3(c)
-		for other in origins:
-			var away := Vector3(c - other["at"])
-			var r: float = time - other["start"]
-			if away.length() > r and away.length() > 0.0:
-				standing += away.normalized() * _push(r) * clampf(r / maxf(away.length(), 1.0), 0.0, 1.0)
 		var merge := smooth_amount((time - o["start"] - MERGE_DELAY) / MERGE_TIME)
 		var flat := target(c, to_line) + _local_shift(o["at"], to_line).lerp(base, merge)
 		var at := standing.lerp(flat, q)
@@ -236,7 +229,7 @@ static func sample_spread(time: float, origins: Array, to_line := false) -> Dict
 		cells.append(c)
 		positions.append(at)
 		amounts.append(q)
-		owners.append(hit["owner"][c])
+		owners.append(origins.find(o))
 	return {"cells": cells, "positions": positions, "amounts": amounts, "owners": owners,
 			"finished": finished, "base": base}
 

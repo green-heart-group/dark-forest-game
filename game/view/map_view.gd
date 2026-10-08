@@ -205,7 +205,9 @@ func setup(p_main: Node) -> void:
 	_dots.material_override = dot_mat
 	_world.add_child(_dots)
 	_load_grid_mode()
-	var funnel_mat := _flat_material(Color(COLOR_FLAT, 0.1))
+	var funnel_mat := _flat_material(Color.WHITE)
+	funnel_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	funnel_mat.vertex_color_use_as_albedo = true
 	funnel_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_funnel.material_override = funnel_mat
 	_world.add_child(_funnel)
@@ -906,6 +908,7 @@ func _funnel_mesh() -> ImmediateMesh:
 		var t: float = _amounts.get(c, 0.0)
 		if state.dimension == 3 and t <= 0.0:
 			continue
+		mesh.surface_set_color(_shown(Color(COLOR_FLAT, 0.1 * (t if state.dimension == 3 else 1.0))))
 		var center := _warp_point(Vector3(c))
 		var width := 0.43
 		var depth := 0.025 if state.all_linear() else 0.43

@@ -198,3 +198,22 @@ func test_reduce_waits_for_pending_buildings() -> void:
 	s.build(me, "miner")
 	var e := me.energy
 	check(s.start_reduce(me)["error"] != "" and me.energy == e, "有没建好的设施时不能降维，也不花钱")
+
+
+## 规则：二向箔，V4
+func test_visual_anticipation_preserves_rules() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	for civ in s.civs:
+		civ.reduced = true
+	s._unfold_foil(Vector3i(4, 4, 4))
+	var far := Vector3i(8, 8, 8)
+	var before := s.checksum()
+	var first := DimensionSpace.frame(s)
+	check(first["amounts"][far] > 0.0 and first["amounts"][far] < 1.0, "远处格子已经开始提前移动")
+	check_eq(s.checksum(), before, "布局采样不改变任何对局状态")
+	check_eq(s.flattened.size(), 1, "提前移动不提前执行降维伤害")
+	check_eq(s.civs[1].home, far, "画面位置不写回规则坐标")
+	s._spread_flat()
+	var next := DimensionSpace.frame(s)
+	check(next["amounts"][far] > first["amounts"][far], "下一半格扩散继续移动远处体素")
+	check(not s.flattened.has(far), "视觉提前移动时远处依然没有被波前击中")
