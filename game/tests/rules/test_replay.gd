@@ -42,7 +42,7 @@ func test_same_seed_same_game() -> void:
 	for s in [a, b]:
 		s.spectator = true
 		s.human().is_ai = true
-		for i in 60:
+		for i in 180:
 			s.end_turn()
 	check(a.checksums.size() == b.checksums.size() and a.checksums == b.checksums, "同一个种子的两局 AI 对局每回合都一样")
 	check(a.checksum() == b.checksum(), "最后的局面一样")
@@ -169,3 +169,45 @@ func test_ai_writes_notes() -> void:
 			dup += 1
 		seen[key] = true
 	check(dup == 0, "同一回合一样的想法只记一次")
+
+
+## 规则：二向箔，二维、单向著和奇异点
+func test_replay_across_dimension_epochs() -> void:
+	var s := GameState.new_game(71, 1)
+	for civ in s.civs:
+		s.set_autoplay(civ, false)
+		s.dev_set(civ, "energy", 2000)
+		s.dev_set(civ, "reduced", true)
+		s.dev_set(civ, "line_reduced", true)
+		s.dev_tech(civ, "dimension", true)
+	var target := Vector3i(4, 4, 4)
+	if s.human().owns(target):
+		target.x += 1
+	check(s.launch_foil(s.human(), target)["error"] == "", "通过正式行动触发可重放的展开")
+	for i in 100:
+		if s.all_flat():
+			break
+		s.end_turn()
+	check(s.all_flat() and not s.is_over(), "首次换坐标后仍是可玩的对局")
+	target = Vector3i(13, 13, s.flat_plane)
+	check(s.launch_line_foil(s.human(), target)["error"] == "", "二维通过正式行动再次展开")
+	for i in 200:
+		if s.all_linear():
+			break
+		s.end_turn()
+	check(s.all_linear(), "两次维度展开均完成")
+	var replay := Replay.from_state(s)
+	var again := replay.play_to(s.steps)
+	check(replay.desync_step == -1 and again.checksum() == s.checksum(), "两次原子换图及新地图行动确定性重放")
+	check(again.map.stars == s.map.stars and again.map.extent == s.map.extent, "重放恢复所有星系及地图边界")
+
+
+## 规则：二向箔，二维、单向著和奇异点
+func test_old_replay_is_rejected_explicitly() -> void:
+	var path := Replay.DIR.path_join("_old-version.replay")
+	DirAccess.make_dir_recursive_absolute(Replay.DIR)
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_var({"version": 1, "seed": 71})
+	file.close()
+	check(Replay.load_file(path) == null, "旧 10³ 规则记录不能被新规则静默重算")
+	DirAccess.remove_absolute(path)

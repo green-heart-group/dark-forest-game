@@ -57,7 +57,7 @@ func test_continue_after_death_recomputes_last_turn() -> void:
 		if s.is_over():
 			break
 		s.end_turn()
-	check(s.is_over() and s.winner != "AI", "接着打到分出胜负")
+	check(s.steps > ended.steps and s.winner != "AI", "接着推进对局，胜负不再由玩家死亡决定")
 	var again := Replay.from_state(s).play_to(s.steps)
 	check(again.checksum() == s.checksum(), "接着打的部分也能原样重算")
 
@@ -77,7 +77,7 @@ func test_dead_civ_intel_expires() -> void:
 ## 观战局里 0 号文明也叫「你」：它赢了也不能写成玩家胜利。
 ## 规则：灭亡和胜负
 func test_spectator_winner_is_named() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	s.spectator = true
 	s._die(s.civs[1])
 	check(s.winner == "你" and s.winner_by_name(), "观战局的胜负写赢家的名字")

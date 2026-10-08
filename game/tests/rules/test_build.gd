@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：建造
 func test_build_needs_tech_and_respects_limits() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	me.energy = 1000
 	me.mineral = 1000
@@ -27,7 +27,7 @@ func test_build_needs_tech_and_respects_limits() -> void:
 
 ## 规则：建造，调度（派出和行动）
 func test_units_built_docked_then_dispatched() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	var m := me.mineral
@@ -47,7 +47,7 @@ func test_units_built_docked_then_dispatched() -> void:
 
 ## 规则：建造，F3.5
 func test_facilities_next_turn_and_dyson_cap() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["dyson"])
 	me.actions_left = 99
@@ -70,7 +70,7 @@ func test_facilities_next_turn_and_dyson_cap() -> void:
 ## 反物质最多存 1 份。建不成时不扣资源和行动点。
 ## 规则：建造
 func test_build_refuses_second_one() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["bunker", "antimatter"])
 	me.energy = 1000
@@ -106,7 +106,7 @@ func test_build_refuses_second_one() -> void:
 ## 预警系统是整个文明的：下单的星系在建好前丢了，换个星系照样建好。
 ## 规则：预警系统，建造
 func test_warning_built_after_its_system_falls() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var other := Vector3i(0, 3, 0)
 	_set_star(s, other, StarMap.Star.SINGLE)

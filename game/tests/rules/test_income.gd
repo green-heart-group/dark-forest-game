@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：每回合的收入
 func test_action_points_follow_home_stars_and_colonies() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	check(me.action_points(s.map) == 5, "单星母星系 6 − 1 = 5 个行动点")
 	_set_star(s, Vector3i.ZERO, StarMap.Star.TRIPLE)
@@ -16,7 +16,7 @@ func test_action_points_follow_home_stars_and_colonies() -> void:
 
 ## 规则：每回合的收入
 func test_income_from_fission_dysons_and_miners() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 3
 	var base := Balance.ENERGY_PER_SYSTEM + Balance.ENERGY_PER_STAR
@@ -32,7 +32,7 @@ func test_income_from_fission_dysons_and_miners() -> void:
 
 ## 规则：每回合的收入，一个回合里发生什么
 func test_end_turn_pays_income() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 2
 	var e := me.energy

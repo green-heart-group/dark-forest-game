@@ -80,14 +80,14 @@ func cell() -> Vector3i:
 
 
 ## 是否已经飞出星图（离边界超过半个格子）。
-func is_outside() -> bool:
-	return outside(pos)
+func is_outside(bounds := AABB(Vector3.ZERO, Vector3.ONE * StarMap.SIZE)) -> bool:
+	return outside(pos, bounds)
 
 
-static func outside(p: Vector3) -> bool:
-	var lo := -Geometry.CELL_HALF
-	var hi := StarMap.SIZE - 1 + Geometry.CELL_HALF
-	return p.x < lo or p.y < lo or p.z < lo or p.x > hi or p.y > hi or p.z > hi
+static func outside(p: Vector3, bounds := AABB(Vector3.ZERO, Vector3.ONE * StarMap.SIZE)) -> bool:
+	var lo := bounds.position - Vector3.ONE * Geometry.CELL_HALF
+	var hi := bounds.end - Vector3.ONE * Geometry.CELL_HALF
+	return p.x < lo.x or p.y < lo.y or p.z < lo.z or p.x > hi.x or p.y > hi.y or p.z > hi.z
 
 
 ## 在飞（不是停着，也不是停在别人星系上的星际探测器）。

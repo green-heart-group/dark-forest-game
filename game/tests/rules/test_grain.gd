@@ -68,8 +68,8 @@ func test_grain_no_effect_on_reduced() -> void:
 func test_grain_kills_parked_starship_and_civ() -> void:
 	var s := _three_civs()
 	var ai := s.civs[1]
-	_ship(s, ai, Ship.STARSHIP, Vector3(9, 9, 9))
-	_ship(s, s.human(), Ship.GRAIN, Vector3(6, 9, 9), Vector3(1, 0, 0))
+	_ship(s, ai, Ship.STARSHIP, Vector3(8, 8, 8))
+	_ship(s, s.human(), Ship.GRAIN, Vector3(6, 8, 8), Vector3(1, 0, 0))
 	_turns(s, 6)
 	check(ai.colonies.is_empty() and not ai.has_starship(), "星系和停着的星舰都被毁掉")
 	check(not ai.alive, "什么都不剩的文明灭亡")

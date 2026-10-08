@@ -50,7 +50,7 @@ func test_wakes_are_left_and_seen() -> void:
 
 ## 规则：预警系统
 func test_warning_reports_enemy_warship() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	me.has_warning = true
 	_ship(s, s.civs[1], Ship.WARSHIP, Vector3(1.8, 0, 0), Vector3(-1, 0, 0))
@@ -61,7 +61,7 @@ func test_warning_reports_enemy_warship() -> void:
 
 ## 规则：情报传回
 func test_seeing_enemy_ship_counts_as_discovery() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_ship(s, s.civs[1], Ship.PROBE, Vector3(1, 0, 0), Vector3(1, 0, 0))
 	s._observe(me)

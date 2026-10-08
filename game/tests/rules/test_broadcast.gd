@@ -9,11 +9,11 @@ func test_broadcast_spreads_at_light_speed() -> void:
 	var ai := s.civs[1]
 	ai.broadcasters[ai.home] = true
 	me.broadcasters[me.home] = true
-	check(s.broadcast(ai, Vector3i(9, 9, 9))["error"] == "", "可以广播任何坐标")
+	check(s.broadcast(ai, Vector3i(8, 8, 8))["error"] == "", "可以广播任何坐标")
 	_turns(s, 4)
-	check(not me.heard.has(Vector3i(9, 9, 9)), "4 回合后还没传到 5 格外")
+	check(not me.heard.has(Vector3i(8, 8, 8)), "4 回合后还没传到 5 格外")
 	s.end_turn()
-	check(me.heard.has(Vector3i(9, 9, 9)), "第 5 回合听到")
+	check(me.heard.has(Vector3i(8, 8, 8)), "第 5 回合听到")
 	check(me.discovered, "听到广播算发现别人")
 
 
@@ -23,9 +23,9 @@ func test_hearing_needs_broadcaster() -> void:
 	var me := s.human()
 	var ai := s.civs[1]
 	ai.broadcasters[ai.home] = true
-	s.broadcast(ai, Vector3i(9, 9, 9))
+	s.broadcast(ai, Vector3i(8, 8, 8))
 	_turns(s, 3)
-	check(not me.heard.has(Vector3i(9, 9, 9)), "没有恒星广播器听不到")
+	check(not me.heard.has(Vector3i(8, 8, 8)), "没有恒星广播器听不到")
 
 
 ## 规则：广播和隐藏文明

@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：移动
 func test_ship_accelerates_then_moves() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3.ZERO, Vector3(1, 0, 0))
 	var expect := [0.1, 0.3, 0.6, 1.0, 1.5, 2.1, 2.8, 3.6, 4.4]
@@ -17,7 +17,7 @@ func test_ship_accelerates_then_moves() -> void:
 
 ## 规则：移动
 func test_ship_with_target_snaps_onto_it() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony", "starship"])
 	var ss := s.build(me, "starship")["ship"] as Ship
@@ -52,9 +52,9 @@ func test_starship_target_does_not_reveal_owner() -> void:
 
 ## 规则：移动
 func test_ship_without_target_leaves_map() -> void:
-	var s := _two_civs(Vector3i(0, 0, 9))
+	var s := _two_civs(Vector3i(0, 0, 8))
 	var me := s.human()
-	var w := _ship(s, me, Ship.WARSHIP, Vector3(9, 5, 5), Vector3(1, 0, 0))
+	var w := _ship(s, me, Ship.WARSHIP, Vector3(8, 5, 5), Vector3(1, 0, 0))
 	w.speed = 0.7
 	s._move_ship(me, w)
 	s._clean_dead()
@@ -63,7 +63,7 @@ func test_ship_without_target_leaves_map() -> void:
 
 ## 规则：移动，调度（派出和行动）
 func test_turn_ship_costs_and_reverse_resets_speed() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(3, 3, 3), Vector3(1, 0, 0))
 	w.speed = 0.5
@@ -78,7 +78,7 @@ func test_turn_ship_costs_and_reverse_resets_speed() -> void:
 
 ## 规则：调度（派出和行动）
 func test_probe_slow_start_until_out_of_vision() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["interstellar_probe"])
 	var p := s.build(me, "probe")["ship"] as Ship
@@ -94,7 +94,7 @@ func test_probe_slow_start_until_out_of_vision() -> void:
 
 ## 规则：移动
 func test_warp_ship_flies_at_light_speed_outside_vision() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	w.warp = true

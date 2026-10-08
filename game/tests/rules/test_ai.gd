@@ -2,10 +2,10 @@ extends "res://tests/rules/rule_suite.gd"
 ## AI 的行动。
 
 
-## AI 在 (9,9,9)，你在 (0,0,0)。AI 没有随机偏好、资源充足、有 6 个行动点；
+## AI 在 (8,8,8)，你在 (0,0,0)。AI 没有随机偏好、资源充足、有 6 个行动点；
 ## 算作已经发现过别人，免得它先花能量升射电望远镜。
 func _ai_game() -> GameState:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	ai.taste = {}
@@ -79,7 +79,7 @@ func test_ai_builds_in_order_when_nobody_known() -> void:
 	ai.has_warning = true
 	ai.energy = 20
 	for i in AI.PROBES_WANTED:
-		_ship(s, ai, Ship.PROBE, Vector3(9, 9, 9), Vector3(0, 0, -1))
+		_ship(s, ai, Ship.PROBE, Vector3(ai.home), Vector3(0, 0, -1))
 	AI.take_turn(s, ai)
 	check_eq(_builds(s, ai), ["miner"], "探测器够了不再造；能量不多于 20E 不建恒星广播器")
 
@@ -91,7 +91,7 @@ func test_ai_protects_itself_after_hit() -> void:
 		var s := _ai_game()
 		var ai := s.civs[1]
 		_give(ai, ["domain", "bunker", "starship"])
-		var colony := Vector3i(9, 9, 7)
+		var colony := Vector3i(8, 8, 6)
 		_set_star(s, colony, StarMap.Star.SINGLE)
 		ai.colonies.append(colony)
 		s.map.gas[colony] = 1
@@ -118,7 +118,7 @@ func test_ai_sends_warships_at_known_target() -> void:
 	AI.take_turn(s, ai)
 	var warships := _ships_of(ai, Ship.WARSHIP)
 	check_eq(warships.size(), 1, "知道敌人时造一艘战舰（一回合一艘）")
-	var toward := (Vector3.ZERO - Vector3(9, 9, 9)).normalized()
+	var toward := (Vector3.ZERO - Vector3(ai.home)).normalized()
 	check(not warships[0].docked and warships[0].direction.is_equal_approx(toward), "战舰朝已知的敌方星系派出")
 	for i in 3:
 		ai.actions_left = 6
@@ -145,14 +145,14 @@ func test_ai_counterattacks_along_hit_direction() -> void:
 
 ## 规则：AI 怎么行动
 func test_ai_turns_warship_toward_target() -> void:
-	var want := (Vector3.ZERO - Vector3(9, 9, 5)).normalized()
+	var want := (Vector3.ZERO - Vector3(8, 8, 4)).normalized()
 	var side := want.cross(Vector3(0, 0, 1)).normalized()
 	for degrees in [90.0, 10.0]:
 		var s := _ai_game()
 		var ai := s.civs[1]
 		ai.known[Vector3i.ZERO] = 1
 		var dir := want.rotated(side, deg_to_rad(degrees))
-		var w := _ship(s, ai, Ship.WARSHIP, Vector3(9, 9, 5), dir)
+		var w := _ship(s, ai, Ship.WARSHIP, Vector3(8, 8, 4), dir)
 		AI.take_turn(s, ai)
 		if degrees > 25.0:
 			check(w.direction.is_equal_approx(want), "偏离已知敌人超过 25° 的战舰转向它")
@@ -165,7 +165,7 @@ func test_ai_broadcasts_far_targets_once() -> void:
 	var s := _ai_game()
 	var ai := s.civs[1]
 	ai.broadcasters[ai.home] = true
-	var near := Vector3i(9, 9, 6)
+	var near := Vector3i(8, 8, 5)
 	_set_star(s, near, StarMap.Star.SINGLE)
 	ai.known[Vector3i.ZERO] = 1
 	ai.known[near] = 1
@@ -181,6 +181,9 @@ func test_ai_broadcasts_far_targets_once() -> void:
 func test_ai_saves_up_then_reduces_then_launches_foil() -> void:
 	var s := _ai_game()
 	var ai := s.civs[1]
+	ai.times_hit = 2  # 最后据点反复被打，才满足降维武器的最后手段条件
+	ai.has_warning = true
+	ai.warning_level = Balance.WARNING_MAX  # 不把测试的临界能量花在预警升级上
 	_give(ai, ["dimension"])
 	ai.known[Vector3i.ZERO] = 1
 	var need := maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + Balance.COST_FOIL)
@@ -229,7 +232,7 @@ func test_ai_sends_sophon_when_energy_allows() -> void:
 
 ## 规则：AI 怎么行动
 func test_ai_researches_after_discovery() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_open_tiers(ai, 1)
@@ -257,15 +260,15 @@ func test_ai_launches_grain_at_known_target() -> void:
 
 ## 规则：AI 怎么行动
 func test_ai_colonizes() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_give(ai, ["colony"])
-	_set_habitable(s, Vector3i(9, 9, 8), StarMap.Star.SINGLE)
-	_set_habitable(s, Vector3i(9, 0, 9), StarMap.Star.SINGLE)
-	ai.intel[Vector3i(9, 9, 8)] = s.snapshot(Vector3i(9, 9, 8))
+	_set_habitable(s, Vector3i(8, 8, 7), StarMap.Star.SINGLE)
+	_set_habitable(s, Vector3i(8, 0, 8), StarMap.Star.SINGLE)
+	ai.intel[Vector3i(8, 8, 7)] = s.snapshot(Vector3i(8, 8, 7))
 	AI.take_turn(s, ai)
-	check(not ai.colony_tried.has(Vector3i(9, 0, 9)), "AI 不去没看到过的宜居星系")
+	check(not ai.colony_tried.has(Vector3i(8, 0, 8)), "AI 不去没看到过的宜居星系")
 	var sent := false
 	for sh in ai.ships:
 		sent = sent or (sh.kind == Ship.COLONY and sh.has_target)
@@ -313,7 +316,7 @@ func test_long_ai_game_runs() -> void:
 ## AI 只用自己看到或听到的情报：看不到你时，不知道你在哪里，也不会朝你打。
 ## 规则：AI 怎么行动
 func test_ai_only_knows_what_it_saw() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var ai := s.civs[1]
 	ai.is_ai = true
 	_give(ai, ["warship", "grain", "dimension"])
@@ -329,10 +332,21 @@ func test_ai_only_knows_what_it_saw() -> void:
 	check(ai.ships.all(func(sh): return sh.kind != Ship.GRAIN), "AI 不知道目标时不发光粒")
 	# 听到广播以后才知道
 	s.civs[0].broadcasters[Vector3i.ZERO] = true
-	ai.broadcasters[Vector3i(9, 9, 9)] = true  # 有广播器才听得到
+	ai.broadcasters[Vector3i(8, 8, 8)] = true  # 有广播器才听得到
 	ai.heard.clear()
-	s.broadcasts.append({"from": Vector3(9, 9, 0), "target": Vector3i.ZERO, "sender": null, "exposed": GameState.NO_HIT,
+	s.broadcasts.append({"from": Vector3(8, 8, 0), "target": Vector3i.ZERO, "sender": null, "exposed": GameState.NO_HIT,
 			"radius": 0.0, "heard": {}, "hidden_heard": {}})
 	for i in 12:
 		s._spread_broadcasts()
 	check(ai.known.has(Vector3i.ZERO), "听到广播以后，AI 才知道你的坐标")
+
+
+## 规则：AI 怎么行动
+func test_ai_foil_is_last_resort() -> void:
+	var s := _collapse_match()
+	var ai := s.civs[1]
+	ai.known[s.human().home] = 1
+	check(not AI._try_foil(s, ai), "有资源和已知敌人不等于可以常规使用末日武器")
+	ai.times_hit = 2
+	check(AI._try_foil(s, ai) and ai.foils.size() == 1, "最后据点反复被打且没有常规武器时可发射")
+	check(not AI._try_foil(s, ai), "在途箔未结束时不重复发射")

@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：调度（派出和行动）
 func test_colony_ship_settles_target() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony"])
 	_set_habitable(s, Vector3i(1, 0, 0), StarMap.Star.DOUBLE)
@@ -24,7 +24,7 @@ func test_colony_ship_settles_target() -> void:
 ## F4.4：没看到过的格子也能当目的地；到了不能殖民就停在那里，可以再派。
 ## 规则：调度（派出和行动），F4.4
 func test_colony_ship_blind_target() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["colony"])
 	var c := s.build(me, "colony")["ship"] as Ship
@@ -41,7 +41,7 @@ func test_colony_ship_blind_target() -> void:
 ## F4.4：宜居星系要看到过才知道；情报里记着宜居不宜居。
 ## 规则：星图和星系生成，F4.4
 func test_known_habitable_needs_intel() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var far := Vector3i(6, 0, 0)
 	_set_habitable(s, far, StarMap.Star.SINGLE)
@@ -83,7 +83,7 @@ func test_interstellar_probe_parks_and_jams_broadcaster() -> void:
 
 ## 规则：调度（派出和行动）
 func test_devourer_eats_rocky_planet() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_set_star(s, Vector3i(1, 0, 0), StarMap.Star.SINGLE)
 	s.map.rocky[Vector3i(1, 0, 0)] = 2
@@ -97,7 +97,7 @@ func test_devourer_eats_rocky_planet() -> void:
 
 ## 规则：调度（派出和行动），灭亡和胜负
 func test_starship_keeps_civ_alive_and_settles() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ss := _ship(s, me, Ship.STARSHIP, Vector3(2, 0, 0))
 	ss.docked = false

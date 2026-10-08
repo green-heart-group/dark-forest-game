@@ -310,16 +310,21 @@ static func _try_each(s: GameState, ai: Civ, kind: String) -> bool:
 	return false
 
 
-## 能量攒够、又有已知目标时，先降维，降维完成后朝最近的已知目标发射二向箔（同时最多一片）。
+## 据点告急且没有常规武器时才考虑降维打击；全图一维后争取奇异点。
 static func _try_foil(s: GameState, ai: Civ) -> bool:
 	if not ai.has_tech("dimension") or not ai.foils.is_empty() or ai.reduce_left > 0:
+		return false
+	if s.all_linear():
+		return ai.line_reduced and s.launch_singularity(ai)["error"] == ""
+	# 末日武器只在据点告急或敌方已经展开降维时考虑，优先常规反击。
+	if not _flat_near(s, ai) and not (ai.times_hit >= Balance.AI_FOIL_HITS and ai.colonies.size() <= 1):
+		return false
+	if ai.count(Ship.WARSHIP) > 0 or not ai.grains.is_empty():
 		return false
 	var target := _nearest_known(s, ai)
 	if target == GameState.NO_HIT:
 		return false
 	var to_line := s.all_flat()
-	if to_line and s.all_linear():
-		return ai.line_reduced and s.launch_singularity(ai)["error"] == ""
 	if to_line and (s.linearized.has(target) or target.z != s.flat_plane):
 		return false
 	if not to_line and s.flattened.has(target):
@@ -451,8 +456,8 @@ static func _starship_turn(s: GameState, ai: Civ) -> void:
 			best_d = d
 			best = t
 	if best == GameState.NO_HIT:
-		var n := StarMap.SIZE - 1
-		best = Vector3i(s.rng.randi_range(0, n), s.rng.randi_range(0, n), s.rng.randi_range(0, n))
+		var n := s.map.extent - Vector3i.ONE
+		best = s.map.origin + Vector3i(s.rng.randi_range(0, n.x), s.rng.randi_range(0, n.y), s.rng.randi_range(0, n.z))
 		if not s.starship_target_ok(ai, best):
 			return
 	ai.colony_tried[best] = true

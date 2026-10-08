@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：交战
 func test_warships_destroy_each_other() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	_ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -15,7 +15,7 @@ func test_warships_destroy_each_other() -> void:
 
 ## 规则：交战，T23
 func test_warships_carry_researched_weapons() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["warship"])
 	var plain := s.build_cost(me, "warship")
@@ -29,7 +29,7 @@ func test_warships_carry_researched_weapons() -> void:
 
 ## 规则：交战，T23
 func test_beam_destroys_warship_out_of_collision_range() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -43,12 +43,12 @@ func test_beam_destroys_warship_out_of_collision_range() -> void:
 
 ## 规则：交战，T23
 func test_torpedo_needs_two_hits() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	mine.weapons = ["beam", "torpedo"]
-	var theirs := _ship(s, ai, Ship.WARSHIP, Vector3(4.9, 0, 0), Vector3(1, 0, 0))
+	var theirs := _ship(s, ai, Ship.WARSHIP, Vector3(4.8, 0, 0), Vector3(1, 0, 0))
 	var mineral := me.mineral
 	s._combat()
 	check(not theirs.dead and theirs.damage == 1, "1.9 格只有鱼雷够得着，打中一次不毁")
@@ -59,7 +59,7 @@ func test_torpedo_needs_two_hits() -> void:
 
 ## 规则：交战，T23
 func test_hbomb_first_and_salvages_cost() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
@@ -76,7 +76,7 @@ func test_hbomb_first_and_salvages_cost() -> void:
 
 ## 规则：交战，T23
 func test_armed_warships_fire_at_the_same_time() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var a := _ship(s, s.human(), Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	var b := _ship(s, s.civs[1], Ship.WARSHIP, Vector3(4.4, 0, 0), Vector3(-1, 0, 0))
 	a.weapons = ["beam"]
@@ -87,7 +87,7 @@ func test_armed_warships_fire_at_the_same_time() -> void:
 
 ## 规则：交战，T23
 func test_weapon_needs_ammo_money() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var mine := _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	mine.weapons = ["beam"]

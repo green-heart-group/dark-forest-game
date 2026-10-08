@@ -78,10 +78,10 @@ func _turns(s: GameState, n: int) -> void:
 		s.end_turn()
 
 
-## 三个文明：你在 (0,0,0)，AI 在 (9,9,9)，第三方在 (9,0,0)。
+## 三个文明：你在 (0,0,0)，AI 在 (8,8,8)，第三方在 (8,0,0)。
 func _three_civs() -> GameState:
-	var s := _two_civs(Vector3i(9, 9, 9))
-	var third := Civ.new("第三方", false, Vector3i(9, 0, 0))
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var third := Civ.new("第三方", false, Vector3i(8, 0, 0))
 	_set_star(s, third.home, StarMap.Star.SINGLE)
 	s.civs.append(third)
 	s.start_turn(third)
@@ -93,3 +93,36 @@ func _restore_balance(values: Dictionary) -> void:
 	var r := Replay.new()
 	r.balance = values
 	r.apply_balance()
+
+
+func _flatten_whole_column(s: GameState, col: Vector2i, plane: int) -> void:
+	s._flatten_cell(Vector3i(col.x, col.y, plane), plane)
+	for z in StarMap.SIZE:
+		s._flatten_cell(Vector3i(col.x, col.y, z), plane)
+
+
+func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
+	s._unfold_foil(anchor)
+	for i in 40:
+		if s.all_flat():
+			break
+		s._spread_flat()
+
+
+func _collapse_match() -> GameState:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	for civ in s.civs:
+		civ.reduced = true
+		civ.energy = 1000
+		_give(civ, ["dimension"])
+	return s
+
+
+func _two_dimensional_match() -> GameState:
+	var s := _collapse_match()
+	s._unfold_foil(Vector3i(4, 4, 4))
+	for i in 20:
+		if s.all_flat():
+			break
+		s.end_turn()
+	return s

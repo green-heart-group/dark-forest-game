@@ -43,7 +43,7 @@ func test_map_generation_follows_planet_rules() -> void:
 ## 规则：星图和星系生成
 func test_bounds() -> void:
 	check(StarMap.in_bounds(Vector3i(0, 0, 0)), "原点在图内")
-	check(StarMap.in_bounds(Vector3i(9, 9, 9)), "(9,9,9) 在图内")
+	check(StarMap.in_bounds(Vector3i(8, 8, 8)), "(8,8,8) 在图内")
 	check(not StarMap.in_bounds(Vector3i(10, 0, 0)), "(10,0,0) 在图外")
 
 

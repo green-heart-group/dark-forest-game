@@ -4,7 +4,7 @@ extends "res://tests/rules/rule_suite.gd"
 
 ## 规则：科技树
 func test_tech_tiers_and_prerequisites() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	check(me.has_tech("colony"), "殖民船开局就有（0 级）")
@@ -25,7 +25,7 @@ func test_tech_tiers_and_prerequisites() -> void:
 ## E8：III 级要 II 级开放以后、能量收入达到门槛，再比 II 级晚 TIER_GAP 回合。
 ## 规则：科技树，E8
 func test_tier3_needs_tier2_and_income() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = Balance.TIER3_ENERGY
 	s.end_turn()
@@ -43,7 +43,7 @@ func test_tier3_needs_tier2_and_income() -> void:
 
 ## 规则：视野，预警系统
 func test_telescope_and_warning_upgrades() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ap := me.actions_left
 	for i in Balance.TELESCOPE_MAX:
@@ -63,11 +63,11 @@ func test_telescope_and_warning_upgrades() -> void:
 ## E8：II 级的条件是自己的任何舰船和别人的舰船相距 CONTACT_RANGE 以内，I 级开放以后才算。
 ## 规则：科技树，E8
 func test_contact_opens_tier2_after_tier1() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var ai := s.civs[1]
 	_ship(s, me, Ship.PROBE, Vector3(3, 0, 0), Vector3(1, 0, 0))
-	_ship(s, ai, Ship.COLONY, Vector3(3.9, 0, 0), Vector3(-1, 0, 0))
+	_ship(s, ai, Ship.COLONY, Vector3(3.8, 0, 0), Vector3(-1, 0, 0))
 	s._combat()
 	check(me.tier2_turn < 0, "I 级还没开时，接触不算")
 	_open_tiers(me, 1)
@@ -75,7 +75,7 @@ func test_contact_opens_tier2_after_tier1() -> void:
 	s._combat()
 	check(me.tier2_turn >= 0 and ai.tier2_turn >= 0, "探测器和殖民船相距 1 格以内，双方都算接触")
 	check(me.tier2_turn == Balance.TIER_GAP, "II 级比 I 级晚 TIER_GAP 回合开放")
-	var far := _two_civs(Vector3i(9, 9, 9))
+	var far := _two_civs(Vector3i(8, 8, 8))
 	_open_tiers(far.human(), 1)
 	_ship(far, far.human(), Ship.PROBE, Vector3(3, 0, 0), Vector3(1, 0, 0))
 	_ship(far, far.civs[1], Ship.PROBE, Vector3(4.5, 0, 0), Vector3(1, 0, 0))
@@ -85,7 +85,7 @@ func test_contact_opens_tier2_after_tier1() -> void:
 
 ## 规则：科技树，E8
 func test_tiers_open_in_order_with_a_gap() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s._engage(me, s.civs[1])
 	check(me.tier2_turn < 0, "先接触、还没发现别人时不算")

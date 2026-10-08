@@ -1,16 +1,17 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""一条命令跑全部测试：先导入（新加了 class_name 时要导入一次），再跑规则测试和画面测试。
+"""一条命令跑全部测试：先导入（新加了 class_name 时要导入一次），再跑规则、画面和展开演示测试。
 本地和 GitHub 上都用它，所以两边跑的东西一样。
 
-    uv run game/tools/test.py                  # 导入，跑规则测试和画面测试
+    uv run game/tools/test.py                  # 导入，跑规则、画面和展开演示测试
     uv run game/tools/test.py rules            # 只跑规则测试（view 只跑画面测试）
     uv run game/tools/test.py rules --only ai  # 只跑名字里带 ai 的规则测试
+    uv run game/tools/test.py unfolding       # 只跑展开演示测试
     uv run game/tools/test.py --no-import      # 不导入，快一点
     uv run game/tools/test.py --jobs 1         # 规则测试只用一个进程
 
-为了快，几个 Godot 进程同时跑：规则测试分成几份（默认 CPU 核数，最多 8 份），画面测试一个进程，一起开始。
+为了快，几个 Godot 进程同时跑：规则测试分成几份（默认 CPU 核数，最多 8 份），画面和展开演示各一个进程，一起开始。
 画面测试后面的测试要用前面留下的局面，不能拆开。
 每次跑完把每个规则测试用了多久记在 game/.godot/test_times.json（不进 git），下次分的时候让每份的总时间差不多；
 没有记录时（比如 GitHub 上）轮流分。
@@ -36,6 +37,7 @@ GAME = Path(__file__).resolve().parents[1]
 SUITES = {
     "rules": ("规则测试", "res://tests/run_tests.gd"),
     "view": ("画面测试", "res://tests/run_view_tests.gd"),
+    "unfolding": ("展开演示", "res://tests/run_unfolding_tests.gd"),
 }
 TIMES = GAME / ".godot" / "test_times.json"
 # 没有记录的测试，当它要这么多毫秒
@@ -91,7 +93,7 @@ def godot_args(godot: str, game: Path, suite: str, args: list[str]) -> list[str]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="跑规则测试和画面测试")
+    parser = argparse.ArgumentParser(description="跑规则、画面和展开演示测试")
     parser.add_argument("which", nargs="?", choices=["all", *SUITES], default="all", help="跑哪一组（默认全部）")
     parser.add_argument("--only", help="只跑名字里带这个词的测试（最好和 rules 或 view 一起用）")
     parser.add_argument("--no-import", action="store_true", help="不先导入")
@@ -118,8 +120,9 @@ def main() -> int:
                 listing = Path(tmp) / f"rules{i}.txt"
                 listing.write_text("\n".join(share), encoding="utf-8")
                 jobs.append(("rules", i, [f"tests={listing}"]))
-        if "view" in suites:
-            jobs.append(("view", 0, [f"only={args.only}"] if args.only else []))
+        for suite in suites:
+            if suite != "rules":
+                jobs.append((suite, 0, [f"only={args.only}"] if args.only else []))
 
         t0 = time.monotonic()
         running = []

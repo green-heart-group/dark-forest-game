@@ -28,14 +28,20 @@ func setup(p_main: Node) -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var top := VBoxContainer.new()
-	top.position = Vector2(16, 12)
+	top.anchor_right = 1.0
+	top.offset_left = 16
+	top.offset_right = -Widgets.PANEL_WIDTH - 16
+	top.offset_top = 12
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(top)
 	var status_row := HBoxContainer.new()
 	status_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	status_row.add_theme_constant_override("separation", 12)
 	_status.add_theme_font_size_override("font_size", 22)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_row.add_child(_status)
+	_restart.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_restart.text = "🔄 重开"
 	_restart.tooltip_text = "换新星图，或在同一张星图上重打。对局中途会先确认。"
 	_restart.add_theme_font_size_override("font_size", 14)
@@ -64,6 +70,7 @@ func setup(p_main: Node) -> void:
 	# 视角操作说明，平时收起
 	var controls := Label.new()
 	controls.text = MapView.CONTROLS_TEXT
+	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_font_size_override("font_size", 13)
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	controls.visible = false
@@ -152,7 +159,9 @@ func refresh(me: Civ) -> void:
 	elif state.winner != "":
 		_status.text = "💀 你失败了（第 %d 回合）" % state.turn
 	if not state.is_over() and state.all_flat():
-		_status.text += "　二维空间 · 可继续降维"
+		_status.text += "　729 格一维空间" if state.all_linear() else "　27×27 二维空间 · 重新探索"
+	if not state.is_over() and state.collapse_pending():
+		_status.text += "\n空间展开中 · 回合按当前坐标结算"
 	if state.is_over() and state.collapse_pending():
 		_status.text = "空间坍缩继续中…（战斗行动已停止）"
 	if not state.is_over() and not state.spectator and not state.human().alive:

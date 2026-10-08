@@ -12,7 +12,7 @@ func _fill_light(s: GameState, c: float) -> void:
 ## G14：只能投放在看得到的地方；生效后那一格光速为 0，保持一段时间，同时向周围扩散，之后慢慢恢复。
 ## 规则：黑域，G14
 func test_black_domain_holds_then_spreads() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	var center := Vector3i(2, 0, 0)
 	check(s.launch_black_domain(me, center)["error"] != "", "要先有黑域投放科技")
@@ -32,13 +32,13 @@ func test_black_domain_holds_then_spreads() -> void:
 	check(s.light_at(Vector3i(5, 0, 0)) < 1.0, "扩散到更远的地方")
 	_turns(s, 60)
 	check(s.light_at(center) > Balance.GRAIN_MIN_LIGHT, "很久以后中心也恢复得差不多")
-	check(s.light_at(Vector3i(9, 9, 9)) < 1.0, "宇宙背景的光速降低了一点")
+	check(s.light_at(Vector3i(8, 8, 8)) < 1.0, "宇宙背景的光速降低了一点")
 
 
 ## G14：舰船的速度乘以光速；光速低于 0.95 的地方光粒没有杀伤力；舰船慢到几乎不动就停下，停 5 回合消失。
 ## 规则：黑域，G14
 func test_light_slows_ships_and_disarms_grains() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_fill_light(s, 0.5)
 	var w := _ship(s, me, Ship.WARSHIP, Vector3(0, 1, 0), Vector3(1, 0, 0))
@@ -53,7 +53,7 @@ func test_light_slows_ships_and_disarms_grains() -> void:
 	check(s.grain_error(me, Vector3(1, 0, 0)).contains("黑域"), "在黑域里不能发射光粒")
 	_fill_light(s, 0.005)
 	s.light[s._li(Vector3i.ZERO)] = 1.0  # 两边的母星系都不在里面，不然直接算输
-	s.light[s._li(Vector3i(9, 9, 9))] = 1.0
+	s.light[s._li(Vector3i(8, 8, 8))] = 1.0
 	var p := _ship(s, me, Ship.PROBE, Vector3(0, 3, 0), Vector3(1, 0, 0))
 	_turns(s, Balance.SHIP_STUCK_TURNS - 1)
 	check(me.ships.has(p) and p.pos == Vector3(0, 3, 0) and p.stuck == Balance.SHIP_STUCK_TURNS - 1, "慢到几乎不动就停在原地")
@@ -94,7 +94,7 @@ func test_black_domain_blocks_vision_and_slows_reports() -> void:
 ## 只为提速的捷径（回合末看之前先算好的数据、只扫线段附近的格子），和直接一格一格算的结果一样。
 ## 规则：黑域
 func test_speedups_match_plain_checks() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7
 	var n := StarMap.SIZE
@@ -151,7 +151,7 @@ func test_speedups_match_plain_checks() -> void:
 ## G14、B4：被困在黑域里的星系产出只有 1/10（向上取整），母星系在里面不能升级；全部困在光速为 0 的地方就算输。
 ## 规则：黑域，每回合的收入，G14
 func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	s.map.rocky[Vector3i.ZERO] = 4
 	_set_star(s, Vector3i(5, 5, 5), StarMap.Star.SINGLE)
@@ -171,3 +171,15 @@ func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
 	s.light[s._li(Vector3i.ZERO)] = 0.0
 	s._check_hiding()
 	check(not me.alive, "所有星系都困在光速为 0 的黑域里，算输")
+
+
+## 规则：黑域
+func test_light_diffusion_in_new_dimensions() -> void:
+	var s := _two_dimensional_match()
+	s._ensure_light()
+	var center := Vector3i(13, 13, s.flat_plane)
+	s.light[s._li(center)] = 0.0
+	s._light_moving = true
+	s._spread_light()
+	check(is_equal_approx(s.light_at(center), 8.0 / 9.0), "二维光速按邻近 3×3 格扩散")
+	check(s.light.size() == 729 and s.light_at(Vector3i(13, 13, s.flat_plane + 1)) == 1.0, "光速数组保留 729 格且图外读取安全")

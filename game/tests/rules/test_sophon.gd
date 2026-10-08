@@ -49,12 +49,12 @@ func test_building_own_sophon_frees_civ() -> void:
 
 ## 规则：智子（D5）
 func test_sophon_waits_when_not_a_home() -> void:
-	var s := _two_civs(Vector3i(9, 9, 9))
+	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
 	_give(me, ["sophon"])
 	var sophon: Ship = s.build(me, "sophon")["ship"]
 	s.send_sophon(me, sophon.id, Vector3i(2, 0, 0))
 	_turns(s, 4)
 	check(sophon.lock < 0 and sophon.direction == Vector3.ZERO and sophon.pos == Vector3(2, 0, 0), "不是别人的母星系，原地待命")
-	check(s.sophon_error(me, sophon.id, Vector3i(9, 9, 9)) == "", "可以再派")
+	check(s.sophon_error(me, sophon.id, Vector3i(8, 8, 8)) == "", "可以再派")
 	check(s.civs[1].known.is_empty() and s.civs[1].sightings.is_empty(), "别人看不到智子")

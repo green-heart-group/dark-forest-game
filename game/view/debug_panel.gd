@@ -1041,7 +1041,7 @@ func load_replay(path: String) -> void:
 	pause()
 	var r := Replay.load_file(path)
 	if r == null:
-		_note = "打不开这个文件：%s" % path
+		_note = "打不开这个文件（损坏或规则版本不兼容）：%s" % path
 		refresh_panel()
 		return
 	var diff := r.balance_diff()
