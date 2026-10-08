@@ -18,24 +18,24 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="https://github.com/user-attachments/assets/e0d30991-6944-4ba7-be27-bacba10feb5c" alt="三维星图：自己的视野和探测器" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/bc278161-e36d-429d-9cbd-3c326392e903" alt="三维星图：自己的视野和探测器" width="100%"><br>
       <b>藏在三维星图里</b><br>
       只看得到自己周围一小片，探测器飞出去看，情报按光速传回
     </td>
     <td align="center" width="50%">
-      <img src="https://github.com/user-attachments/assets/9586be8f-ee03-445c-b2a4-d42587e45b39" alt="黑域在母星系周围扩散" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/d19784f3-cef3-4a9e-9a4d-e9007e2234a2" alt="黑域在母星系周围扩散" width="100%"><br>
       <b>黑域</b><br>
       一格的光速变成 0，再慢慢向周围扩散；躲在里面打不进来，自己也出不去
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="https://github.com/user-attachments/assets/0c681b42-da9f-472f-8b6f-a310a830da8f" alt="二向箔把三维星图压成平面" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/407011eb-fd03-4d1f-b756-638c955fb8dc" alt="二向箔把三维星图压成平面" width="100%"><br>
       <b>二向箔</b><br>
       展开以后一圈圈扩散，把整张星图压成一个平面
     </td>
     <td align="center" width="50%">
-      <img src="https://github.com/user-attachments/assets/e37f488b-c7dd-443b-98d3-a83188105d74" alt="平面压成直线，最后缩成一个点" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/0a2ad7a6-ef57-4820-bb71-1184aba50eeb" alt="平面压成直线，最后缩成一个点" width="100%"><br>
       <b>降到零维</b><br>
       单向著把平面压成直线，先发射奇异点、降到零维的文明获胜
     </td>
