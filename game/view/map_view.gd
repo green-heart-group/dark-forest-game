@@ -729,9 +729,11 @@ func _cell_info(c: Vector3i) -> String:
 		if not units.is_empty():
 			lines.append("停泊：" + "、".join(units))
 		var facilities: Array[String] = []
-		for spec in [["戴森球", me.dysons], ["采矿船", me.miners], ["光粒", me.grains]]:
+		for spec in [["戴森球", me.dysons], ["采矿船", me.miners]]:
 			if spec[1].get(c, 0) > 0:
 				facilities.append("%s ×%d" % [spec[0], spec[1][c]])
+		if me.grains.has(c):
+			facilities.append("光粒 ×1")
 		if me.broadcasters.has(c):
 			facilities.append("恒星广播器")
 		if me.bunkers.has(c):

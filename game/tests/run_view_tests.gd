@@ -103,6 +103,7 @@ func run_tests() -> void:
 	await run(test_build_and_dispatch)
 	await run(test_colony)
 	await run(test_hover_intel)
+	await run(test_hover_stored_grain)
 	await run(test_camera)
 	await run(test_selection)
 	await run(test_grid_modes)
@@ -625,6 +626,33 @@ func test_hover_intel() -> void:
 	map._set_hover({})
 	map._set_hover(_pickable_at(c))
 	check(map._cursor_label.text.contains("10 回合前") and map._cursor_label.modulate.a < 1.0, "旧情报写明多久以前，字变淡")
+
+
+## 规则：V3，光粒
+## 光粒库存按有无记录，不能像戴森球、采矿船一样直接和整数比较。
+func test_hover_stored_grain() -> void:
+	var s := fixture()
+	var me := s.human()
+	me.dysons[me.home] = 2
+	me.miners[me.home] = 3
+	show_state(s)
+	map._set_hover(_pickable_at(me.home))
+	check(not map._cursor_label.text.contains("光粒"), "无库存时不显示光粒")
+	me.grains[me.home] = true
+	var checksum := s.checksum()
+	view.refresh()
+	var text: String = map._cursor_label.text
+	check(text.contains("光粒 ×1"), "有库存时悬停显示一颗光粒")
+	check(text.contains("戴森球 ×2") and text.contains("采矿船 ×3"), "计数设施仍显示真实数量")
+	map.select_object(_pickable_at(me.home))
+	check(map._selection_label.text.contains("光粒 ×1"), "选择同一星系也能显示光粒库存")
+	check_eq(s.checksum(), checksum, "悬停与选择不改变库存或对局状态")
+	await capture("hover-stored-grain")
+	me.grains.erase(me.home)
+	view.refresh()
+	check(not map._cursor_label.text.contains("光粒") and not map._selection_label.text.contains("光粒"), "库存用掉后刷新移除悬停与选择提示中的光粒")
+	map._set_hover({})
+	map.select_object({})
 
 
 func test_sightings_drawn() -> void:
