@@ -1,9 +1,7 @@
 extends "res://tests/rules/rule_suite.gd"
 ## 仓库里的文件：冲突标记，规则文档和测试对不对得上。
 
-const RULES_DOC := "res://../docs/design/current-rules.md"
-## 规则编号，比如 T23、F3.5（前后不能紧挨着字母或数字，所以 E7F6 这样的名字不算）
-const RULE_ID := "(?<![A-Za-z0-9_])[A-Z]\\d+(?:\\.\\d+)?(?![A-Za-z0-9_])"
+const RULES_DOC := "docs/design/current-rules.md"
 ## 文档里这一节以后是还没做的东西，不要求有测试
 const NOT_BUILT := "还没做的"
 
@@ -36,7 +34,7 @@ func _find_conflict_markers(dir: String, bad: Array[String]) -> void:
 ## 写法：测试函数上面加一行 `## 规则：节标题，编号`，用「，」隔开，节标题照抄（去掉前面的「3. 」这样的序号）。
 ## 也查反过来的：写的节标题或编号在文档里找不到（改了标题、打错字）也算失败。
 func test_every_rule_has_a_test() -> void:
-	var doc := FileAccess.get_file_as_string(ProjectSettings.globalize_path(RULES_DOC))
+	var doc := FileAccess.get_file_as_string(root.path_join(RULES_DOC))
 	check(doc != "", "读得到 %s" % RULES_DOC)
 	var built := _before_section(doc, NOT_BUILT)
 	var sections := _leaf_sections(built)
@@ -81,11 +79,11 @@ func _leaf_sections(doc: String) -> Array[String]:
 	return leaves
 
 
-## 规则测试的每个文件，加上画面测试。
+## 规则测试的每个文件，加上画面测试和展开演示测试。
 func _test_files() -> Array[String]:
 	var files: Array[String] = []
-	for f in DirAccess.get_files_at("res://tests/rules"):
-		if f.get_extension() == "gd":
-			files.append("res://tests/rules".path_join(f))
+	for f in preload("res://tests/run_tests.gd").suite_files():
+		files.append("res://tests/rules".path_join(f))
 	files.append("res://tests/run_view_tests.gd")
+	files.append("res://tests/run_unfolding_tests.gd")
 	return files

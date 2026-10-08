@@ -11,7 +11,7 @@
 | --- | --- |
 | 游戏要做成什么样、为什么 | [design/game-design.md](design/game-design.md) |
 | 某条规则是谁、什么时候、为什么定的 | [决定记录](design/decision-log.md)（游戏规则）、[decisions/](decisions/README.md)（平台、分支等项目上的决定） |
-| 原型现在实际怎么运行、具体数值 | [design/current-rules.md](design/current-rules.md)（数值的出处是 `game/rules/balance.gd`） |
+| 原型现在实际怎么运行、具体数值 | [design/current-rules.md](design/current-rules.md)（数值的出处是 `game/balance.cfg`） |
 | 还没定、要回答的问题 | [open-questions.md](open-questions.md) |
 | 做到哪一步、测试个数、平衡模拟结果 | [status.md](status.md) |
 | 接下来要做什么 | [roadmap.md](roadmap.md) |

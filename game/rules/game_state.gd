@@ -14,8 +14,8 @@ const ANY_TARGET := Vector3i(-2, -2, -2)
 const NEVER := 1 << 30
 ## 会造在星系里、下一回合建好的设施
 const FACILITIES := ["miner", "dyson", "bunker", "broadcaster", "warning"]
-## 造好后马上存在星系里的东西
-const STORED := ["antimatter", "grain"]
+## 调试时 dev_set 不能直接改的文明属性：直接改会让别处对不上（比如灭亡了却还占着星系）
+const DEV_SET_LOCKED := ["is_ai", "alive", "name", "home"]
 ## 造好后停在星系里、要另外派出的单位
 const UNITS := ["probe", "warship", "colony", "starship", "devourer", "sophon"]
 const BUILD_NAMES := {"miner": "采矿船", "dyson": "戴森球", "bunker": "掩体", "broadcaster": "恒星广播器",
@@ -54,6 +54,8 @@ var play_on_after_death := false
 ## 有星系的格子（生成时有恒星的；星系被压到平面上时跟着改）
 var system_cells: Array[Vector3i] = []
 ## 被二向箔压平的格子：键是格子坐标，值是它被压到的平面所在的高度 z。所有文明都看得到。
+## 它和下面的 foil_zones、fold_anchor 用的是三维时的坐标，展开成二维（DimensionSpace.commit）以后不再换，只在三维阶段读；
+## linearized、line_zones、line_anchor 同样只在二维阶段读。
 var flattened: Dictionary[Vector3i, int] = {}
 ## 生效的黑域中心：每项是 {"center": 中心坐标, "left": 光速还保持 0 几个回合}。所有文明都看得到。
 var black_domains: Array[Dictionary] = []
@@ -106,18 +108,20 @@ var checksums: Array[int] = []
 ## {"step": 第几次结束回合之前, "civ": 文明序号, "ai": 是不是 AI 做的, "name": 操作函数名, "args": 参数}
 ## 调试面板用它显示 AI 做了什么；回放时把不是 AI 做的操作按顺序重做一遍。
 var history: Array[Dictionary] = []
-## 开局时 balance.gd 的数值（回放从这些数值开始，中途改的数值在 history 里）
+## 开局时 balance.cfg 的数值（回放从这些数值开始，中途改的数值在 history 里）
 var start_balance := {}
 ## 用调试功能改过数值。以后做成绩、成就时，这样的对局不算。
 var dev_used := false
 
 
 ## 第一个文明是人类玩家，其余是 AI。母星优先放在宜居星系上。
-static func new_game(seed_value: int, ai_count: int = Balance.AI_COUNT) -> GameState:
+## 开一局新的。spectator 为真时是观战局：玩家的文明也交给 AI。
+static func new_game(seed_value: int, ai_count: int = Balance.AI_COUNT, spectator := false) -> GameState:
 	var s := GameState.new()
 	s.seed_value = seed_value
 	s.ai_count = ai_count
-	s.start_balance = Replay.balance_values()
+	s.spectator = spectator
+	s.start_balance = Balance.values()
 	s.map = StarMap.generate(seed_value)
 	s.rng.seed = seed_value + 1
 	for c in s.map.stars:
@@ -149,6 +153,7 @@ static func new_game(seed_value: int, ai_count: int = Balance.AI_COUNT) -> GameS
 	for civ in s.civs:
 		s._observe(civ)
 		s.start_turn(civ)
+	s.human().is_ai = spectator  # 开局这一眼照玩家算，和以前的对局记录一样
 	return s
 
 
@@ -265,26 +270,21 @@ func ai_note(civ: Civ, text: String) -> void:
 # ---------- 调试：随时改数值 ----------
 # 都记进 history（算玩家的操作），回放时同样重做，改过数值的对局也能原样重现。
 
-## 改 balance.gd 里的一个数值（全局有效，直到再改回来或者重新开局）。
+## 改一个数值（全局有效，直到再改回来或者重新开局）。
 func dev_balance(name: String, value: Variant) -> Dictionary:
-	var script: Script = load("res://rules/balance.gd")
-	var old = script.get(name)
-	if old == null:
-		return {"error": "balance.gd 里没有 %s" % name}
-	if typeof(old) != typeof(value) and not (old is float and value is int):
-		return {"error": "%s 的类型不对" % name}
-	if old is Array:
-		old.assign(value)
-	else:
-		script.set(name, float(value) if old is float else value)
+	var err := Balance.set_value(name, value)
+	if err != "":
+		return {"error": err}
 	_dev_record(-1, "dev_balance", [name, value])
 	return {"error": ""}
 
 
-## 改一个文明的属性（能量、矿石、行动点、望远镜等级、是否由 AI 控制以外的任何数值或开关）。
+## 改一个文明的属性（能量、矿石、行动点、望远镜等级等，DEV_SET_LOCKED 里的除外）。
 func dev_set(civ: Civ, field: String, value: Variant) -> Dictionary:
-	if not field in civ or field == "is_ai":
+	if not field in civ:
 		return {"error": "文明没有 %s 这一项" % field}
+	if DEV_SET_LOCKED.has(field):
+		return {"error": "%s 不能直接改（由谁控制用 set_autoplay，灭亡和母星系由规则管）" % field}
 	var old = civ.get(field)
 	if typeof(old) != typeof(value) and not (old is float and value is int):
 		return {"error": "%s 的类型不对" % field}
@@ -442,6 +442,23 @@ func _discover(civ: Civ, what: String) -> void:
 
 ## 为什么不能升级这项科技（能升级时为空）。
 func research_error(civ: Civ, id: String) -> String:
+	var error := research_block_error(civ, id)
+	if error != "":
+		return error
+	var cost := Tech.cost(id)
+	return _money_error(civ, cost[0], cost[1])
+
+
+## 前置科技都有了没有。
+static func _needs_met(civ: Civ, id: String) -> bool:
+	for need in Tech.ALL[id]["needs"]:
+		if not civ.has_tech(need):
+			return false
+	return true
+
+
+## 除了能量、矿石不够以外，为什么不能升级这项科技（AI 用它挑攒钱的目标）。
+func research_block_error(civ: Civ, id: String) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
@@ -461,11 +478,6 @@ func research_error(civ: Civ, id: String) -> String:
 		return "母星系躲在黑域里，不能升级科技"
 	if sophon_research_left(civ) > 0:
 		return "被智子锁住，还要 %d 回合才能升级科技" % sophon_research_left(civ)
-	var cost := Tech.cost(id)
-	if civ.energy < cost[0]:
-		return "能量不足"
-	if civ.mineral < cost[1]:
-		return "矿石不足"
 	return ""
 
 
@@ -490,12 +502,7 @@ func _tech_burst(civ: Civ) -> void:
 		return
 	var options: Array[String] = []
 	for id in Tech.ALL:
-		if civ.has_tech(id) or not tier_open(civ, Tech.tier(id)):
-			continue
-		var ok := true
-		for need in Tech.ALL[id]["needs"]:
-			ok = ok and civ.has_tech(need)
-		if ok:
+		if not civ.has_tech(id) and tier_open(civ, Tech.tier(id)) and _needs_met(civ, id):
 			options.append(id)
 	if not options.is_empty():
 		civ.techs[options[rng.randi_range(0, options.size() - 1)]] = true
@@ -755,7 +762,7 @@ func dispatch_error(civ: Civ, id: int, direction: Vector3) -> String:
 		return "没有这个单位"
 	if not s.docked:
 		return "已经派出了"
-	if not [Ship.PROBE, Ship.WARSHIP, Ship.DEVOURER].has(s.kind):
+	if not Ship.AIMED.has(s.kind):
 		return "这个单位要选目的地"
 	if space_direction(direction).length() < 1e-6:
 		return "需要指定方向"
@@ -793,7 +800,7 @@ func turn_error(civ: Civ, id: int, direction: Vector3) -> String:
 	var s := civ.ship_by_id(id)
 	if s == null:
 		return "没有这个单位"
-	if not [Ship.WARSHIP, Ship.DEVOURER].has(s.kind):
+	if not Ship.TURNABLE.has(s.kind):
 		return "只有战舰和吞噬者能转向"
 	if s.docked:
 		return "还没派出"
@@ -829,13 +836,13 @@ func colony_error(civ: Civ, id: int, target := ANY_TARGET) -> String:
 	var s := civ.ship_by_id(id)
 	if s == null or s.kind != Ship.COLONY:
 		return "没有这艘殖民船"
-	if not s.docked and s.direction != Vector3.ZERO:
+	if not s.waiting():
 		return "还在飞"
 	if target != ANY_TARGET:
 		if civ.owns(target):
 			return "这已经是自己的星系"
 		if not colony_target_ok(civ, target):
-			return "目的地在星图外或已被压没"
+			return "目的地在星图外"
 	if _stuck_at(s):
 		return STUCK_ERROR
 	return _pay_error(civ, action_cost("send_colony"))
@@ -950,13 +957,18 @@ func settle_starship(civ: Civ) -> Dictionary:
 	civ.actions_left -= 1
 	var c := s.cell()
 	_remove_ship(civ, s)
-	civ.colonies.append(c)
-	if civ.colonies.size() == 1:
-		civ.home = c
+	_add_colony(civ, c)
 	if not civ.is_ai:
 		add_log("星舰在 %s 建立星系（%d 颗恒星）" % [c, map.star_at(c)])
 	_record(civ, "settle_starship", [])
 	return {"error": ""}
+
+
+## 加一个星系；只剩星舰的文明落脚时，这里就是新的母星系。
+func _add_colony(civ: Civ, c: Vector3i) -> void:
+	civ.colonies.append(c)
+	if civ.colonies.size() == 1:
+		civ.home = c
 
 
 ## 为什么不能从 at（默认母星系）朝 direction 发射光粒（能发射时为空）。
@@ -1006,7 +1018,7 @@ func antimatter_targets(civ: Civ) -> Array[Ship]:
 		for s in other.ships:
 			if s.kind != Ship.WARSHIP or s.dead or s.docked:
 				continue
-			var d := _nearest(civ.colonies, s.pos)
+			var d := nearest_distance(civ.colonies, s.pos)
 			if d <= Balance.ANTIMATTER_RANGE + 1e-6:
 				found.append([d, s])
 	found.sort_custom(func(a, b): return a[0] < b[0])
@@ -1058,13 +1070,13 @@ func sophon_error(civ: Civ, id: int, target := ANY_TARGET) -> String:
 		return "没有这个智子"
 	if s.lock >= 0:
 		return "这个智子已经锁住了别的文明"
-	if not s.docked and s.direction != Vector3.ZERO:
+	if not s.waiting():
 		return "还在飞"
 	if target != ANY_TARGET:
 		if civ.owns(target):
 			return "这是自己的星系"
 		if not cell_exists(target):
-			return "目的地在星图外或已被压没"
+			return "目的地在星图外"
 	if _stuck_at(s):
 		return STUCK_ERROR
 	return _pay_error(civ, action_cost("send_sophon"))
@@ -1304,6 +1316,42 @@ func _move_all_ships() -> void:
 	_clean_dead()
 
 
+## 单位在 at 时的 [最高速度, 每回合加速]：曲率引擎在自己视野外换成更快的，慢速出发时在自己视野内限速。
+func _speed_limits(civ: Civ, s: Ship, at: Vector3, slow_start: bool) -> Array[float]:
+	var top := s.max_speed
+	var acc := s.accel
+	if s.warp and civ != null and not in_own_vision(civ, at):
+		top = Balance.WARP_MOVE[0]
+		acc = Balance.WARP_MOVE[1]
+	if slow_start and civ != null and in_own_vision(civ, at):
+		top = minf(top, Balance.SLOW_START_SPEED)
+	return [top, acc]
+
+
+## 照现在的速度，civ 的单位 s 接下来 turns 个回合大概在哪（第一项是现在的位置），画航线用。
+## 加速、曲率引擎、慢速出发和光速都和 _move_ship 一样算；不管吞噬者停下来吃行星、星舰停在别人星系旁边、被困住。
+func predict_path(civ: Civ, s: Ship, turns: int) -> Array[Vector3]:
+	var points: Array[Vector3] = [s.pos]
+	if not s.moving():
+		return points
+	var speed := s.speed
+	var p := s.pos
+	var slow := s.slow_start
+	for i in turns:
+		slow = slow and civ != null and in_own_vision(civ, p)
+		var limits := _speed_limits(civ, s, p, slow)
+		speed = minf(speed + limits[1], limits[0])
+		var step := _travel(p, s.direction, speed)
+		if s.has_target and p.distance_to(s.target) <= step + 1e-6:
+			points.append(s.target)
+			break
+		p += s.direction * step
+		points.append(p)
+		if Ship.outside(p, map.bounds()):
+			break
+	return points
+
+
 ## 单位先加速、再沿直线移动（G1），检查这一步扫过的格子。有目的地的，最后一步直接落在目的地上。
 func _move_ship(civ: Civ, s: Ship) -> void:
 	if s.docked or s.parked or s.direction == Vector3.ZERO:
@@ -1311,17 +1359,10 @@ func _move_ship(civ: Civ, s: Ship) -> void:
 	if s.eat_wait > 0:
 		s.eat_wait -= 1
 		return
-	var top := s.max_speed
-	var acc := s.accel
-	if s.warp and civ != null and not in_own_vision(civ, s.pos):
-		top = Balance.WARP_MOVE[0]
-		acc = Balance.WARP_MOVE[1]
-	if s.slow_start:
-		if civ != null and in_own_vision(civ, s.pos):
-			top = minf(top, Balance.SLOW_START_SPEED)
-		else:
-			s.slow_start = false
-	s.speed = minf(s.speed + acc, top)
+	if s.slow_start and (civ == null or not in_own_vision(civ, s.pos)):
+		s.slow_start = false
+	var limits := _speed_limits(civ, s, s.pos, s.slow_start)
+	s.speed = minf(s.speed + limits[1], limits[0])
 	var from := s.pos
 	var mine := civ != null and not civ.is_ai
 	# 实际速度还要乘以所在格的光速（G14）。慢到几乎不动就停在原地，停久了就消失
@@ -1338,7 +1379,7 @@ func _move_ship(civ: Civ, s: Ship) -> void:
 	var arrived := false
 	if s.has_target:
 		# 星舰的目的地是别人的星系（下令时不知道）：停在离它 1 格的地方（已经在 1 格以内就原地停下）。
-		# 星舰视野 1.5 格，到这里本来就看得到那个星系
+		# 星舰的视野（VISION_COLONY）比 1 格大，到这里本来就看得到那个星系
 		var goal := s.target
 		var dest := Vector3i(s.target.round())
 		var dest_owner := coord_owner(dest)
@@ -1446,9 +1487,7 @@ func _settle(civ: Civ, s: Ship) -> void:
 			add_log("%s到达 %s，这里不能殖民，原地待命" % [s.label(), c])
 		return
 	_destroy(civ, s, "")
-	civ.colonies.append(c)
-	if civ.colonies.size() == 1:
-		civ.home = c
+	_add_colony(civ, c)
 	if not civ.is_ai:
 		add_log("殖民船在 %s 建立殖民地（%d 颗恒星）" % [c, map.star_at(c)])
 
@@ -1842,8 +1881,6 @@ func _observe(civ: Civ) -> void:
 	if civ.colonies.is_empty() and civ.has_starship():
 		home_pos = civ.starship().pos
 	var bases := civ.bases()
-	# 还没压缩过时，星系格子都还在
-	var may_vanish := not flattened.is_empty() or not linearized.is_empty()
 	var snaps: Dictionary = _view_cache.get("snaps", {})
 	for o in observers(civ):
 		var pos: Vector3 = o["pos"]
@@ -1856,7 +1893,7 @@ func _observe(civ: Civ) -> void:
 		var near := _systems_near(pos, reach, sphere)
 		for c in near:
 			var p := Vector3(c)
-			if (may_vanish and not cell_exists(c)) or (not sphere and not in_view(o, p)) or (may_block and blocked(pos, p)):
+			if (not sphere and not in_view(o, p)) or (may_block and blocked(pos, p)):
 				continue
 			if not snaps.has(c):
 				snaps[c] = snapshot(c)
@@ -1991,7 +2028,7 @@ func _warn(civ: Civ) -> void:
 		if foil_works(f):
 			things.append([f.position(), foil_kind(f)])
 	for t in things:
-		if _nearest(civ.colonies, t[0]) <= r + 1e-6:
+		if nearest_distance(civ.colonies, t[0]) <= r + 1e-6:
 			var alert := {"pos": t[0], "kind": t[1], "turn": turn}
 			civ.alerts.append(alert)
 			civ.sightings.append(alert)
@@ -2007,7 +2044,7 @@ func vision_cells(civ: Civ) -> int:
 	for o in observers(civ):
 		if o["base"]:
 			total += 4.0 / 3.0 * PI * pow(o["r"], 3)
-	return mini(int(total), StarMap.SIZE * StarMap.SIZE * StarMap.SIZE)
+	return mini(int(total), DimensionSpace.COUNT)
 
 
 # ---------- 收入 ----------
@@ -2072,20 +2109,27 @@ func foil_error(civ: Civ, to_line: bool, target := ANY_TARGET, origin: Vector3i 
 	if not to_line and all_flat():
 		return "星图已是二维，请使用单向著"
 	if target != ANY_TARGET:
-		if not map.contains(target):
-			return "目标坐标不在星图内"
-		if to_line and target.z != flat_plane:
-			return "目标必须在二维平面上"
+		error = foil_target_error(civ, to_line, target)
+		if error != "":
+			return error
 	if not civ.origins().has(origin):
 		return "发射源必须是自己的星系或星舰"
-	if target != ANY_TARGET:
-		if target == origin:
-			return "目标不能是发射源"
-		if civ.owns(target):
-			return "目标不能是自己的星系"
-		if (linearized.has(target) if to_line else flattened.has(target)):
-			return "这一格已经压成直线了，换一个目标" if to_line else "这一格已经压平了，换一个目标"
+	if target == origin:
+		return "目标不能是发射源"
 	return _pay_error(civ, action_cost("launch_line_foil" if to_line else "launch_foil"))
+
+
+## 这一格能不能当二向箔（to_line 时是单向著）的目标，只看格子本身（能时为空）。
+func foil_target_error(civ: Civ, to_line: bool, target: Vector3i) -> String:
+	if not map.contains(target):
+		return "目标坐标不在星图内"
+	if to_line and target.z != flat_plane:
+		return "目标必须在二维平面上"
+	if civ.owns(target):
+		return "目标不能是自己的星系"
+	if (linearized.has(target) if to_line else flattened.has(target)):
+		return "这一格已经压成直线了，换一个目标" if to_line else "这一格已经压平了，换一个目标"
+	return ""
 
 
 func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -> Dictionary:
@@ -2230,12 +2274,22 @@ func space_direction(direction: Vector3) -> Vector3:
 	return direction.normalized() if direction.length() > 1e-6 else Vector3.ZERO
 
 
+## 二向箔打到 target 时压成哪一层平面（z）：第一片箔定下，后来的都压到同一层。
+func foil_plane_for(target: Vector3i) -> int:
+	return flat_plane if flat_plane >= 0 else target.z
+
+
+## 单向著打到 target 时压成哪一行（y）：第一片定下，后来的都压到同一行。
+func line_y_for(target: Vector3i) -> int:
+	return line_y if line_y >= 0 else target.y
+
+
 ## 二向箔在格子 at 展开：平面的高度是第一片箔定下的，马上压平它能压到的格子。
 func _unfold_foil(at: Vector3i) -> void:
 	if dimension != 3 or not map.contains(at):
 		return
 	if flat_plane < 0:
-		flat_plane = at.z
+		flat_plane = foil_plane_for(at)
 		fold_anchor = at
 	var zone := {"center": Vector3i(at.x, at.y, flat_plane), "age": 0.0}
 	foil_zones.append(zone)
@@ -2269,7 +2323,7 @@ func _unfold_line_foil(at: Vector3i) -> void:
 	if dimension != 2 or not map.contains(at):
 		return
 	if line_y < 0:
-		line_y = at.y
+		line_y = line_y_for(at)
 		line_anchor = at
 	var zone := {"center": Vector3i(at.x, line_y, flat_plane), "age": 0.0}
 	line_zones.append(zone)
@@ -2278,8 +2332,13 @@ func _unfold_line_foil(at: Vector3i) -> void:
 
 ## 二维里沿 x 扩散，每列 27 格展开到一维。
 static func line_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return absf(c.x - center.x) <= age
+	return zone_distance(center, c, true) <= age
 
+
+## 箔的波前离格子 c 多远：三维里看水平距离（along_x 为假），二维里只看 x。
+## 规则（压没哪些格子）和展开画面（DimensionSpace.frame）都用它，两边不会对不上。
+static func zone_distance(center: Vector3i, c: Vector3i, along_x: bool) -> float:
+	return absf(c.x - center.x) if along_x else Vector2(c.x - center.x, c.y - center.y).length()
 
 
 func _apply_line_zone(zone: Dictionary) -> void:
@@ -2295,8 +2354,7 @@ func _apply_line_zone(zone: Dictionary) -> void:
 
 ## 波前按原三维坐标的水平距离推进，覆盖后整列完成二维展开。
 static func zone_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return Vector2(c.x - center.x, c.y - center.y).length() <= age
-
+	return zone_distance(center, c, false) <= age
 
 
 ## 按波前处理整列；同时展开多片箔时只处理尚未展开的格子。
@@ -2317,10 +2375,9 @@ func turns_until_flat(c: Vector3i) -> float:
 	var zones := line_zones if all_flat() else foil_zones
 	for zone in zones:
 		var center: Vector3i = zone["center"]
-		var distance := absf(c.x - center.x) if all_flat() else Vector2(c.x - center.x, c.y - center.y).length()
+		var distance := zone_distance(center, c, all_flat())
 		best = minf(best, maxf(0.0, (distance - zone["age"]) / Balance.FOIL_SPREAD))
 	return best
-
 
 
 ## 为什么现在不能开始自身降维（能开始时为空）。
@@ -2424,8 +2481,6 @@ func domain_error(civ: Civ, center := ANY_TARGET) -> String:
 	if center != ANY_TARGET:
 		if not map.contains(center):
 			return "坐标不在星图内"
-		if not cell_exists(center):
-			return "压平的空间不能生成黑域"
 		if not sees_now(civ, center):
 			return "只能投放在自己现在看得到的地方"
 	return _pay_error(civ, action_cost("launch_black_domain"))
@@ -2456,7 +2511,7 @@ func _advance_domains(civ: Civ) -> void:
 		if not cell_exists(center):
 			continue
 		_ensure_light()
-		light[_li(center)] = 0.0
+		light[light_index(center)] = 0.0
 		_light_moving = true
 		black_domains = black_domains.filter(func(x): return x["center"] != center)
 		black_domains.append({"center": center, "left": Balance.BLACK_DOMAIN_TURNS})
@@ -2503,7 +2558,7 @@ func _spread_light() -> void:
 			b[i] = sum / count
 		a = b
 	for d in black_domains:
-		a[_li(d["center"])] = 0.0
+		a[light_index(d["center"])] = 0.0
 	light = a
 	# 扩散均匀了（没有黑域中心，各格几乎不再变化）就停下，省得每回合重算
 	var change := 0.0
@@ -2518,16 +2573,23 @@ func _ensure_light() -> void:
 		light.fill(1.0)
 
 
-func _li(c: Vector3i) -> int:
+## 格子 c 的光速存在 light 的第几项。
+func light_index(c: Vector3i) -> int:
 	c -= map.origin
 	return (c.x * map.extent.y + c.y) * map.extent.z + c.z
+
+
+## 直接设格子 c 的光速（测试用来摆出想要的局面；规则里光速只由黑域改）。
+func set_light_at(c: Vector3i, value: float) -> void:
+	_ensure_light()
+	light[light_index(c)] = value
 
 
 ## 格子 c 的光速（G14），开始是 1.0，被黑域拉低。星图外的都是 1.0。
 func light_at(c: Vector3i) -> float:
 	if light.is_empty() or not map.contains(c):
 		return 1.0
-	return light[_li(c)]
+	return light[light_index(c)]
 
 
 ## 光从 a 走到 b 要几个回合：每一小段按那里的光速算（G14）。路上有光速几乎为 0 的格子（包括两头），过不去，返回 INF。
@@ -2720,6 +2782,11 @@ func _common_error(civ: Civ) -> String:
 func _pay_error(civ: Civ, energy: int, mineral := 0) -> String:
 	if civ.actions_left <= 0:
 		return "行动点用完了，结束回合后恢复"
+	return _money_error(civ, energy, mineral)
+
+
+## 能量、矿石够不够（够时为空），不看行动点。
+func _money_error(civ: Civ, energy: int, mineral := 0) -> String:
 	if civ.energy < energy:
 		return "能量不足（还差 %d）" % (energy - civ.energy)
 	if civ.mineral < mineral:
@@ -2728,7 +2795,7 @@ func _pay_error(civ: Civ, energy: int, mineral := 0) -> String:
 
 
 ## p 离这些格子里最近的一个多远（没有格子时为 INF）。
-static func _nearest(cells: Array[Vector3i], p: Vector3) -> float:
+static func nearest_distance(cells: Array[Vector3i], p: Vector3) -> float:
 	var best := INF
 	for c in cells:
 		best = minf(best, Vector3(c).distance_to(p))

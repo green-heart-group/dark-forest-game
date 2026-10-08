@@ -5,13 +5,15 @@
 
     uv run game/tools/make_readme_gifs.py
 
-要装好 godot_console 和 ffmpeg（都要能在终端里直接运行）。
+要装好 Godot（和跑测试时一样找：环境变量 GODOT、godot_console 或 godot）和 ffmpeg。
 先由 game/tools/record_gifs.gd 把每一帧存成 PNG（会在屏幕外开一个游戏窗口，大约一分钟），
 再用 ffmpeg 拼成 480 像素宽的 GIF。帧放在 build/readme_frames/（不进仓库）。
 """
 
 import subprocess
 from pathlib import Path
+
+from test import find_godot  # 同一目录下的 test.py
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAMES = ROOT / "build" / "readme_frames"
@@ -26,7 +28,7 @@ NAMES = {"domain": "black-domain"}
 def main() -> None:
     FRAMES.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["godot_console", "--path", "game", "--script", "res://tools/record_gifs.gd",
+        [find_godot(), "--path", "game", "--script", "res://tools/record_gifs.gd",
          "--", f"out={FRAMES.as_posix()}"],
         cwd=ROOT, check=True, timeout=600,
     )

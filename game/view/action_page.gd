@@ -47,6 +47,8 @@ var _coord_boxes: Array[SpinBox] = []
 var _target_box := VBoxContainer.new()
 ## 距离那一行；悬停说明写这段距离指什么
 var _dist_row: HBoxContainer
+## 俯仰角那一格（星图进入二维以后藏起来）
+var _pitch_box: Control
 ## 目标位置用极坐标表示：方向用上面的两个角度圆盘，再加离发射源的距离
 var _dist := HSlider.new()
 var _dist_label := Label.new()
@@ -102,7 +104,8 @@ func setup(p_main: Node) -> void:
 	_pitch.marks = {90: "上", 0: "平", -90: "下"}
 	var how := "\n拖圆钮调，滚轮每格 1°。"
 	dials.add_child(_dial_box(_yaw, "↻ 水平角", "0° 朝 x 轴，90° 朝 y 轴。" + how))
-	dials.add_child(_dial_box(_pitch, "⇅ 俯仰角", "0° 水平，90° 朝上，-90° 朝下。" + how))
+	_pitch_box = _dial_box(_pitch, "⇅ 俯仰角", "0° 水平，90° 朝上，-90° 朝下。" + how)
+	dials.add_child(_pitch_box)
 	dials.add_child(_coord_column())
 	_dir_box.add_child(dials)
 	detail.add_child(_target_box)
@@ -112,7 +115,6 @@ func setup(p_main: Node) -> void:
 	_dist_row = dist_row
 	dist_row.add_child(Widgets.dim_label("↔ 距离"))
 	_dist.min_value = 0
-	_dist.max_value = ceilf(sqrt(3.0) * (StarMap.SIZE - 1))
 	_dist.step = 0.1
 	_dist.value = 5
 	_dist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -205,7 +207,7 @@ func refresh(me: Civ) -> void:
 		_action = Action.FOIL
 	_action_tiles[Action.FOIL].visible = not state.all_flat()
 	_action_tiles[Action.LINE_FOIL].visible = state.all_flat()
-	_pitch.get_parent().visible = not state.all_flat()
+	_pitch_box.visible = not state.all_flat()
 	_refresh_units(me)
 	_refresh_aim_inputs()
 	_refresh_known_pick(me)
@@ -259,7 +261,7 @@ func _refresh_aim_inputs() -> void:
 		Action.FOIL:
 			_dist_row.tooltip_text = "离发射源多远（以目标格子为中心压平）"
 		Action.LINE_FOIL:
-			_dist_row.tooltip_text = "离发射源多远（沿 x 扩散，最终展开为 729 格直线）"
+			_dist_row.tooltip_text = "离发射源多远（沿 x 扩散，最终展开为 %d 格直线）" % DimensionSpace.COUNT
 		Action.DOMAIN:
 			_dist_row.tooltip_text = "离发射源多远（黑域的中心）"
 		Action.BROADCAST:
@@ -325,7 +327,7 @@ func _action_specs() -> Dictionary:
 				"从有广播器的发射源把一个坐标以光速告诉所有人。那里的文明可能被听到的人（包括看不见的隐藏文明）打。离目标越近，越容易暴露自己。",
 				Aim.TARGET],
 		Action.FOIL: ["📄", "二向箔",
-				"准备 %d 回合后飞向目标展开：每列 9 格展开为 3×3，波前持续扩散。全图完成后得到 27×27 新坐标并重新探索。未自身降维的文明会被消灭。" % Balance.FOIL_PREPARE_TURNS,
+				"准备 %d 回合后飞向目标展开：每列 9 格展开为 3×3，波前持续扩散。全图完成后得到 %d×%d 新坐标并重新探索。未自身降维的文明会被消灭。" % [Balance.FOIL_PREPARE_TURNS, DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE],
 				Aim.TARGET],
 		Action.LINE_FOIL: ["━", "单向著",
 				"二维里用。准备 %d 回合后起飞，展开后沿 x 轴扩散，把平面压成直线。只有再次降维的文明能活。" % Balance.FOIL_PREPARE_TURNS,
@@ -408,12 +410,11 @@ func _unit_choices(me: Civ, a: int) -> Array[Ship]:
 	for s in me.ships:
 		if s.dead:
 			continue
-		if a == Action.DISPATCH and ((s.docked and s.kind in [Ship.PROBE, Ship.WARSHIP, Ship.DEVOURER])
-				or (not s.docked and s.kind in [Ship.WARSHIP, Ship.DEVOURER])):
+		if a == Action.DISPATCH and (Ship.AIMED.has(s.kind) if s.docked else Ship.TURNABLE.has(s.kind)):
 			result.append(s)
-		elif a == Action.COLONY and s.kind == Ship.COLONY and (s.docked or not s.moving()):
+		elif a == Action.COLONY and s.kind == Ship.COLONY and s.waiting():
 			result.append(s)
-		elif a == Action.SOPHON and s.kind == Ship.SOPHON and s.lock < 0 and (s.docked or not s.moving()):
+		elif a == Action.SOPHON and s.kind == Ship.SOPHON and s.lock < 0 and s.waiting():
 			result.append(s)
 	return result
 

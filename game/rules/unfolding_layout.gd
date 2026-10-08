@@ -45,11 +45,12 @@ static func spread(t: float) -> float:
 	return 2.0 * t - t * t
 
 
+## 每列（或每行）的宽度是 widths，锚点那列不动，算出每列中心的位置。
 static func centers(widths: PackedFloat32Array, anchor: int) -> PackedFloat32Array:
 	var result := PackedFloat32Array()
-	result.resize(SIZE)
+	result.resize(widths.size())
 	result[anchor] = anchor
-	for i in range(anchor, SIZE - 1):
+	for i in range(anchor, widths.size() - 1):
 		result[i + 1] = result[i] + (widths[i] + widths[i + 1]) / 2.0
 	for i in range(anchor - 1, -1, -1):
 		result[i] = result[i + 1] - (widths[i] + widths[i + 1]) / 2.0

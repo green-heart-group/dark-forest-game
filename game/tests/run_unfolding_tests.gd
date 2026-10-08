@@ -8,6 +8,8 @@ const TestLog := preload("res://tests/test_log.gd")
 var results := TestLog.new()
 var output := ""
 var demo
+## 跑过的测试名字（没写进 run() 的测试会被查出来）
+var _ran: Array[String] = []
 
 
 func _init() -> void:
@@ -21,8 +23,13 @@ func check(ok: bool, message: String) -> void:
 	results.check(ok, message)
 
 
+func check_eq(actual, expected, message: String) -> void:
+	results.check_eq(actual, expected, message)
+
+
 func run_test(test: Callable) -> void:
 	var name := test.get_method()
+	_ran.append(name)
 	if not results.wants(name):
 		return
 	results.begin(name)
@@ -44,6 +51,10 @@ func run() -> void:
 	demo.set_process(false)
 	await run_test(test_controls)
 	await run_test(test_frames)
+	for m in get_method_list():
+		var name: String = m["name"]
+		if name.begins_with("test_") and not _ran.has(name):
+			results.fail("没写进 run() 的列表，没有跑", name)
 	quit(results.finish("展开演示"))
 
 

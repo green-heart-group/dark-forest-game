@@ -11,6 +11,10 @@ const STARSHIP := "starship"
 const DEVOURER := "devourer"
 const GRAIN := "grain"
 const SOPHON := "sophon"
+## 朝一个方向派出去的（别的要选目的地）
+const AIMED := [PROBE, WARSHIP, DEVOURER]
+## 在飞的时候能转向的
+const TURNABLE := [WARSHIP, DEVOURER]
 
 const NAMES := {PROBE: "探测器", WARSHIP: "战舰", COLONY: "殖民船", STARSHIP: "星舰", DEVOURER: "吞噬者",
 		GRAIN: "光粒", SOPHON: "智子"}
@@ -80,11 +84,11 @@ func cell() -> Vector3i:
 
 
 ## 是否已经飞出星图（离边界超过半个格子）。
-func is_outside(bounds := AABB(Vector3.ZERO, Vector3.ONE * StarMap.SIZE)) -> bool:
+func is_outside(bounds: AABB) -> bool:
 	return outside(pos, bounds)
 
 
-static func outside(p: Vector3, bounds := AABB(Vector3.ZERO, Vector3.ONE * StarMap.SIZE)) -> bool:
+static func outside(p: Vector3, bounds: AABB) -> bool:
 	var lo := bounds.position - Vector3.ONE * Geometry.CELL_HALF
 	var hi := bounds.end - Vector3.ONE * Geometry.CELL_HALF
 	return p.x < lo.x or p.y < lo.y or p.z < lo.z or p.x > hi.x or p.y > hi.y or p.z > hi.z
@@ -93,6 +97,11 @@ static func outside(p: Vector3, bounds := AABB(Vector3.ZERO, Vector3.ONE * StarM
 ## 在飞（不是停着，也不是停在别人星系上的星际探测器）。
 func moving() -> bool:
 	return not docked and not parked and (direction != Vector3.ZERO)
+
+
+## 停着等命令：在星系里，或者到了目的地停在外面（殖民船、智子可以再派）。
+func waiting() -> bool:
+	return docked or direction == Vector3.ZERO
 
 
 func label() -> String:

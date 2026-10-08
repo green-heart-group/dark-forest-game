@@ -3,10 +3,6 @@ extends "res://tests/rules/rule_suite.gd"
 ## 编号查得到出处，答完的问题挪走，现在的事实里没有做事时的记录，每个文件都在目录的索引里。
 ## 文档里的数字和表格跟着代码更新，由 game/tools/update_docs.py 管（test.py 跑完全部测试时调用它）。
 
-## 仓库根目录（game/ 的上一层），末尾不带 /
-var root := ProjectSettings.globalize_path("res://").trim_suffix("/").get_base_dir()
-## 规则编号，和 test_repo.gd 的一样（E7F6 这样的名字不算）
-const RULE_ID := "(?<![A-Za-z0-9_])[A-Z]\\d+(?:\\.\\d+)?(?![A-Za-z0-9_])"
 ## 「现在的事实」：只写现在是什么样的文件（相对仓库根目录；以 / 结尾的是整个目录）
 const CURRENT_DOCS := [
 	"README.md", "AGENTS.md", "docs/README.md", "docs/status.md", "docs/open-questions.md", "docs/roadmap.md",

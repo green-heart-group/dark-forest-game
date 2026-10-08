@@ -295,13 +295,22 @@ func test_ai_reduces_when_flattening_near() -> void:
 	s.foil_zones.append({"center": Vector3i(3, 0, 0), "age": 0.0})
 	AI.take_turn(s, ai)
 	check(ai.reduce_left > 0, "压平快到时开始降维")
+	# 不是因为钱不够而降不了维（比如还有没建好的东西）时，这回合照常行动
+	s = _two_civs(Vector3i(5, 0, 0))
+	ai = s.civs[1]
+	ai.is_ai = true
+	_give(ai, ["dimension"])
+	s.foil_zones.append({"center": Vector3i(3, 0, 0), "age": 0.0})
+	ai.energy = 1000
+	ai.pending.append({"kind": "miner", "at": ai.home})
+	var ap := ai.actions_left
+	AI.take_turn(s, ai)
+	check(ai.reduce_left == 0 and ai.actions_left < ap, "降不了维也不白白空过一回合")
 
 
 ## 规则：AI 怎么行动
 func test_long_ai_game_runs() -> void:
-	var s := GameState.new_game(3)
-	s.spectator = true
-	s.human().is_ai = true
+	var s := GameState.new_game(3, Balance.AI_COUNT, true)
 	for i in 200:
 		if s.is_over():
 			break

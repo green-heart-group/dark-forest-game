@@ -9,7 +9,7 @@
 
     uv run game/tools/mutate.py geometry.gd              # 改 game/rules/geometry.gd
     uv run game/tools/mutate.py geometry.gd tech.gd      # 改几个文件
-    uv run game/tools/mutate.py all                      # 改 game/rules/ 下所有文件（balance.gd 和生成的目录除外）
+    uv run game/tools/mutate.py all                      # 改 game/rules/ 下所有文件
     uv run game/tools/mutate.py geometry.gd --view       # 规则测试没抓到的，再跑画面测试看能不能抓到
     uv run game/tools/mutate.py geometry.gd --only geo   # 只跑名字里带 geo 的规则测试
     uv run game/tools/mutate.py all --out mutate.txt     # 结果另外存一份
@@ -41,8 +41,8 @@ from pathlib import Path
 
 from test import GAME, DEFAULT_MS, find_godot, godot_args, load_times, rule_tests  # 同一目录下的 test.py
 
-# 只放数值或自动生成的文件，改了也看不出测试好坏
-SKIP_FILES = {"balance.gd", "balance_index.gd"}
+# 只放数值或自动生成的文件，改了也看不出测试好坏（balance.gd 里有读改数值的代码，要测）
+SKIP_FILES: set[str] = set()
 # 符号互换。左边出现在代码里（不在注释、字符串里）时，换成右边
 SWAPS = {
     "<": "<=", "<=": "<", ">": ">=", ">=": ">",
@@ -140,10 +140,12 @@ def user_dir(name: str) -> Path:
 
 
 def make_copy(root: Path, user_dir_name: str) -> Path:
-    """照仓库的样子摆一份：game/ 旁边放 docs/；存档目录换成自己的。返回副本里的 game/。"""
+    """照仓库的样子摆一份：game/ 旁边放 docs/ 和根目录的 .md（文档测试要读）；存档目录换成自己的。返回副本里的 game/。"""
     game = root / "game"
     shutil.copytree(GAME, game, ignore=shutil.ignore_patterns(".vscode"))
     shutil.copytree(GAME.parent / "docs", root / "docs", ignore=shutil.ignore_patterns("local"))
+    for md in GAME.parent.glob("*.md"):
+        shutil.copy2(md, root / md.name)
     project = game / "project.godot"
     text = project.read_text(encoding="utf-8").replace(
         "[application]\n",

@@ -111,11 +111,8 @@ func test_warning_names_line_foil() -> void:
 ## F5.3：隐藏文明按现在的维度出手：二维发单向著（目标挪到平面上），压成直线后只发光粒。
 ## 规则：广播和隐藏文明，F5.3
 func test_hidden_weapon_matches_dimension() -> void:
-	var old_chance := Balance.HIDDEN_STRIKE_CHANCE
-	var old_foil := Balance.HIDDEN_FOIL_CHANCE
 	Balance.HIDDEN_STRIKE_CHANCE = 1.0
 	Balance.HIDDEN_FOIL_CHANCE = 1.0
-	var old_range := Balance.HIDDEN_HEAR_RANGE
 	Balance.HIDDEN_HEAR_RANGE = 1e6  # 出手的机会随距离变小，放大范围让它一定出手
 	var s := _two_dimensional_match()
 	var listen := {"from": Vector3i(-1, 4, s.flat_plane), "target": Vector3i(3, 3, 7), "left": 5}
@@ -138,9 +135,6 @@ func test_hidden_weapon_matches_dimension() -> void:
 	s.hidden_listen.append(listen.duplicate())
 	s._hidden_strikes()
 	check(s.hidden_foils.is_empty() and s.hidden_ships.size() == 1, "一维里没有箔可发，只发光粒")
-	Balance.HIDDEN_HEAR_RANGE = old_range
-	Balance.HIDDEN_STRIKE_CHANCE = old_chance
-	Balance.HIDDEN_FOIL_CHANCE = old_foil
 
 
 ## 规则：二维、单向著和奇异点
@@ -223,7 +217,7 @@ func test_unfold_preserves_systems_assets_and_environment() -> void:
 	ship.docked = false
 	var scout := _ship(s, me, Ship.PROBE, Vector3(1.2, 2, 3), Vector3(0, 0, 1))
 	s._ensure_light()
-	s.light[s._li(upper)] = 0.25
+	s.set_light_at(upper, 0.25)
 	s.black_domains.append({"center": upper, "left": 3})
 	var stars := s.map.stars.duplicate()
 	_flatten_whole_column(s, Vector2i.ZERO, 4)
@@ -274,3 +268,11 @@ func test_unprepared_ship_entering_folded_column_dies() -> void:
 	ship.speed = 0.5
 	s._move_ship(s.human(), ship)
 	check(ship.dead, "新进入已展开空间的未降维单位同样毁灭")
+
+
+func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
+	s._unfold_foil(anchor)
+	for i in 40:
+		if s.all_flat():
+			break
+		s._spread_flat()

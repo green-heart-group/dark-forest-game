@@ -159,7 +159,7 @@ func refresh(me: Civ) -> void:
 	elif state.winner != "":
 		_status.text = "💀 你失败了（第 %d 回合）" % state.turn
 	if not state.is_over() and state.all_flat():
-		_status.text += "　729 格一维空间" if state.all_linear() else "　27×27 二维空间 · 重新探索"
+		_status.text += ("　%d 格一维空间" % DimensionSpace.COUNT) if state.all_linear() else ("　%d×%d 二维空间 · 重新探索" % [DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE])
 	if not state.is_over() and state.collapse_pending():
 		_status.text += "\n空间展开中 · 回合按当前坐标结算"
 	if state.is_over() and state.collapse_pending():

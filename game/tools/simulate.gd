@@ -1,7 +1,7 @@
 extends SceneTree
 # 平衡模拟：5 个文明全部由 AI 控制，打到只剩一个文明，统计多局的发展。
 #   godot_console --headless --path game --script res://tools/simulate.gd
-# 可以在 -- 后面临时覆盖 balance.gd 里的数值，不用改文件；RUNS 指定局数，TURNS 指定每局最多几回合：
+# 可以在 -- 后面临时覆盖 balance.cfg 里的数值，不用改文件；RUNS 指定局数，TURNS 指定每局最多几回合：
 #   godot_console --headless --path game --script res://tools/simulate.gd -- COST_PROBE=8 RUNS=100
 # 也可以先用一个数值方案（game/balance_presets/ 或个人目录里的），再单独改几个：
 #   godot_console --headless --path game --script res://tools/simulate.gd -- PRESET=方案名 COST_PROBE=8
@@ -23,7 +23,6 @@ func _init() -> void:
 	var out := ""
 	var max_turns := 200
 	var profiling := false
-	var balance: Script = load("res://rules/balance.gd")
 	var changed: Array[String] = []
 	# 先用数值方案（PRESET=方案名，见 game/balance_presets/），后面单独写的数值再盖过它
 	for arg in OS.get_cmdline_user_args():
@@ -37,7 +36,7 @@ func _init() -> void:
 			return
 		for w in preset["warnings"]:
 			push_warning(w)
-		BalancePresets.apply(preset["values"])
+		Balance.apply(preset["values"])
 		changed.append(arg)
 	for arg in OS.get_cmdline_user_args():
 		var kv := arg.split("=")
@@ -62,13 +61,13 @@ func _init() -> void:
 			"PROFILE":
 				profiling = kv[1] == "1"
 				continue
-		var old = balance.get(kv[0])
-		if old == null:
-			push_error("balance.gd 里没有 %s" % kv[0])
+		# 命令行上的值只能是数：写成整数的先当整数，数值本来是小数时 set_value 会换成小数
+		var err := Balance.set_value(kv[0], int(kv[1]) if kv[1].is_valid_int() else float(kv[1]))
+		if err != "":
+			push_error(err)
 			quit(1)
 			return
-		balance.set(kv[0], int(kv[1]) if old is int else float(kv[1]))
-		changed.append("%s=%s" % [kv[0], balance.get(kv[0])])
+		changed.append("%s=%s" % [kv[0], Balance.values()[kv[0]]])
 
 	var started := Time.get_ticks_msec()
 	if out != "":
@@ -129,9 +128,7 @@ func _play_parallel(first: int, runs: int, jobs: int) -> Array:
 
 ## 跑一局，返回这一局要统计的东西。键都是字符串、值是数字或数组，可以写成 JSON 给别的进程读。
 func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
-	var s := GameState.new_game(seed_value)
-	s.spectator = true
-	s.human().is_ai = true
+	var s := GameState.new_game(seed_value, Balance.AI_COUNT, true)
 	s.profiling = profiling
 	var first_death := -1
 	var alive_at := {}

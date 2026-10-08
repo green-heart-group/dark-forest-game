@@ -62,7 +62,7 @@ var singularity_left := 0
 ## 母星系知道的别的文明的星系：坐标 -> 第几回合看到（情报传回母星系以后才有）
 var known: Dictionary[Vector3i, int] = {}
 ## 看到过的坐标的细节：坐标 -> {"turn", "stars", "rocky", "gas", "habitable", "owner"（文明在 GameState.civs 里的下标，没有时为 -1）, "dysons", "warships",
-## "broadcaster", "grain", "foil"}。传回最近的据点以后才有
+## "broadcaster", "grain", "foil", "bunker"}（和 GameState.snapshot() 的一样）。传回最近的据点以后才有
 var intel: Dictionary[Vector3i, Dictionary] = {}
 ## 还在路上的情报
 var reports: Array[Dictionary] = []
