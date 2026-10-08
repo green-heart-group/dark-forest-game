@@ -29,6 +29,8 @@
 | `balance.gd` | 所有数值的名字和类型（按 `game/balance.cfg` 生成）；读 `balance.cfg`，按名字读改数值、检查类型 |
 | `balance_presets.gd` | 数值方案：存、读；把数值写回 `balance.cfg` |
 | `replay.gd` | 对局记录 |
+| `state_copy.gd` | 把一局的状态打包成压缩的字节、再恢复成新的一份（调试面板的局面缓存用） |
+| `snapshots.gd` | 调试面板往回跳用的局面缓存：存哪些回合、取的时候核对是不是同一条历史 |
 
 要守的规矩：
 

@@ -116,6 +116,7 @@ func run_tests() -> void:
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
+	await run(test_debug_rewind_cache)
 	await run(test_debug_edit_values)
 	await run(test_debug_presets)
 	await run(test_debug_after_death)
@@ -824,6 +825,53 @@ func test_debug_take_over_ai() -> void:
 	view.debug._autoplay.toggled.emit(true)
 	check(ai.is_ai, "再勾上就交还给 AI")
 	view.debug.set_view(0)
+
+
+## 往回跳用局面缓存：缓存里有的直接取；没有的分段补算，能看到进度、能取消；改过数值也能退回去。
+func test_debug_rewind_cache() -> void:
+	var d = view.debug
+	var s := _debug_game(26, true)
+	for i in 25:
+		d.step_forward(true, false)
+	var sums: Array[int] = s.checksums.duplicate()
+	d.seek(24)
+	check(view.state.steps == 24 and view.state.checksum() == sums[23] and d._note.contains("缓存"),
+			"退一回合直接取缓存里的局面")
+	d.seek(23)
+	d.seek(22)
+	check(view.state.checksum() == sums[21] and d._note.contains("缓存"), "连着往回退也直接取")
+	d.seek(25)
+	check(view.state.checksum() == s.checksum() and not d.replaying(), "再跳回最后，和原来一样，回到实时")
+	# 缓存清空后从开局补算：每算一回合停一下，能看到进度；中途取消，留在原来的局面
+	d.snapshots.clear()
+	d.seek_slice = 0
+	var before: GameState = view.state
+	d.seek(12)
+	check(d.seeking and d._note.contains("补算") and d.locked_reason() != "" and panel._end.disabled,
+			"算的时候显示进度，不能操作")
+	await process_frame
+	await process_frame
+	d.cancel_seek()
+	for i in 5:
+		await process_frame
+	check(not d.seeking and view.state == before and not d.replaying() and view.state.steps == 25,
+			"取消后留在原来的局面")
+	d.seek(12)
+	while d.seeking:
+		await process_frame
+	check(view.state.steps == 12 and view.state.checksum() == sums[11] and d.replaying(), "不取消就算完再换局面")
+	# 从中间接着玩、改数值，再往回退：数值回到当时的，局面和当时一样
+	d.seek_slice = 100
+	d.resume_here()
+	var energy := Balance.ENERGY_PER_STAR
+	d._dev(func(st): return st.dev_balance("ENERGY_PER_STAR", energy + 5))
+	for i in 3:
+		d.step_forward(true, false)
+	var changed_sum: int = view.state.checksum()
+	d.seek(11)
+	check(Balance.ENERGY_PER_STAR == energy and view.state.checksum() == sums[10], "改数值以前的回合，数值也是当时的")
+	d.seek(15)
+	check(Balance.ENERGY_PER_STAR == energy + 5 and view.state.checksum() == changed_sum, "跳回改数值以后，数值又是改过的")
 
 
 func test_debug_playback() -> void:

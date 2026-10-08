@@ -192,7 +192,7 @@ func refresh(me: Civ) -> void:
 	actions.refresh(me)
 	var finished := state.is_over() and not state.collapse_pending()
 	_end.text = "🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合"
-	_end.disabled = (state.is_over() and not finished) or (main.debug != null and main.debug.replaying())
+	_end.disabled = (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
 
 	_res_values["energy"].text = "%d  +%d" % [me.energy, state.energy_income(me)]
 	_res_values["mineral"].text = "%d  +%d" % [me.mineral, state.mineral_income(me)]

@@ -75,14 +75,36 @@ func apply_pending(s: GameState) -> bool:
 	return ok
 
 
-## 从头重算到结束过 n 回合的局面。n 达到记录末尾时，最后一回合里已经做过的操作也补上。
-func play_to(n: int) -> GameState:
-	var s := start()
+## 重算到结束过 n 回合的局面。n 达到记录末尾时，最后一回合里已经做过的操作也补上。
+## 给了局面缓存时，从缓存里不晚于 n 的最近一份接着算，算的路上把局面存进缓存；没有时从开局算。
+func play_to(n: int, snaps: Snapshots = null) -> GameState:
+	var s := begin(n, snaps)
 	while s.steps < mini(n, last_step()) and not s.is_over():
-		step(s)
+		advance(s, snaps, n)
+	finish(s)
+	return s
+
+
+## 重算的起点：缓存里不晚于 n、属于这份记录的最近一份局面（复制出来的），没有时重新开局。
+func begin(n: int, snaps: Snapshots = null) -> GameState:
+	var k := snaps.nearest(n, self) if snaps != null else -1
+	if k < 0:
+		return start()
+	desync_step = snaps.desync(k)
+	return snaps.restore(k)
+
+
+## 按记录走一回合。给了缓存时，走完把要留的局面存进去（要往 target 走，见 Snapshots.worth）。
+func advance(s: GameState, snaps: Snapshots = null, target := -1) -> void:
+	step(s)
+	if snaps != null and snaps.worth(s.steps, target):
+		snaps.remember(s, desync_step)
+
+
+## 走到记录末尾时，补上最后一回合里已经做过的操作。
+func finish(s: GameState) -> void:
 	if s.steps >= last_step():
 		apply_pending(s)
-	return s
 
 
 ## 记录比 n 晚的部分全部丢掉（从第 n 次结束回合之后另开一条路）。

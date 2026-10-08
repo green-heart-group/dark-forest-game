@@ -4,7 +4,8 @@ extends PanelContainer
 ## - 视角：随时换成任意文明，看它知道什么、每回合做了什么、为什么这样做；
 ##   任何不由 AI 控制的文明都可以直接操作（以后有多个玩家时同样适用）。
 ## - 播放：暂停、播放、一回合一回合前进或后退、跳到任意回合。
-##   往回退时从开局按记录重算（规则里的随机数都来自同一个种子，所以结果一样）。
+##   往回退时从局面缓存里最近的一份按记录补算（规则里的随机数都来自同一个种子，所以结果一样）；
+##   缓存里没有时从开局算，算得久时分段算、显示进度，可以按 Esc 取消。
 ## - 数值：随时改 balance.cfg 的数值和任意文明的属性、科技。改动记进对局记录，回放时同样重做。
 ## - 记录：存下、打开对局记录；新开一局（自己玩或全由 AI 打的观战局）。
 ## 面板的设置（开没开、上帝视角、播放速度、在哪一页）存在 user://debug.cfg，下次打开还是一样。
@@ -33,6 +34,16 @@ var view_idx := 0
 var replay: Replay = null
 ## 最近一次回放时发现结果和记录不一样的回合（-1：没有）
 var desync_step := -1
+## 往回跳用的局面缓存。实时打的时候每回合结束存一份（自动播放时每 Snapshots.EVERY 回合一份），重算的路上也存。
+var snapshots := Snapshots.new()
+## 正在跳转、还没算完（这时不能操作，见 locked_reason）
+var seeking := false
+## 跳转每算这么多毫秒停一下，让界面处理输入、显示进度（测试时设成 0，每算一回合停一下）
+var seek_slice := 100
+## 每次跳转的编号：取消或开始另一次跳转时加一，正在算的那次在下一次停下时发现编号变了就不再接着算
+var _seek_id := 0
+## 跳转开始前的数值、回放记录和它发现的不一样的回合，取消时换回来
+var _before_seek := {}
 var _note := ""
 var _prefs := ConfigFile.new()
 var _reveal: CheckBox
@@ -45,6 +56,7 @@ var _slider := HSlider.new()
 var _slider_busy := false
 var _mode := Label.new()
 var _resume := Button.new()
+var _cancel := Button.new()
 var _warn := Label.new()
 var _view_pick := OptionButton.new()
 var _autoplay := CheckBox.new()
@@ -239,6 +251,10 @@ func _build_playback() -> VBoxContainer:
 	_resume.tooltip_text = "丢掉这一回合以后的记录，从这里开始操作（另开一条路）"
 	_resume.pressed.connect(resume_here)
 	mode_row.add_child(_resume)
+	_cancel.text = "取消"
+	_cancel.tooltip_text = "停止重算，留在原来的回合（Esc）"
+	_cancel.pressed.connect(cancel_seek)
+	mode_row.add_child(_cancel)
 	col.add_child(mode_row)
 	_warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_warn.add_theme_font_size_override("font_size", 13)
@@ -495,8 +511,8 @@ func apply_preset() -> void:
 
 ## 把数值换成 balance.cfg 里的、再盖上 values。只改和现在不一样的，每一项都记进对局记录。
 func _apply_values(values: Dictionary, what: String, warnings: Array = []) -> void:
-	if replaying():
-		_note = "回放中不能改数值，先按「从这里接着玩」"
+	if seeking or replaying():
+		_note = "正在重算要跳去的回合，算完才能改" if seeking else "回放中不能改数值，先按「从这里接着玩」"
 		refresh_panel()
 		return
 	var now := Balance.values()
@@ -709,6 +725,8 @@ func replaying() -> bool:
 
 ## 现在不能操作的原因（可以操作时为空）。文明由 AI 控制时由主画面另外判断。
 func locked_reason() -> String:
+	if seeking:
+		return "正在重算要跳去的回合，算完才能操作（Esc 取消）"
 	if replaying():
 		return "正在回放第 %d 回合。要从这里操作，按调试面板里的「从这里接着玩」" % main.state.turn
 	return ""
@@ -717,6 +735,11 @@ func locked_reason() -> String:
 ## 调试快捷键。处理了返回 true。
 func handle_key(event: InputEventKey) -> bool:
 	if not visible:
+		return false
+	if seeking:
+		if event.keycode == KEY_ESCAPE:
+			cancel_seek()
+			return true
 		return false
 	match event.keycode:
 		KEY_SPACE:
@@ -760,7 +783,8 @@ func refresh_panel() -> void:
 		_mode.text += "　🛠 这局改过数值"
 	if _note != "":
 		_mode.text += "\n" + _note
-	_resume.visible = replaying()
+	_resume.visible = replaying() and not seeking
+	_cancel.visible = seeking
 	_warn.visible = desync_step >= 0
 	if desync_step >= 0:
 		_warn.text = "⚠️ 第 %d 回合的结果和记录不一样（记录以后规则或数值改过）。之后的局面不是当时的样子。" \
@@ -793,6 +817,8 @@ func refresh_panel() -> void:
 # ---------- 播放 ----------
 
 func toggle_play() -> void:
+	if seeking:
+		return
 	if _timer.is_stopped():
 		_note = ""
 		_timer.start()
@@ -815,12 +841,15 @@ func _on_tick() -> void:
 ## redraw 为 false 时不刷新画面（连续跳很多回合时只在最后刷新一次）。
 func step_forward(manual: bool, redraw := true) -> bool:
 	var s: GameState = main.state
+	if seeking:
+		return false
 	if s.is_over():
 		_note = "对局已经结束"
 		return false
 	if replaying():
 		if not replay.step(s) and desync_step < 0:
 			desync_step = replay.desync_step
+		remember_turn(s)
 		if s.steps >= replay.last_step():
 			replay.apply_pending(s)
 			replay = null  # 走到记录末尾，回到实时
@@ -832,6 +861,7 @@ func step_forward(manual: bool, redraw := true) -> bool:
 			_note = "轮到 %s 操作了，播放停下（▶| 直接结束这一回合）" % waiting[0].name
 			return false
 		s.end_turn()
+		remember_turn(s)
 		main.autosave()
 	_note = ""
 	if redraw:
@@ -839,45 +869,100 @@ func step_forward(manual: bool, redraw := true) -> bool:
 	return true
 
 
-## 跳到结束过 n 回合的局面。往后跳时一回合一回合按记录走；往回跳时从开局重算。
+## 刚结束一回合（还没做下一回合的操作）时调用：把局面存进往回跳用的缓存。
+## 自动播放时只存每 Snapshots.EVERY 回合一份，打包一份要几十毫秒，每回合都存会让播放慢一倍。
+func remember_turn(s: GameState) -> void:
+	if _timer.is_stopped() or s.steps % Snapshots.EVERY == 0:
+		snapshots.remember(s, desync_step)
+
+
+## 跳到结束过 n 回合的局面：从局面缓存里不晚于 n 的最近一份（往后跳时也可能就是现在的局面）按记录一回合一回合补算。
+## 补算超过 seek_slice 毫秒时分段算，段和段之间让界面处理输入、显示进度。
+## 算完才换局面，取消（cancel_seek）时留在原来的局面。
 func seek(n: int) -> void:
 	pause()
+	cancel_seek()
 	var s: GameState = main.state
 	n = clampi(n, 0, _last_step())
 	if n == s.steps:
 		refresh_panel()
 		return
-	if n > s.steps:
-		while main.state.steps < n and step_forward(true, false):
-			pass
-		main.refresh()
-		return
+	if not s.history.any(func(h): return h["step"] == s.steps):
+		snapshots.remember(s, desync_step)  # 这一回合还没人操作过：存下来，跳走以后跳回来不用再算
+	_before_seek = {"balance": Balance.values(), "replay": replay, "desync": replay.desync_step if replay != null else -1}
 	if replay == null:
 		replay = Replay.from_state(s)
+	var r := replay
 	var started := Time.get_ticks_msec()
-	var again := replay.play_to(n)
-	if replay.desync_step >= 0 and desync_step < 0:
-		desync_step = replay.desync_step
-	if n >= replay.last_step() or again.is_over():
+	var again: GameState
+	if n > s.steps and snapshots.nearest(n, r) <= s.steps:
+		again = StateCopy.copy(s)  # 往后跳、现在的局面比缓存近：从它接着走（走的是复制品，取消时原来的不动）
+	else:
+		again = r.begin(n, snapshots)
+	var from := again.steps
+	_seek_id += 1
+	var id := _seek_id
+	seeking = true
+	var slice := Time.get_ticks_msec()
+	var paused := false
+	while again.steps < mini(n, r.last_step()) and not again.is_over():
+		r.advance(again, snapshots, n)
+		if Time.get_ticks_msec() - slice >= seek_slice:
+			_note = "正在从第 %d 回合补算到第 %d 回合：%d / %d（Esc 或「取消」停下）" \
+					% [from + 1, n + 1, again.steps - from, n - from]
+			if paused:
+				refresh_panel()
+			else:
+				main.refresh()  # 第一次停下时整个画面刷新一次，结束回合等按钮变成不能按
+				paused = true
+			await get_tree().process_frame
+			if id != _seek_id:
+				return  # 取消了，或者又开始了另一次跳转
+			slice = Time.get_ticks_msec()
+	seeking = false
+	r.finish(again)
+	if r.desync_step >= 0 and desync_step < 0:
+		desync_step = r.desync_step
+	if n >= r.last_step() or again.is_over():
 		replay = null
 	main.set_state(again)
-	_note = "从开局重算到这里用了 %.1f 秒" % ((Time.get_ticks_msec() - started) / 1000.0)
+	var seconds := (Time.get_ticks_msec() - started) / 1000.0
+	if again.steps == from:
+		_note = "直接取了缓存里的局面（%.2f 秒）" % seconds
+	else:
+		_note = "从%s补算了 %d 回合，用了 %.1f 秒" % ["开局" if from == 0 else "第 %d 回合" % (from + 1), again.steps - from, seconds]
 	refresh_panel()
+
+
+## 停下正在算的跳转，留在原来的局面，数值和回放记录也换回跳转以前的。没有在算时什么都不做。
+func cancel_seek() -> void:
+	if not seeking:
+		return
+	seeking = false
+	_seek_id += 1
+	Balance.apply(_before_seek["balance"])
+	replay = _before_seek["replay"]
+	if replay != null:
+		replay.desync_step = _before_seek["desync"]
+	_note = "取消了跳转，还在第 %d 回合" % main.state.turn
+	main.refresh()
 
 
 ## 丢掉之后的记录，从现在的局面接着打。
 func resume_here() -> void:
+	if seeking:
+		return
 	pause()
 	replay = null
+	snapshots.drop_after(main.state.steps)  # 之后的是丢掉的那条路
 	_note = "已从第 %d 回合另开一条路，之后的记录丢掉了" % main.state.turn
 	main.autosave()
 	main.refresh()
 
-
 ## 对局因为你灭亡而结束，而且还有不止一个文明活着。
 func can_continue_after_death() -> bool:
 	var s: GameState = main.state
-	return s.winner == "AI" and not s.human().alive and not replaying() and s.steps > 0 \
+	return s.winner == "AI" and not s.human().alive and not replaying() and not seeking and s.steps > 0 \
 			and s.civs.filter(func(c): return c.alive).size() >= 2
 
 
@@ -889,10 +974,12 @@ func continue_after_death() -> void:
 	pause()
 	var s: GameState = main.state
 	var r := Replay.from_state(s)
-	var again := r.play_to(s.steps - 1)
+	var again := r.play_to(s.steps - 1, snapshots)
 	r.apply_pending(again)
 	again.set_play_on_after_death(true)
 	again.end_turn()
+	snapshots.drop_after(again.steps - 1)  # 原来灭亡的那一回合是另一条路
+	remember_turn(again)
 	replay = null
 	view_idx = clampi(view_idx, 0, again.civs.size() - 1)
 	main.set_state(again)
@@ -907,7 +994,7 @@ func set_view(i: int) -> void:
 
 
 func _on_autoplay(on: bool) -> void:
-	if replaying():
+	if replaying() or seeking:
 		return
 	main.state.set_autoplay(viewed(), on)
 	main.autosave()
@@ -923,9 +1010,12 @@ func _last_step() -> int:
 
 ## 做一次调试改动（回放中不能改）。action 收到 GameState，返回规则的结果。
 func _dev(action: Callable) -> void:
-	if replaying():
+	if seeking:
+		_note = "正在重算要跳去的回合，算完才能改"
+	elif replaying():
 		_note = "回放中不能改数值，先按「从这里接着玩」"
 	else:
+		snapshots.drop_after(main.state.steps)  # 实时局面以后的缓存（如果有）不再是这条路
 		var r: Dictionary = action.call(main.state)
 		_note = "改不了：" + r["error"] if r["error"] != "" else ""
 		main.autosave()
@@ -1037,6 +1127,7 @@ func _open_dialog() -> void:
 ## 打开记录，停在开局。记录时的数值和现在不一样时，换成记录时的（只在这次运行里有效）。
 func load_replay(path: String) -> void:
 	pause()
+	cancel_seek()
 	var r := Replay.load_file(path)
 	if r == null:
 		_note = "打不开这个文件（损坏或规则版本不兼容）：%s" % path
@@ -1044,6 +1135,7 @@ func load_replay(path: String) -> void:
 		return
 	var diff := r.balance_diff()
 	replay = r if r.last_step() > 0 else null
+	snapshots.clear()
 	desync_step = -1
 	view_idx = 0
 	var s := r.play_to(0)
@@ -1059,7 +1151,9 @@ func load_replay(path: String) -> void:
 ## 数值换回 balance.cfg 里的；设了「新开一局时用的方案」时再换成那个方案。
 func new_game(seed_value: int, watch: bool) -> void:
 	pause()
+	cancel_seek()
 	replay = null
+	snapshots.clear()
 	desync_step = -1
 	view_idx = 1 if watch else 0
 	Balance.apply(_balance_defaults)

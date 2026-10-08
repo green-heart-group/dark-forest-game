@@ -128,13 +128,15 @@ func autosave() -> void:
 
 ## 结束回合对所有文明都一样，在看别人的视角时也可以按（回放中不行）。对局结束后变成「再来一局」。
 func end_turn() -> void:
-	if debug != null and debug.replaying():
+	if debug != null and (debug.replaying() or debug.seeking):
 		return
 	if state.is_over():
 		new_game(randi() % 1000000)
 		return
 	panel.set_feedback("")
 	state.end_turn()
+	if debug != null:
+		debug.remember_turn(state)
 	autosave()
 	refresh()
 
