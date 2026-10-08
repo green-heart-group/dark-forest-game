@@ -7,6 +7,10 @@
 
 别处只放链接，不抄内容。
 
+能从代码、配置或测试结果可靠生成的内容，优先自动生成。
+
+用普通人第一次读就懂的话写；避免难懂的术语，躲不开时在第一次出现的地方用一句话解释。
+
 | 想知道 | 看哪里 |
 | --- | --- |
 | 游戏要做成什么样、为什么 | [design/game-design.md](design/game-design.md) |
@@ -36,9 +40,6 @@
   [decisions/](decisions/README.md)、[决定记录](design/decision-log.md)。只往后加，写下当时的情况，以后不回头改，所以里面的数字和说法可以过时。
   做一项工作时的步骤、验证经过、交接说明，写进当月的开发日志，不另开文件。
 
-这些规矩和编号、索引的规矩，大多由规则测试 `test_docs.gd` 检查（见 [代码结构「写测试的规矩」](guides/code.md#写测试的规矩)），
-改完文档跑一次 `uv run game/tools/test.py rules --only docs`。
-
 ## 目录
 
 - [open-questions.md](open-questions.md)：要确定的问题。所有还没定的问题都在这里，每条都有选项和推荐，答完就挪走。
@@ -61,12 +62,35 @@
 3. 定下来的每一条都有编号（问题编号，或试玩意见的 Fk.n），在 [决定记录](design/decision-log.md)
    加一行，写进 [design/game-design.md](design/game-design.md) 的正文并标上编号；
    讨论过程留在提议里，或挪到 [design/archive/](design/archive/README.md) 存档。
+   问题清单中的讨论过程先挪到存档，再把答完的问题从 open-questions.md 删掉，在文件末尾「已经答完的」表里记一笔。
    平台、分支这类项目上的决定，另记一条 [decisions/](decisions/README.md)。
-4. 实现以后，更新 [design/current-rules.md](design/current-rules.md)、[status.md](status.md)、
-   [devlog/](devlog/README.md) 和 [roadmap.md](roadmap.md)。
+4. 实现以后，按下面的[同步要求](#修改后同步哪些文档)更新文档。
 
 这样任何一条规则都能往回查：正文的编号 → 决定记录里那一行 → 原话和讨论过程。
-新的一批决定不属于已有的来源时，用一个新字母，并在决定记录「编号从哪里来」加一行写清来源。
+试玩意见的 Fk.n 表示第 k 次试玩的第 n 条；新的一批决定不属于已有的来源时，用一个新字母，
+并在决定记录「编号从哪里来」加一行写清来源。设计正文只写最新结论，改动的经过留在决定记录和原来的提议、意见文件里。
+
+## 修改后同步哪些文档
+
+下面这些要按改动的意思人工更新，测试不能替代判断：
+
+- 改了规则，更新 [current-rules.md](design/current-rules.md) 的文字，包括 AI 的行动顺序；涉及新决定时，按[决定整理流程](#一个想法从提出到实现)更新来源和设计正文。
+- 问题清单里写到的原型现状发生变化时，更新 [open-questions.md](open-questions.md)；其中的具体数字链接到 [status.md](status.md)，不另抄。
+- 跑了平衡模拟，把结果写进 [status.md](status.md)。
+- 文件的分工或写代码的规矩变了，更新 [guides/code.md](guides/code.md)。
+- 做完一项，更新 [roadmap.md](roadmap.md) 和当月的 [开发日志](devlog/README.md)；步骤、验证经过和交接说明按[历史记录的规矩](#现在的事实和历史记录)写。
+- 新增文档，同时更新所在目录的 `README.md` 索引。
+
+由代码决定的数值、表格和测试个数，按[代码指南的生成要求](guides/code.md#写测试的规矩)自动更新。
+
+## 文档检查
+
+只改文档时，跑 `uv run game/tools/test.py rules --only docs`，输出「0 个失败」才算通过。
+`game/tests/rules/test_docs.gd` 检查下面这些要求：
+
+- 游戏设计、原型现在的规则和决定记录里出现的编号，要么在决定记录「编号从哪里来」登记了来源，要么是问题清单里还开着的问题；已经决定的编号不能仍是待答的问题。
+- 「现在的事实」遵守[现状与历史的区分](#现在的事实和历史记录)，没有分支名、合并状态、本机路径、勾选清单（路线图除外），测试个数只在 `status.md`。
+- `docs/` 下每个文档目录都有 `README.md`，列出目录里的 Markdown 文件和下一级目录；私人目录和图片目录不在检查范围内。
 
 ## 本地文档
 

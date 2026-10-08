@@ -5,6 +5,7 @@
 
 代码都在 `game/`（Godot 4.7 项目，GDScript）。最重要的一条：**规则和画面分开**。
 规则代码不知道画面存在，所以能不开窗口跑测试和平衡模拟；画面只读规则数据，要改局面就调用规则的函数。
+旧 Python 版已归档，不再改动，也不合并回主分支，见[归档决定](../decisions/0002-archive-python.md)。
 
 只看画面效果、不开对局的演示放在 `game/demos/`，现在有一个：[降维展开演示](dimension-unfolding.md)。
 它和规则共用 `unfolding_layout.gd`。
@@ -149,7 +150,8 @@
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
 | `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
 
-- 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样），所以只有输出「0 个失败」才可信。
+- 改完代码，按根目录 [README「测试和平衡模拟」](../../README.md#测试和平衡模拟)跑全部测试，包括规则、画面和展开演示，每组都输出「0 个失败」才算通过。
+- 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样）。
 - 新增 `class_name` 以后，要先跑一次 `godot_console --headless --path game --import`，让 Godot 认识这个新名字
   （`test.py` 每次都先导入）。
 - 在终端里用 `godot_console`，不要用 `godot`（原因见 [让 AI 助手操作 Godot](agent-tools.md#方法一命令行主力)）。
@@ -177,12 +179,7 @@
   `test_repo.gd` 的 `test_every_rule_has_a_test` 会检查：规则文档里每个最小的一节（「还没做的」除外）和正文里出现的每个编号，
   都至少有一个测试写到；测试上写的标题和编号在文档里都找得到。所以改了规则文档的标题、加了新的一节或新的编号，测试也要跟上。
   GDScript 还没有好用的工具统计「测试跑到了哪些代码行」，这个检查是用来代替它的：至少保证每条规则都有测试。
-- **文档也有测试**：`test_docs.gd` 检查文档的规矩（为什么这样分见 [文档入口](../README.md#现在的事实和历史记录)），
-  只改了文档时跑 `uv run game/tools/test.py rules --only docs` 就够了：
-  - 游戏设计、原型现在的规则和决定记录里写到的编号（U1、F3.5……），要么在 [决定记录「编号从哪里来」](../design/decision-log.md#编号从哪里来) 登记了来源，
-    要么是 [要确定的问题](../open-questions.md) 里还开着的问题；决定记录里已经有决定的编号，不能还留在要确定的问题里。
-  - 「现在的事实」那些文件里没有分支名、合没合并、本机路径、勾选清单（路线图除外）；测试个数只在 `docs/status.md`。
-  - `docs/` 下每个目录都有 `README.md`，列出目录里的每个文件和下一级目录。
+- **文档也有测试**：检查范围和只改文档时的验证方法，见[文档检查](../README.md#文档检查)。
 - **文档里由代码决定的部分自动更新**，不手改（`game/tools/update_docs.py`，只管它的 `FILES` 里列出的文件，
   现在只有原型现在的规则；开发日志这类历史记录写着当时的数字，不跟着改）：
   - 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 `balance.cfg` 里写的值，
@@ -207,3 +204,4 @@
 
 - Godot 给每个脚本生成的 `*.uid` 文件要提交（Godot 靠它找文件）。
 - `game/.godot/` 是缓存，不提交。
+- 测试自动生成或更新的文件一起提交，包括 `balance.gd` 的数值声明和文档里生成的部分；GitHub 上跑完测试，`docs/` 或 `balance.gd` 有变化就算失败。
