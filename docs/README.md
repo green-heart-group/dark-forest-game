@@ -50,7 +50,7 @@
 - [proposals/](proposals/README.md)：提议和试玩意见。有新想法或意见，就在这里加一个文件。
 - [decisions/](decisions/README.md)：项目上的重要决定（平台、分支等），记录选了什么、为什么这样选。
 - [guides/](guides/README.md)：开发指南：代码结构、Godot 入门和编辑器设置、开发者调试模式、让 AI 助手操作 Godot。
-- `images/`：仓库首页 README 用的动图（用 `game/tools/make_readme_gifs.py` 重录）。提议里的草图放在 `proposals/images/`。
+- 仓库首页的演示动图托管与更新方法见[代码指南](guides/code.md#测试和工具)；提议里的草图放在 `proposals/images/`。
 
 代码目录里也有一份说明：[game/balance_presets/README.md](../game/balance_presets/README.md)（共享的数值方案）。
 

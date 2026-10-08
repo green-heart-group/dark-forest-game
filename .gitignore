@@ -15,3 +15,6 @@ uv.lock
 
 #
 !build/.gitkeep
+
+# README 动图在 GitHub 附件中托管，本地生成到 build/readme_gifs/
+docs/images/*.gif

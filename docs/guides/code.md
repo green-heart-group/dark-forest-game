@@ -155,7 +155,11 @@
 | `game/tools/sync_balance.py` | 按 `game/balance.cfg` 重新生成 `balance.gd` 里的数值声明；`--check` 只检查（见上面「数值」） |
 | `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.cfg` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
-| `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
+| `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`build/readme_gifs/*.gif`，不进仓库）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
+
+README 的四段演示动图保存在 GitHub 的 [README 演示素材](https://github.com/green-heart-group/dark-forest-game/issues/6) Issue 附件中，README 的 `<img src>` 使用附件地址。
+重录后把 `build/readme_gifs/` 中的新 GIF 上传到该 Issue 的新评论，再将 README 中对应的地址换成上传后生成的链接；保留已被旧文档引用的附件。
+不要把 GIF 提交进仓库，也不要用短期有效的下载链接。代码、录制脚本和文档仍由 Git 管理。
 
 - 改完代码，按根目录 [README「测试和平衡模拟」](../../README.md#测试和平衡模拟)跑全部测试，包括规则、画面和展开演示，每组都输出「0 个失败」才算通过。
 - 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样）。
