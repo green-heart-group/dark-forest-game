@@ -263,7 +263,8 @@ func _frame_line() -> void:
 	var me: Civ = main.viewed() if main != null else null
 	var origins: Array[Vector3i] = me.origins() if me != null else []
 	var at := Vector3(origins[0]) if not origins.is_empty() else _visual_bounds().get_center()
-	_goal_focus = _clamp_focus(_warp_point(at))
+	# 用展开动画终点的位置：回合推得快、动画还没播完时，现在画的位置是旧的
+	_goal_focus = _clamp_focus(_warp_point(at, 1.0))
 	_goal_yaw = 0.0
 	_goal_pitch = LINE_PITCH
 	_goal_distance = LINE_DISTANCE
@@ -297,10 +298,15 @@ func _pan(right: float, up: float) -> void:
 	var basis := _pivot.global_transform.basis
 	var move := to_rule * (basis.x * right + basis.y * up) * _world_per_px()
 	if state != null and state.dimension == 1:
-		# 一维只能沿直线走：只留 x 方向；直线在画面上斜着、短着时按它在画面上的长度放大，拖多远就走多远
+		# 一维只能沿直线走。左右拖动（和 A / D）总是沿直线走，往 +x 在画面上偏的那一边拖就往 +x 看；
+		# 转到顺着直线看时，直线在画面上竖着，上下拖动（和 W / S）也沿直线走。
+		# 直线在画面上显得短时按它的长度放大，拖多远就走多远。
 		var x_on_screen := to_rule.inverse() * Vector3.RIGHT
-		var seen := Vector2(x_on_screen.dot(basis.x), x_on_screen.dot(basis.y)).length()
-		move = Vector3(move.x / maxf(seen * seen, 0.2), 0.0, 0.0)
+		var line := Vector2(x_on_screen.dot(basis.x), x_on_screen.dot(basis.y))
+		var pixels := right * (-1.0 if line.x < -1e-3 else 1.0)
+		if absf(line.y) > absf(line.x):
+			pixels += up * signf(line.y)
+		move = Vector3(pixels * _world_per_px() / maxf(line.length(), 0.2), 0.0, 0.0)
 	_goal_focus = _clamp_focus(_goal_focus - move)
 
 

@@ -110,6 +110,7 @@ func run_tests() -> void:
 	await run(test_intel_on_starless_system)
 	await run(test_reduction_controls)
 	await run(test_flat_and_line)
+	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
 	await run(test_restart)
 	await run(test_debug_view_other_civ)
@@ -668,8 +669,18 @@ func _check_line_camera_and_controls(s: GameState) -> void:
 			map._pan(-300.0 * side, 0.0)
 		check((map._goal_focus.x - end) * side >= 0.0, "拖动能沿直线走到 x = %.0f 那一头（停在 %.1f）" % [end, map._goal_focus.x])
 		check(absf(map._goal_focus.y - home.y) < 1e-3 and absf(map._goal_focus.z - home.z) < 1e-3, "拖动只沿直线走")
+	# 转过视角以后左右拖动仍沿直线走，包括顺着直线看（水平角 90°）
+	for yaw in [45.0, 89.0, 90.0, 180.0, -90.0]:
+		map.reset_view(true)
+		map._goal_yaw = yaw
+		map._snap_camera()
+		var before: Vector3 = map._goal_focus
+		map._pan(-300.0, 0.0)
+		check(absf(map._goal_focus.x - before.x) > 1.0, "水平角 %.0f° 时左右拖动沿直线走" % yaw)
+		check(absf(map._goal_focus.y - before.y) < 1e-3 and absf(map._goal_focus.z - before.z) < 1e-3, "水平角 %.0f° 时仍只沿直线走" % yaw)
 	map.reset_view(true)
 	check(map._focus.distance_to(home) < 1e-3, "V 回到自己的母星")
+	check(absf(map._yaw) < 1e-4, "V 也把视角转回来")
 	actions._action_tiles[actions.Action.DISPATCH].pressed.emit()
 	check(actions._line_dirs.visible and not actions._yaw_box.visible and not actions._pitch_box.visible, "一维只有 -x、+x 两个方向按钮")
 	check(not actions._coord_boxes[1].visible and not actions._coord_boxes[2].visible, "一维不显示 y、z 输入")
@@ -679,6 +690,41 @@ func _check_line_camera_and_controls(s: GameState) -> void:
 	check_eq(actions._direction(), Vector3(1, 0, 0), "按 +x 朝 x 变大的一边")
 	check(actions._line_right.button_pressed and not actions._line_left.button_pressed, "按钮显示现在的方向")
 	await capture("one-dimensional")
+
+
+## 回合推得很快、展开动画还没播完就进入一维时，镜头仍对准自己据点最后的位置。
+func test_fast_line_collapse_frames_home() -> void:
+	var s := fixture()
+	for civ in s.civs:
+		civ.reduced = true
+		civ.line_reduced = true
+	s._unfold_foil(Vector3i(4, 4, 4))
+	for i in 40:
+		if s.all_flat():
+			break
+		s._spread_flat()
+	check(s.all_flat(), "测试准备：进入二维")
+	show_state(s)
+	await settled_frame()
+	s._unfold_line_foil(Vector3i(0, 13, s.flat_plane))
+	view.set_process(false)
+	map.set_process(false)
+	for i in 80:
+		if s.all_linear():
+			break
+		panel._end.pressed.emit()  # 不等动画，马上推下一回合
+	check(s.all_linear(), "测试准备：进入一维")
+	view.set_process(true)
+	map.set_process(true)
+	await settled_frame()
+	var home: Vector3 = map._warp_point(Vector3(s.human().home))
+	check(map._goal_focus.distance_to(home) < 1e-3, "动画追上以后镜头对准母星（差 %.1f 格）" % map._goal_focus.distance_to(home))
+	map._snap_camera()
+	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell") == s.human().home, "近看能点中母星")
+	map._pan(-300.0, 0.0)
+	await settled_frame()
+	check(map._goal_focus.distance_to(home) > 1.0, "之后手动平移不会被拉回去")
 
 
 ## 胜负分出以后不再按按钮，画面每帧自己把还没压完的空间压完。
