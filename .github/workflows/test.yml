@@ -40,3 +40,4 @@ jobs:
           godot --headless --path game --import
           godot --headless --path game --script res://tests/run_tests.gd
           godot --headless --path game --script res://tests/run_view_tests.gd
+          godot --headless --path game --script res://tests/run_unfolding_tests.gd
