@@ -50,16 +50,6 @@ static func sphere_cells(center: Vector3, r: float, bounds := AABB(Vector3.ZERO,
 	return result
 
 
-## 点 p 到线段 ab 的距离。
-static func point_segment_distance(p: Vector3, a: Vector3, b: Vector3) -> float:
-	var d := b - a
-	var len2 := d.length_squared()
-	if len2 < 1e-12:
-		return p.distance_to(a)
-	var t := clampf((p - a).dot(d) / len2, 0.0, 1.0)
-	return p.distance_to(a + d * t)
-
-
 ## 沿方向扫描：走到 t 处时，离中轴线不超过 width(t) + 半个格子的格子都算覆盖。
 ## 只要 t 在 (from_t, to_t] 之间的格子，结果按 t 由近到远排列。
 static func _along(origin: Vector3, direction: Vector3, from_t: float, to_t: float,

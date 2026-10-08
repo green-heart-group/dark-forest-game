@@ -129,7 +129,7 @@ AI 的操作不用存：规则里所有随机数都来自 `GameState.rng`，同�
 
 ### 写规则代码时要注意
 
-为了让回放算出一样的结果，规则代码要守这几条（`run_tests.gd` 里的回放测试会检查）：
+为了让回放算出一样的结果，规则代码要守这几条（规则测试 `game/tests/rules/test_replay.gd` 会检查）：
 
 - 随机数只用 `GameState.rng`，不要用 `randf()`、`randi()` 这些全局随机数。
 - 玩家能改变局面的操作，都要写成 `GameState` 里的函数，成功时调用 `_record(civ, 函数名, 参数)` 记下来。

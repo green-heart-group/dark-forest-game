@@ -24,28 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 下载 Godot 和导出模板
-        run: |
-          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
-          wget -q $base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          wget -q $base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
-          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
-          dir=~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-          mkdir -p $dir
-          unzip -q Godot_v${GODOT_VERSION}-stable_export_templates.tpz
-          mv templates/* $dir/
-
-      - uses: astral-sh/setup-uv@v6
-
-      - name: 做网页版带的字体
-        run: uv run game/tools/make_web_fonts.py
+      - uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          export-templates: "true"
 
       - name: 导入并跑测试
-        run: |
-          godot --headless --path game --import
-          godot --headless --path game --script res://tests/run_tests.gd
-          godot --headless --path game --script res://tests/run_view_tests.gd
+        run: uv run game/tools/test.py
 
       - name: 导出
         run: |

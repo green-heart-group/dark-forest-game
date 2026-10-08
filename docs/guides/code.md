@@ -126,16 +126,49 @@
 
 | 文件 | 做什么 |
 | --- | --- |
-| `game/tests/run_tests.gd` | 规则测试。每个 `test_` 开头的函数是一个测试 |
-| `game/tests/run_view_tests.gd` | 画面测试：检查界面和星图显示的东西和规则一致 |
+| `game/tools/test.py` | 一条命令跑全部测试：先导入，再同时开几个 Godot 进程，规则测试分成几份，画面测试一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多 |
+| `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
+| `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |
+| `game/tests/rules/test_*.gd` | 规则测试，按规则分组（星图、移动、科技、交战、黑域、降维、AI、回放……），一组一个文件 |
+| `game/tests/rules/rule_suite.gd` | 规则测试的共同底子：`check`、`check_eq`，和摆测试局面的小工具（`_two_civs`、`_ship` 等） |
+| `game/tests/run_view_tests.gd` | 画面测试：检查界面和星图显示的东西和规则一致。按 `run_tests()` 里写的顺序跑 |
+| `game/tests/run_unfolding_tests.gd` | 独立展开演示的映射、空间预留、控件及关键帧检查；统一测试命令同时运行它 |
+| `game/tests/test_log.gd` | 各套测试共用的记结果的部分：数测试和检查、失败时写出是哪个测试、最后的汇总；命令行参数 `only=`、`tests=`、`report=`、`stop_on_fail`（说明在文件开头） |
 | `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计对局怎么发展 |
 | `game/tools/make_balance_index.gd` | 从 `balance.gd` 重新生成数值目录 `balance_index.gd`（见上面「数值」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
 | `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
 
 - 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样），所以只有输出「0 个失败」才可信。
-- 新增 `class_name` 以后，要先跑一次 `godot_console --headless --path game --import`，让 Godot 认识这个新名字。
+- 新增 `class_name` 以后，要先跑一次 `godot_console --headless --path game --import`，让 Godot 认识这个新名字
+  （`test.py` 每次都先导入）。
 - 在终端里用 `godot_console`，不要用 `godot`（原因见 [让 AI 助手操作 Godot](agent-tools.md#方法一命令行主力)）。
+
+### 写测试的规矩
+
+- **改规则就改测试**：改了规则或数值，先改（或加）测试让它失败，再改代码让它通过。
+- **修错误先写测试**：修一个错误之前，先写一个能把它重现出来的测试，修好以后它一直留着，免得同样的错误再出现。
+- **能做和不能做都要测**：比如建造，既要测钱够时建得成，也要测钱不够、没科技、超过上限时建不成，而且不扣钱。
+  边界值（刚好够、差一点、上限）最容易出错。
+- **一个测试只测一件事**，名字写清楚测的是什么（`test_torpedo_needs_two_hits`）。检查的说明写「应该怎样」，失败时一看就懂。
+  比较两个值时用 `check_eq(实际, 期望, 说明)`，失败时会写出两边的值。
+- **结果每次都一样**：用固定的种子（`GameState.new_game(5)`、`StarMap.generate(42)`），不靠运气。
+  测试里改了 `Balance` 的数值，测完要改回来（见 `_restore_balance`）。
+- **规则测试互不依赖**：`test.py` 把规则测试分给几个进程，变异测试还会按快慢换顺序，所以一个测试不能指望别的测试先跑过、
+  留下什么局面或文件。要写文件时用测试专用的名字（比如 `_test.cfg`），测完删掉。画面测试不受这条限制，它总是按顺序在一个进程里跑。
+- **测试局面自己摆**：用 `rule_suite.gd` 里的 `_two_civs`、`_set_star`、`_ship` 摆出只有要测的东西的小局面，比开一整局更快、更好懂。
+  新的小工具只有一个文件用就写在那个文件里，几个文件都用再挪进 `rule_suite.gd`。
+- **新文件**：在 `game/tests/rules/` 里新建 `test_xxx.gd`，第一行 `extends "res://tests/rules/rule_suite.gd"`，运行器会自动找到。
+  画面测试的新函数要写进 `run_view_tests.gd` 的 `run_tests()` 列表，忘了写会算失败。
+- **写上测的是哪条规则**：测试函数上面加一行 `## 规则：节标题，编号`（几项用「，」隔开）。
+  节标题照抄 [原型现在的规则](../design/current-rules.md) 里最小一级的标题（去掉「3. 」这样的序号），编号是 T23、F3.5 这样的。
+  `test_repo.gd` 的 `test_every_rule_has_a_test` 会检查：规则文档里每个最小的一节（「还没做的」除外）和正文里出现的每个编号，
+  都至少有一个测试写到；测试上写的标题和编号在文档里都找得到。所以改了规则文档的标题、加了新的一节或新的编号，测试也要跟上。
+  GDScript 还没有好用的工具统计「测试跑到了哪些代码行」，这个检查是用来代替它的：至少保证每条规则都有测试。
+- **用变异测试找漏洞**：改了一个规则文件、补了测试以后，可以跑 `uv run game/tools/mutate.py 文件名.gd`，
+  看这个文件里哪些地方出错时测试发现不了。没发现的里面有一些改了也不影响结果（比如两个值永远不会相等时，`<` 和 `<=` 一样），不用补。
+- **测试要快**：规则测试一个进程跑完十几秒，`test.py` 分进程跑约 4 秒，最慢的单个测试决定了最快能多快。
+  汇总下面会列出超过 1 秒的测试，变慢了想想能不能把局面摆小一点。
 
 ### 截图检查画面
 

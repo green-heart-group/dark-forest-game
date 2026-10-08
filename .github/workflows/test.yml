@@ -22,22 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 下载 Godot
-        run: |
-          base=https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable
-          wget -q $base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          unzip -q Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
-          sudo mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+      - uses: ./.github/actions/setup-godot
+        with:
+          version: ${{ env.GODOT_VERSION }}
 
-      - uses: astral-sh/setup-uv@v6
-
-      # 和发布时一样带上字体，画面测试量出来的字宽才和网页版一致
-      - name: 做网页版带的字体
-        run: uv run game/tools/make_web_fonts.py
-
+      # 和本地是同一条命令
       - name: 导入并跑测试
-        run: |
-          godot --headless --path game --import
-          godot --headless --path game --script res://tests/run_tests.gd
-          godot --headless --path game --script res://tests/run_view_tests.gd
-          godot --headless --path game --script res://tests/run_unfolding_tests.gd
+        run: uv run game/tools/test.py

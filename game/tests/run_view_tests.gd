@@ -2,9 +2,13 @@ extends SceneTree
 ## 画面测试：检查面板按钮、星图标记和规则一致。
 ## 不带窗口跑：godot_console --headless --path game --script res://tests/run_view_tests.gd
 ## 想同时存截图：去掉 --headless，在最后加 -- output=<文件夹>
+## 只跑名字里带某个词的测试：在最后加 -- only=词（后面的测试可能要用到前面留下的局面，单独跑时以全跑为准）。
+## 测试按 run_tests() 里写的顺序跑；新加的 test_ 函数忘了写进去，会算失败。
 
-var _failures := 0
-var _checks := 0
+const TestLog := preload("res://tests/test_log.gd")
+
+var results := TestLog.new()
+var _ran: Array[String] = []
 var _output := ""
 var view
 ## 画面的几个部分（view 开好以后填上）
@@ -22,10 +26,23 @@ func _init() -> void:
 
 
 func check(ok: bool, message: String) -> void:
-	_checks += 1
-	if not ok:
-		_failures += 1
-		push_error(message)
+	results.check(ok, message)
+
+
+## 比较两个值，不一样时失败信息里写出实际值和期望值。
+func check_eq(actual, expected, message: String) -> void:
+	results.check_eq(actual, expected, message)
+
+
+## 跑一个测试（会等它里面的 await 都做完）。
+func run(test: Callable) -> void:
+	var name := test.get_method()
+	_ran.append(name)
+	if not results.wants(name):
+		return
+	results.begin(name)
+	await test.call()
+	results.end()
 
 
 ## 两个人类文明（都不由 AI 控制），各有一个单星系统，资源充足。
@@ -76,37 +93,40 @@ func run_tests() -> void:
 	actions = view.panel.actions
 	overlay = view.overlay
 	await process_frame
-	test_panel_layout()
-	await test_panel_width()
-	test_ui_helpers()
+	await run(test_panel_layout)
+	await run(test_panel_width)
+	await run(test_ui_helpers)
 	await capture("start")
-	test_research()
-	test_build_and_dispatch()
-	test_colony()
-	test_hover_intel()
-	test_camera()
-	test_selection()
-	test_grid_modes()
-	test_ship_paths()
-	await test_sightings_drawn()
-	await test_black_domain_drawn()
-	await test_intel_on_starless_system()
-	await test_reduction_controls()
-	await test_flat_and_line()
-	await test_post_victory_collapse()
-	test_restart()
-	test_debug_view_other_civ()
-	test_debug_take_over_ai()
-	test_debug_playback()
-	test_debug_edit_values()
-	test_debug_presets()
-	test_debug_after_death()
+	await run(test_research)
+	await run(test_build_and_dispatch)
+	await run(test_colony)
+	await run(test_hover_intel)
+	await run(test_camera)
+	await run(test_selection)
+	await run(test_grid_modes)
+	await run(test_ship_paths)
+	await run(test_sightings_drawn)
+	await run(test_black_domain_drawn)
+	await run(test_intel_on_starless_system)
+	await run(test_reduction_controls)
+	await run(test_flat_and_line)
+	await run(test_post_victory_collapse)
+	await run(test_restart)
+	await run(test_debug_view_other_civ)
+	await run(test_debug_take_over_ai)
+	await run(test_debug_playback)
+	await run(test_debug_edit_values)
+	await run(test_debug_presets)
+	await run(test_debug_after_death)
 	await capture("debug")
 	await capture("debug_panel", view.debug.window)
 	view.queue_free()
 	await process_frame
-	print("View checks: %d, failures: %d" % [_checks, _failures])
-	quit(1 if _failures else 0)
+	for m in get_method_list():
+		var name: String = m["name"]
+		if name.begins_with("test_") and not _ran.has(name):
+			results.fail("没写进 run_tests() 的列表，没有跑", name)
+	quit(results.finish("画面测试"))
 
 
 func test_panel_layout() -> void:
@@ -506,6 +526,7 @@ func test_reduction_controls() -> void:
 	await process_frame
 
 
+## 规则：二维、单向著和奇异点，F5.2
 func test_flat_and_line() -> void:
 	var s := fixture()
 	for civ in s.civs:

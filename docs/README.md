@@ -22,7 +22,7 @@
 | 代码怎么分工、改代码要守的规矩、导出设置 | [guides/code.md](guides/code.md) |
 | 调试面板、开发者版、对局记录、数值方案 | [guides/debug-tools.md](guides/debug-tools.md) |
 | 怎么用 Godot、让 AI 助手操作 Godot | [guides/](guides/README.md) |
-| 怎么开分支、提交改动、合并进 `master` | [decisions/0003](decisions/0003-github-flow.md) |
+| 怎么开分支（分支名的前缀）、提交改动、合并进 `master` | [decisions/0003](decisions/0003-github-flow.md) |
 | 旧 Python 版和它的已知 bug | [decisions/0002](decisions/0002-archive-python.md) |
 
 ## 目录

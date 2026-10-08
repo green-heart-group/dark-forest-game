@@ -1,0 +1,62 @@
+# 准备跑 Godot 的环境：测试（test.yml）和发布（release.yml）共用，步骤只写在这里。
+# 下载 Godot（下载的压缩包会缓存，下次不用再下）、可选装导出模板、装 uv、做网页版带的字体。
+# 之后跑测试用 uv run game/tools/test.py，和本地是同一条命令。
+name: 准备 Godot
+description: 下载 Godot，可选装导出模板，装 uv，做网页版带的字体
+
+inputs:
+  version:
+    description: Godot 版本，比如 4.7.2
+    required: true
+  export-templates:
+    description: 要不要装导出模板（发布时要）
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: 缓存下载的 Godot
+      uses: actions/cache@v4
+      with:
+        path: ~/godot-download
+        key: godot-${{ inputs.version }}
+
+    - name: 下载并安装 Godot
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        base=https://github.com/godotengine/godot/releases/download/${VERSION}-stable
+        mkdir -p ~/godot-download
+        cd ~/godot-download
+        zip=Godot_v${VERSION}-stable_linux.x86_64.zip
+        [ -f "$zip" ] || wget -q "$base/$zip"
+        unzip -qo "$zip" -d /tmp/godot
+        sudo mv /tmp/godot/Godot_v${VERSION}-stable_linux.x86_64 /usr/local/bin/godot
+
+    # 导出模板有 1 GB 多，只在发布时用，不缓存（缓存放久了不用会被清掉，占地方也没用）
+    - name: 下载导出模板
+      if: inputs.export-templates == 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        cd /tmp
+        wget -q https://github.com/godotengine/godot/releases/download/${VERSION}-stable/Godot_v${VERSION}-stable_export_templates.tpz
+        dir=~/.local/share/godot/export_templates/${VERSION}.stable
+        mkdir -p "$dir"
+        unzip -q Godot_v${VERSION}-stable_export_templates.tpz
+        mv templates/* "$dir/"
+
+    - uses: astral-sh/setup-uv@v6
+
+    - name: 缓存下载的字体
+      uses: actions/cache@v4
+      with:
+        path: build/font_cache
+        key: web-fonts-${{ hashFiles('game/tools/make_web_fonts.py') }}
+
+    # 测试时也带上字体，画面测试量出来的字宽才和网页版一致
+    - name: 做网页版带的字体
+      shell: bash
+      run: uv run game/tools/make_web_fonts.py

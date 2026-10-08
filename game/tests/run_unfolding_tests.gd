@@ -4,8 +4,8 @@ extends SceneTree
 ## 去掉 --headless，并在 -- 后加 output=<目录>，同时截图检查关键帧。
 
 const Layout := preload("res://rules/unfolding_layout.gd")
-var checks := 0
-var failures := 0
+const TestLog := preload("res://tests/test_log.gd")
+var results := TestLog.new()
 var output := ""
 var demo
 
@@ -18,10 +18,16 @@ func _init() -> void:
 
 
 func check(ok: bool, message: String) -> void:
-	checks += 1
-	if not ok:
-		failures += 1
-		push_error(message)
+	results.check(ok, message)
+
+
+func run_test(test: Callable) -> void:
+	var name := test.get_method()
+	if not results.wants(name):
+		return
+	results.begin(name)
+	await test.call()
+	results.end()
 
 
 func run() -> void:
@@ -30,16 +36,15 @@ func run() -> void:
 		push_error("布局脚本不能编译")
 		quit(1)
 		return
-	test_bijection()
-	test_expansion()
+	await run_test(test_bijection)
+	await run_test(test_expansion)
 	demo = load("res://demos/dimension_unfolding.tscn").instantiate()
 	root.add_child(demo)
 	await process_frame
 	demo.set_process(false)
-	await test_controls()
-	await test_frames()
-	print("展开演示：%d 次检查，%d 个失败" % [checks, failures])
-	quit(1 if failures > 0 or checks == 0 else 0)
+	await run_test(test_controls)
+	await run_test(test_frames)
+	quit(results.finish("展开演示"))
 
 
 func test_bijection() -> void:
@@ -185,6 +190,7 @@ func test_frames() -> void:
 	demo.anchor_inputs[2].value = 8
 	demo.reset_view()
 	demo.seek(0.55)
+	check(is_equal_approx(demo.progress, 0.55), "关键帧场景停在指定进度")
 	await capture("corner-wave")
 
 
