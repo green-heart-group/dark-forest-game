@@ -116,7 +116,8 @@ godot_console --headless --path game --script res://tests/run_unfolding_tests.gd
 
 - [x] 合并最新 `master`，将降维规则测试迁移到分组结构，保留统一测试入口。
 - [x] 规则、画面和独立演示测试通过；合并无冲突，不改动主目录的用户文件。
-- [ ] 干净快进回功能分支，推送远端并创建 PR；不执行远端合并。
+- [x] 干净快进回功能分支并推送 `origin/codex/dimension-unfolding`，创建
+  [PR #3](https://github.com/green-heart-group/dark-forest-game/pull/3) 面向 `master`；尚未执行远端合并。
 
 本次实际对局回放已逐回合检查：第 11 回合完成 27×27、第 31 回合完成 729 格直线，
 窗口在动画开始前置于前台，两次阶段末日志均确认保留 729 格。
