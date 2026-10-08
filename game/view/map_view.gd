@@ -78,6 +78,11 @@ const CAM_YAW := 115.0
 const CAM_DISTANCE := 17.0
 const CAM_MIN_DISTANCE := 4.0
 const CAM_MAX_DISTANCE := 2400.0
+## 展开时自动拉远到能看全整张图，但不超过这么远（再远星系就看不清了）
+const FIT_MAX_DISTANCE := 120.0
+## 一维的视角：俯仰角和远近（看得到附近四五十格）
+const LINE_PITCH := -30.0
+const LINE_DISTANCE := 30.0
 ## 视角中心最多移出星图多远（格）
 const CAM_MARGIN := 3.0
 ## 相机追上目标位置的快慢（越大越快）
@@ -87,7 +92,7 @@ const KEY_TURN_SPEED := 90.0
 const KEY_PAN_SPEED := 0.6
 const KEY_ZOOM_SPEED := 1.8
 ## 视角操作说明（星图左上角「操作」里显示）
-const CONTROLS_TEXT := "左键拖动：旋转　右键 / 中键拖动：平移　滚轮：缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格"
+const CONTROLS_TEXT := "左键拖动：旋转　右键 / 中键拖动：平移　滚轮：缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格\n一维时：拖动和 A / D 沿直线走，V 回到自己的据点"
 
 ## 网格怎么画（F4.2）：点阵；视野内画网格线；点阵加视野内的网格线；完整网格线
 enum Grid { DOTS, VISION_LINES, DOTS_AND_VISION, ALL_LINES }
@@ -159,6 +164,8 @@ var _amounts := {}
 var _layout_epoch := -1
 var _axes := Node3D.new()
 var _last_show_vision := false
+## 进入一维后已经对准过自己的据点（_frame_line）
+var _framed_line := false
 ## 鼠标点选：按下的位置
 var _press_pos := Vector2.ZERO
 ## 鼠标停在哪个格子上（没有时为 NO_CELL），指着的东西（_pickables 里的一项，指着空格子时为空）
@@ -234,8 +241,13 @@ func _world_per_px() -> float:
 	return 2.0 * _distance * tan(deg_to_rad(_camera.fov / 2.0)) / view.y
 
 
-## 重置视角：看整张星图，用开局的角度。instant：不放过渡，直接跳过去。
+## 重置视角：看整张星图，用开局的角度；一维时对准自己的据点（_frame_line）。instant：不放过渡，直接跳过去。
 func reset_view(instant := false) -> void:
+	if state != null and state.dimension == 1:
+		_frame_line()
+		if instant:
+			_snap_camera()
+		return
 	var bounds := _visual_bounds()
 	_goal_focus = bounds.get_center()
 	_goal_yaw = CAM_YAW
@@ -243,6 +255,19 @@ func reset_view(instant := false) -> void:
 	_goal_distance = maxf(CAM_DISTANCE, bounds.size.length() * CAM_DISTANCE / (Vector3.ONE * (StarMap.SIZE - 1)).length())
 	if instant:
 		_snap_camera()
+
+
+## 一维的视角：直线在画面上左右横着（x 往右变大），中心对准正在看的文明的第一个据点，
+## 远近只看得到附近一段（整条线有 729 格，全放进画面就看不清了，要看远处就平移或缩小）。
+func _frame_line() -> void:
+	var me: Civ = main.viewed() if main != null else null
+	var origins: Array[Vector3i] = me.origins() if me != null else []
+	var at := Vector3(origins[0]) if not origins.is_empty() else _visual_bounds().get_center()
+	_goal_focus = _clamp_focus(_warp_point(at))
+	_goal_yaw = 0.0
+	_goal_pitch = LINE_PITCH
+	_goal_distance = LINE_DISTANCE
+	_framed_line = true
 
 
 ## 视角中心移到 c（规则坐标），远近和角度不变。
@@ -271,6 +296,11 @@ func _pan(right: float, up: float) -> void:
 	var to_rule := _world.transform.basis.inverse()
 	var basis := _pivot.global_transform.basis
 	var move := to_rule * (basis.x * right + basis.y * up) * _world_per_px()
+	if state != null and state.dimension == 1:
+		# 一维只能沿直线走：只留 x 方向；直线在画面上斜着、短着时按它在画面上的长度放大，拖多远就走多远
+		var x_on_screen := to_rule.inverse() * Vector3.RIGHT
+		var seen := Vector2(x_on_screen.dot(basis.x), x_on_screen.dot(basis.y)).length()
+		move = Vector3(move.x / maxf(seen * seen, 0.2), 0.0, 0.0)
 	_goal_focus = _clamp_focus(_goal_focus - move)
 
 
@@ -717,6 +747,12 @@ func redraw_grid() -> void:
 	_trails.clear()
 	select_object({})
 	_rebuild_warped()
+	# 换到一个一维的局面（比如回放跳过去）时对准自己的据点一次；之后由玩家自己移
+	if state.dimension != 1:
+		_framed_line = false
+	elif not _framed_line:
+		_frame_line()
+		_snap_camera()
 
 
 ## 逻辑坐标按稳定格子身份跟随空间展开；所有标记、航线和选中共用它。
@@ -879,9 +915,14 @@ func _animate_flattening() -> void:
 	_layout_new = frame["positions"]
 	_amounts = frame["amounts"]
 	_warp_t = 0.0
+	# 展开时把整张图放进画面；压成直线时整条线太长，放进画面就什么都看不清，镜头留给玩家自己移，
+	# 进入一维时再对准自己的据点
 	var bounds := _visual_bounds()
-	_goal_focus = bounds.get_center()
-	_goal_distance = maxf(_goal_distance, bounds.size.length() * 1.55)
+	if state.dimension == 1:
+		_frame_line()
+	elif bounds.size.length() * 1.55 <= FIT_MAX_DISTANCE:
+		_goal_focus = bounds.get_center()
+		_goal_distance = maxf(_goal_distance, bounds.size.length() * 1.55)
 	_draw_axes()
 
 

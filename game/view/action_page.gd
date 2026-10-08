@@ -49,6 +49,12 @@ var _target_box := VBoxContainer.new()
 var _dist_row: HBoxContainer
 ## 俯仰角那一格（星图进入二维以后藏起来）
 var _pitch_box: Control
+## 水平角那一格（一维时换成下面两个按钮）
+var _yaw_box: Control
+## 一维时选方向的两个按钮：朝 -x、朝 +x
+var _line_dirs := HBoxContainer.new()
+var _line_left := Button.new()
+var _line_right := Button.new()
 ## 目标位置用极坐标表示：方向用上面的两个角度圆盘，再加离发射源的距离
 var _dist := HSlider.new()
 var _dist_label := Label.new()
@@ -103,7 +109,22 @@ func setup(p_main: Node) -> void:
 	_pitch.half = true
 	_pitch.marks = {90: "上", 0: "平", -90: "下"}
 	var how := "\n拖圆钮调，滚轮每格 1°。"
-	dials.add_child(_dial_box(_yaw, "↻ 水平角", "0° 朝 x 轴，90° 朝 y 轴。" + how))
+	_yaw_box = _dial_box(_yaw, "↻ 水平角", "0° 朝 x 轴，90° 朝 y 轴。" + how)
+	dials.add_child(_yaw_box)
+	_line_dirs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_line_dirs.add_theme_constant_override("separation", 6)
+	var line_group := ButtonGroup.new()
+	for pair in [[_line_left, "◀ -x", 180.0], [_line_right, "+x ▶", 0.0]]:
+		var b: Button = pair[0]
+		b.text = pair[1]
+		b.toggle_mode = true
+		b.button_group = line_group
+		b.custom_minimum_size = Vector2(64, 36)
+		b.tooltip_text = "一维里只能沿直线走：朝 x 变小的一边，或 x 变大的一边。"
+		var yaw: float = pair[2]
+		b.pressed.connect(func(): _yaw.value = yaw; main.refresh())
+		_line_dirs.add_child(b)
+	dials.add_child(_line_dirs)
 	_pitch_box = _dial_box(_pitch, "⇅ 俯仰角", "0° 水平，90° 朝上，-90° 朝下。" + how)
 	dials.add_child(_pitch_box)
 	dials.add_child(_coord_column())
@@ -208,6 +229,15 @@ func refresh(me: Civ) -> void:
 	_action_tiles[Action.FOIL].visible = not state.all_flat()
 	_action_tiles[Action.LINE_FOIL].visible = state.all_flat()
 	_pitch_box.visible = not state.all_flat()
+	_yaw_box.visible = not state.all_linear()
+	_line_dirs.visible = state.all_linear()
+	# 一维里 y、z 不会变，不用输入
+	_coord_boxes[1].visible = not state.all_linear()
+	_coord_boxes[2].visible = not state.all_linear()
+	if state.all_linear():
+		var right := _direction().x >= 0.0
+		_line_right.set_pressed_no_signal(right)
+		_line_left.set_pressed_no_signal(not right)
 	_refresh_units(me)
 	_refresh_aim_inputs()
 	_refresh_known_pick(me)
@@ -256,7 +286,7 @@ func _refresh_aim_inputs() -> void:
 		_aim_hint.text = "👆 点星图上的格子定方向（从%s算起）" % from
 		_aim_hint.tooltip_text = "点星图上的格子定方向。也可以调角度，或输入坐标。"
 	if state.all_flat():
-		_aim_hint.text += "\n一维空间：只能沿 x 轴移动。" if state.all_linear() else "\n二维空间：只有水平角。"
+		_aim_hint.text += "\n一维空间：只能沿直线往左（-x）或往右（+x）。" if state.all_linear() else "\n二维空间：只有水平角。"
 	match _action:
 		Action.FOIL:
 			_dist_row.tooltip_text = "离发射源多远（以目标格子为中心压平）"
@@ -476,6 +506,8 @@ func _aim_point() -> Vector3:
 ## 两个角度换算成方向（长度为 1）。
 func _direction() -> Vector3:
 	var yaw := deg_to_rad(_yaw.value)
+	if state.all_linear():
+		return Vector3(1.0 if cos(yaw) >= 0.0 else -1.0, 0.0, 0.0)
 	var pitch := 0.0 if state.all_flat() else deg_to_rad(_pitch.value)
 	return state.space_direction(Vector3(cos(pitch) * cos(yaw), cos(pitch) * sin(yaw), sin(pitch)))
 

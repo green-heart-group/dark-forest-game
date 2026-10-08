@@ -593,6 +593,7 @@ func test_flat_and_line() -> void:
 	check(s.all_linear(), "整张星图压成直线")
 	_check_flat_helpers(s, "一维", 3, func(p: Vector3, at: Vector3) -> bool:
 		return absf(p.z - at.z) < 1e-4 and absf(p.y - at.y) <= 0.6 + 1e-4)
+	await _check_line_camera_and_controls(s)
 	actions._action_tiles[actions.Action.SINGULARITY].pressed.emit()
 	check(not actions._go.disabled, "一维里可以发射奇异点")
 	actions._go.pressed.emit()
@@ -641,6 +642,38 @@ func _check_flat_helpers(s: GameState, label: String, rings: int, in_space: Call
 	check(balls == 0, "%s的视野不画成球" % label)
 	s.broadcasts.pop_back()
 	view.refresh()
+
+
+## 一维的镜头和操作：进入一维时对准自己的据点、直线横着；拖动沿直线走，能从一头走到另一头；
+## 近看能点中母星；方向只有 -x、+x 两个按钮，没有角度圆盘和 y、z 输入。
+func _check_line_camera_and_controls(s: GameState) -> void:
+	var me := s.human()
+	map._snap_camera()
+	var home: Vector3 = map._warp_point(Vector3(me.home))
+	check(absf(map._goal_yaw) < 1e-4 and map._goal_distance == map.LINE_DISTANCE, "进入一维时直线横着、离得近")
+	check(map._goal_focus.distance_to(home) < 1e-3, "进入一维时对准自己的母星")
+	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell") == me.home, "一维近看时能点中母星")
+	var bounds: AABB = map._visual_bounds()
+	for side in [1.0, -1.0]:
+		var end: float = bounds.end.x if side > 0.0 else bounds.position.x
+		for i in 3000:
+			if (map._goal_focus.x - end) * side >= 0.0:
+				break
+			map._pan(-300.0 * side, 0.0)
+		check((map._goal_focus.x - end) * side >= 0.0, "拖动能沿直线走到 x = %.0f 那一头（停在 %.1f）" % [end, map._goal_focus.x])
+		check(absf(map._goal_focus.y - home.y) < 1e-3 and absf(map._goal_focus.z - home.z) < 1e-3, "拖动只沿直线走")
+	map.reset_view(true)
+	check(map._focus.distance_to(home) < 1e-3, "V 回到自己的母星")
+	actions._action_tiles[actions.Action.DISPATCH].pressed.emit()
+	check(actions._line_dirs.visible and not actions._yaw_box.visible and not actions._pitch_box.visible, "一维只有 -x、+x 两个方向按钮")
+	check(not actions._coord_boxes[1].visible and not actions._coord_boxes[2].visible, "一维不显示 y、z 输入")
+	actions._line_left.pressed.emit()
+	check_eq(actions._direction(), Vector3(-1, 0, 0), "按 -x 朝 x 变小的一边")
+	actions._line_right.pressed.emit()
+	check_eq(actions._direction(), Vector3(1, 0, 0), "按 +x 朝 x 变大的一边")
+	check(actions._line_right.button_pressed and not actions._line_left.button_pressed, "按钮显示现在的方向")
+	await capture("one-dimensional")
 
 
 ## 胜负分出以后不再按按钮，画面每帧自己把还没压完的空间压完。
