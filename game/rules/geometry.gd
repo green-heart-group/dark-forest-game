@@ -36,6 +36,18 @@ static func segment_cells(a: Vector3, b: Vector3, radius: float, bounds: AABB) -
 	return cylinder_cells_between(a, d, 0.0, d.length(), radius, bounds)
 
 
+## 从 p 沿 direction（单位向量）走多远就出了星图范围 bounds（边缘和 Ship.outside 一样，多算半个格子）。
+## 已经在外面时为 0；没有方向时为 INF。
+static func distance_to_edge(p: Vector3, direction: Vector3, bounds: AABB) -> float:
+	var lo := bounds.position - Vector3.ONE * CELL_HALF
+	var hi := bounds.end - Vector3.ONE * CELL_HALF
+	var t := INF
+	for i in 3:
+		if absf(direction[i]) > 1e-9:
+			t = minf(t, ((hi[i] if direction[i] > 0.0 else lo[i]) - p[i]) / direction[i])
+	return maxf(t, 0.0)
+
+
 ## 以 center 为中心、半径 r 的球里的格子（格子中心离球心不超过 r）。
 static func sphere_cells(center: Vector3, r: float, bounds: AABB) -> Array[Vector3i]:
 	var result: Array[Vector3i] = []

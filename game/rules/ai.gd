@@ -7,6 +7,10 @@ extends RefCounted
 const RESERVE := 6
 ## 同时在飞的探测器个数
 const PROBES_WANTED := 2
+## 探测器出星图前至少要飞出母星系视野这么多格，才算朝有东西可看的方向派
+const PROBE_MIN_REACH := 1.0
+## 随机挑探测方向时最多试几次
+const PROBE_TRIES := 8
 ## 发过光粒的目标，这么多回合内不再发
 const GRAIN_WAIT := 14
 
@@ -384,6 +388,7 @@ static func _docked(ai: Civ, kind: String) -> Ship:
 
 
 ## 保持几个探测器在飞：朝最近被打来的方向、最近看到的东西，或者随机方向（先慢速飞出视野）。
+## 只朝出星图前还能飞出视野一段的方向派（_worth_probing），比如从星图外打来的方向就不去。
 static func _try_probe(s: GameState, ai: Civ) -> bool:
 	var flying := 0
 	var built := false
@@ -401,15 +406,48 @@ static func _try_probe(s: GameState, ai: Civ) -> bool:
 		if docked == null:
 			return false
 		built = true
-	var dir := s.random_direction()
-	var slow := true
+	var dir := Vector3.ZERO
+	var slow := false
 	if not ai.hit_dirs.is_empty() and s.rng.randf() < 0.5:
 		dir = ai.hit_dirs[-1]["dir"]
-		slow = false
 	elif not ai.sightings.is_empty() and s.rng.randf() < 0.5:
 		dir = ai.sightings[-1]["pos"] - docked.pos
-		slow = false
+	if not _worth_probing(s, ai, docked.pos, dir):
+		dir = _random_probe_direction(s, ai, docked.pos)
+		slow = true
 	return s.dispatch(ai, docked.id, dir, slow)["error"] == "" or built
+
+
+## 从 from 朝 dir 派探测器值不值得：出星图前要飞出母星系视野至少 PROBE_MIN_REACH 格。
+## 只看星图边界和自己的视野，不看别人在哪。
+static func _worth_probing(s: GameState, ai: Civ, from: Vector3, dir: Vector3) -> bool:
+	dir = s.space_direction(dir)
+	if dir == Vector3.ZERO:
+		return false
+	return Geometry.distance_to_edge(from, dir, s.map.bounds()) \
+			>= s.sphere_radius(ai, Balance.VISION_HOME) + PROBE_MIN_REACH
+
+
+## 随机挑一个值得派的方向：不值得时，把朝离得近的那一边的分量反过来（朝星图中间）再看一次。
+## 试 PROBE_TRIES 次都不值得时，用其中出星图前飞得最远的。
+static func _random_probe_direction(s: GameState, ai: Civ, from: Vector3) -> Vector3:
+	var center := s.map.bounds().get_center() - Vector3.ONE * Geometry.CELL_HALF
+	var best := Vector3.ZERO
+	var best_reach := -1.0
+	for i in PROBE_TRIES:
+		var d := s.random_direction()
+		if _worth_probing(s, ai, from, d):
+			return d
+		for axis in 3:
+			if d[axis] * (from[axis] - center[axis]) > 0.0:
+				d[axis] = -d[axis]
+		if _worth_probing(s, ai, from, d):
+			return d
+		var reach := Geometry.distance_to_edge(from, s.space_direction(d), s.map.bounds())
+		if s.space_direction(d) != Vector3.ZERO and reach > best_reach:
+			best_reach = reach
+			best = d
+	return best
 
 
 static func _try_devourer(s: GameState, ai: Civ) -> bool:
