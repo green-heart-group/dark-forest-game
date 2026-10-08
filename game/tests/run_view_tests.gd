@@ -126,6 +126,7 @@ func run_tests() -> void:
 		var name: String = m["name"]
 		if name.begins_with("test_") and not _ran.has(name):
 			results.fail("没写进 run_tests() 的列表，没有跑", name)
+	DirAccess.remove_absolute("user://_test_debug.cfg")  # 测试时面板设置存在这里，用完删掉
 	quit(results.finish("画面测试"))
 
 
@@ -402,7 +403,7 @@ func test_ship_paths() -> void:
 	var probe: Ship = me.ships[-1]
 	s.dispatch(me, probe.id, Vector3(1, 0, 0))
 	view.refresh()
-	var points: Array[Vector3] = map._predict(probe, map.PATH_TURNS)
+	var points: Array[Vector3] = s.predict_path(me, probe, map.PATH_TURNS)
 	check(points.size() == map.PATH_TURNS + 1 and points[1].x > points[0].x, "预测接下来几个回合的位置")
 	var tubes: int = map._tube_parts.size()
 	check(tubes >= map.PATH_TURNS, "航线画成粗线")
@@ -463,8 +464,8 @@ func test_black_domain_drawn() -> void:
 	var before: int = map._markers.get_child_count()
 	s._ensure_light()
 	for c in [Vector3i(2, 0, 0), Vector3i(3, 0, 0), Vector3i.ZERO]:
-		s.light[s._li(c)] = 0.5
-	s.light[s._li(Vector3i(2, 0, 0))] = 0.0
+		s.set_light_at(c, 0.5)
+	s.set_light_at(Vector3i(2, 0, 0), 0.0)
 	s.black_domains.append({"center": Vector3i(2, 0, 0), "left": 3})
 	view.refresh()
 	await process_frame
@@ -557,8 +558,8 @@ func test_flat_and_line() -> void:
 	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
 	check(map._pick_object(screen).get("cell") == s.human().home, "换图后在新位置可以点中母星")
 	check(actions._action == actions.Action.LINE_FOIL and actions._action_tiles[actions.Action.LINE_FOIL].visible, "自动切换到单向著")
-	check(not actions._action_tiles[actions.Action.FOIL].visible and not actions._pitch.get_parent().visible, "二维不再显示二向箔和俯仰输入")
-	var segments: Dictionary = map._grid_segments(s.flattened, s.linearized)
+	check(not actions._action_tiles[actions.Action.FOIL].visible and not actions._pitch_box.visible, "二维不再显示二向箔和俯仰输入")
+	var segments: Dictionary = map._grid_segments()
 	check(segments.size() == 1404, "二维网格连接全部 729 个格子")
 	check(actions._coord_boxes[0].max_value == 26 and actions._coord_boxes[1].max_value == 26, "二维输入允许 0 到 26")
 	actions.aim_at(Vector3i(26, 26, s.flat_plane))
@@ -596,7 +597,7 @@ func test_flat_and_line() -> void:
 	for i in Balance.SINGULARITY_TURNS:
 		panel._end.pressed.emit()
 	check(s.winner == "你" and panel._end.text.contains("再来一局") and overlay._status.text.contains("胜利"), "先降到零维的赢")
-	segments = map._grid_segments(s.flattened, s.linearized)
+	segments = map._grid_segments()
 	check(segments.size() == 728, "最终有 728 条相邻线段，连接 729 个格子")
 	for segment in segments.values():
 		for point in segment:
@@ -793,7 +794,7 @@ func test_debug_presets() -> void:
 	check(FileAccess.file_exists(path), "按「存成方案」存出文件")
 	check(dbg._selected_preset() == path, "存完自动选中这个方案")
 	dbg._apply_values({}, "默认")
-	check(Balance.COST_TURN == turn_cost - 3, "「恢复默认」换回 balance.gd 里的数值")
+	check(Balance.COST_TURN == turn_cost - 3, "「恢复默认」换回 balance.cfg 里的数值")
 	dbg.apply_preset()
 	check(Balance.COST_TURN == turn_cost, "「用上」换成方案里的数值")
 	check(s.history.filter(func(h): return h["name"] == "dev_balance").size() == 3, "切换方案也记进对局记录")
@@ -806,8 +807,8 @@ func test_debug_presets() -> void:
 	dbg._delete_preset()
 	check(not FileAccess.file_exists(path) and dbg._selected_preset() == "", "可以删掉方案")
 	_debug_game(29, false)
-	check(Balance.COST_TURN == turn_cost - 3, "不用方案时新开一局是 balance.gd 里的数值")
-	check(dbg._write_back.visible == BalancePresets.can_write_back(), "只有编辑器版才有「写回 balance.gd」")
+	check(Balance.COST_TURN == turn_cost - 3, "不用方案时新开一局是 balance.cfg 里的数值")
+	check(dbg._write_back.visible == BalancePresets.can_write_back(), "只有编辑器版才有「写回 balance.cfg」")
 	dbg._tabs.current_tab = 0
 
 

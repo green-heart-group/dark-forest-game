@@ -16,7 +16,7 @@ var spectator := false
 var commands: Array[Dictionary] = []
 ## 每结束一回合后的校验值
 var checksums: Array[int] = []
-## 记录时 balance.gd 里的数值
+## 记录时 balance.cfg 里的数值
 var balance := {}
 ## 重算时第一次和记录不一样的地方（第几次结束回合后），一样时为 -1
 var desync_step := -1
@@ -32,7 +32,7 @@ static func from_state(s: GameState) -> Replay:
 		if not h["ai"]:
 			r.commands.append(h.duplicate(true))
 	r.checksums = s.checksums.duplicate()
-	r.balance = s.start_balance.duplicate(true) if not s.start_balance.is_empty() else balance_values()
+	r.balance = s.start_balance.duplicate(true) if not s.start_balance.is_empty() else Balance.values()
 	return r
 
 
@@ -45,11 +45,7 @@ func last_step() -> int:
 func start() -> GameState:
 	desync_step = -1
 	apply_balance()
-	var s := GameState.new_game(seed_value, ai_count)
-	if spectator:
-		s.spectator = true
-		s.human().is_ai = true
-	return s
+	return GameState.new_game(seed_value, ai_count, spectator)
 
 
 ## 在 s 上重做这一回合玩家的操作，再结束回合。只在记录范围内用（s.steps < last_step()）。
@@ -71,7 +67,7 @@ func apply_pending(s: GameState) -> bool:
 	for c in commands:
 		if c["step"] != s.steps:
 			continue
-		# civ 为 -1 的是不针对某个文明的操作（比如改 balance.gd 的数值）
+		# civ 为 -1 的是不针对某个文明的操作（比如改 balance.cfg 的数值）
 		var args: Array = [s.civs[c["civ"]]] if c["civ"] >= 0 else []
 		args.append_array(c["args"])
 		var result: Dictionary = s.callv(c["name"], args)
@@ -132,9 +128,9 @@ static func load_file(path: String) -> Replay:
 	return from_dict(d)
 
 
-## 记录里的数值和现在 balance.gd 里不一样的地方：{名字: [记录时, 现在]}。
+## 记录里的数值和现在的数值不一样的地方：{名字: [记录时, 现在]}。
 func balance_diff() -> Dictionary:
-	var now := balance_values()
+	var now := Balance.values()
 	var diff := {}
 	for k in balance:
 		if now.get(k) != balance[k]:
@@ -142,22 +138,6 @@ func balance_diff() -> Dictionary:
 	return diff
 
 
-## 把 balance.gd 的数值改成记录时的（只在这次运行里有效）。
+## 把数值改成记录时的（只在这次运行里有效）。现在已经没有的数值跳过。
 func apply_balance() -> void:
-	var script: Script = load("res://rules/balance.gd")
-	for k in balance:
-		var now = script.get(k)
-		if now is Array:
-			now.assign(balance[k])
-		elif now != null:
-			script.set(k, balance[k])
-
-
-## balance.gd 里所有 static var 的当前值。Godot 列不出 static var，名字取自 balance_index.gd。
-static func balance_values() -> Dictionary:
-	var script: Script = load("res://rules/balance.gd")
-	var values := {}
-	for name in BalanceIndex.NAMES:
-		var v = script.get(name)
-		values[name] = v.duplicate(true) if v is Array or v is Dictionary else v
-	return values
+	Balance.apply(balance)

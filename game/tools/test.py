@@ -2,7 +2,8 @@
 # requires-python = ">=3.11"
 # dependencies = ["cogapp"]
 # ///
-"""一条命令跑全部测试：先导入（新加了 class_name 时要导入一次），再跑规则、画面和展开演示测试。
+"""一条命令跑全部测试：先按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
+最后跑规则、画面和展开演示测试。
 本地和 GitHub 上都用它，所以两边跑的东西一样。
 
     uv run game/tools/test.py                  # 导入，跑规则、画面和展开演示测试
@@ -36,6 +37,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+import sync_balance  # 同一目录下的 sync_balance.py
 
 GAME = Path(__file__).resolve().parents[1]
 SUITES = {
@@ -106,6 +109,8 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8), help="规则测试分几个进程跑")
     args = parser.parse_args()
 
+    if sync_balance.sync(write=True):
+        print("已按 balance.cfg 更新 game/rules/balance.gd 里的数值声明，记得一起提交")
     godot = find_godot()
     if not args.no_import:
         print("导入……", flush=True)
@@ -199,6 +204,13 @@ def write_counts(counts: dict[str, int], status: Path | None = None) -> bool:
     return True
 
 
+def script_errors(output: str) -> list[str]:
+    """Godot 输出里的每处代码出错：「SCRIPT ERROR」那一行，连上后面写出错位置的两行。"""
+    lines = output.splitlines()
+    return [" ".join(x.strip() for x in lines[i:i + 3])
+            for i, line in enumerate(lines) if line.startswith("SCRIPT ERROR")]
+
+
 def summary(suite: str, results: list[tuple[int, Path, Path]], seconds: float,
             expected: int | None) -> tuple[str, bool, int]:
     """合并一组测试几个进程的结果，写成和 test_log.gd 一样的汇总，返回 (汇总, 是否全部通过, 测试个数)。
@@ -216,6 +228,13 @@ def summary(suite: str, results: list[tuple[int, Path, Path]], seconds: float,
         if data is None:
             failed.append(f"（第 {i + 1} 个进程没写出结果）")
             continue
+        # 测试函数里的代码出错时，Godot 只打印「SCRIPT ERROR」就跳出这个函数，前面跑过的检查照样算通过，
+        # 所以要从输出里找出来，算作失败
+        errors = script_errors(log.read_text(encoding="utf-8", errors="replace"))
+        if errors:
+            lines.append(f"（{title}第 {i + 1} 个进程里代码出错）")
+            lines += errors
+            failed.append(f"（第 {i + 1} 个进程有 {len(errors)} 处代码出错）")
         tests += data["tests"]
         checks += data["checks"]
         failed += data["failed"]

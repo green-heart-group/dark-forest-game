@@ -52,8 +52,8 @@ func test_light_slows_ships_and_disarms_grains() -> void:
 	me.grains[Vector3i.ZERO] = true
 	check(s.grain_error(me, Vector3(1, 0, 0)).contains("黑域"), "在黑域里不能发射光粒")
 	_fill_light(s, 0.005)
-	s.light[s._li(Vector3i.ZERO)] = 1.0  # 两边的母星系都不在里面，不然直接算输
-	s.light[s._li(Vector3i(8, 8, 8))] = 1.0
+	s.set_light_at(Vector3i.ZERO, 1.0)  # 两边的母星系都不在里面，不然直接算输
+	s.set_light_at(Vector3i(8, 8, 8), 1.0)
 	var p := _ship(s, me, Ship.PROBE, Vector3(0, 3, 0), Vector3(1, 0, 0))
 	_turns(s, Balance.SHIP_STUCK_TURNS - 1)
 	check(me.ships.has(p) and p.pos == Vector3(0, 3, 0) and p.stuck == Balance.SHIP_STUCK_TURNS - 1, "慢到几乎不动就停在原地")
@@ -71,10 +71,10 @@ func test_black_domain_blocks_vision_and_slows_reports() -> void:
 	var me := s.human()
 	me.telescope = 3
 	s._ensure_light()
-	s.light[s._li(Vector3i(2, 0, 3))] = 0.0
+	s.set_light_at(Vector3i(2, 0, 3), 0.0)
 	check(not s.blocked(Vector3.ZERO, Vector3(4, 0, 0)), "光速为 0 的格子不在路线上，不挡")
-	s.light[s._li(Vector3i(2, 0, 3))] = 1.0
-	s.light[s._li(Vector3i(2, 0, 0))] = 0.0
+	s.set_light_at(Vector3i(2, 0, 3), 1.0)
+	s.set_light_at(Vector3i(2, 0, 0), 0.0)
 	check(s.blocked(Vector3.ZERO, Vector3(4, 0, 0)), "路线穿过光速为 0 的格子，挡住")
 	s._observe(me)
 	check(me.known.is_empty(), "看不到后面")
@@ -142,7 +142,7 @@ func test_speedups_match_plain_checks() -> void:
 					var t := v.dot(dir)
 					if d.length() >= 1e-9 and t > 0.0 and t <= d.length() and (v - dir * t).length() <= radius + Geometry.CELL_HALF:
 						plain.append(Vector3i(x, y, z))
-		var fast := Geometry.segment_cells(a, b, radius)
+		var fast := Geometry.segment_cells(a, b, radius, s.map.bounds())
 		fast.sort()
 		cells_same = cells_same and fast == plain
 	check(cells_same, "飞一步扫过的格子：只扫线段附近，结果不变")
@@ -162,13 +162,13 @@ func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
 	var home := s.energy_income(me)
 	me.colonies.append(Vector3i(5, 5, 5))
 	s._ensure_light()
-	s.light[s._li(Vector3i.ZERO)] = 0.5
+	s.set_light_at(Vector3i.ZERO, 0.5)
 	check(s.energy_income(me) == ceili(home * Balance.DOMAIN_INCOME) + full - home, "被困在黑域里的星系产出只有 1/10，向上取整")
 	check(s.research(me, "dyson")["error"] != "", "母星系在黑域里不能升级科技")
 	me.colonies.erase(Vector3i(5, 5, 5))
 	s._check_hiding()
 	check(me.alive, "光速没降到 0，还算没困住")
-	s.light[s._li(Vector3i.ZERO)] = 0.0
+	s.set_light_at(Vector3i.ZERO, 0.0)
 	s._check_hiding()
 	check(not me.alive, "所有星系都困在光速为 0 的黑域里，算输")
 
@@ -178,7 +178,7 @@ func test_light_diffusion_in_new_dimensions() -> void:
 	var s := _two_dimensional_match()
 	s._ensure_light()
 	var center := Vector3i(13, 13, s.flat_plane)
-	s.light[s._li(center)] = 0.0
+	s.set_light_at(center, 0.0)
 	s._light_moving = true
 	s._spread_light()
 	check(is_equal_approx(s.light_at(center), 8.0 / 9.0), "二维光速按邻近 3×3 格扩散")

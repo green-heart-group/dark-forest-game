@@ -21,10 +21,12 @@ const PRIORITY := {
 static func take_turn(s: GameState, ai: Civ) -> void:
 	_research(s, ai)
 	if _flat_near(s, ai) and not (ai.line_reduced if s.all_flat() else ai.reduced) and ai.reduce_left == 0:
-		if s.start_reduce(ai)["error"] != "":
+		if s.reduce_error(ai) == "":
+			s.start_reduce(ai)
+			s.ai_note(ai, "压平的区域快到了，先降维")
+		elif ai.energy < ai.reduce_cost():
 			s.ai_note(ai, "压平的区域快到了，能量不够降维，这回合什么都不做，先攒着")
 			return
-		s.ai_note(ai, "压平的区域快到了，先降维")
 	if ai.starship_only():
 		s.ai_note(ai, "只剩星舰，去找能殖民的星系")
 		_starship_turn(s, ai)
@@ -52,9 +54,8 @@ static func _research(s: GameState, ai: Civ) -> void:
 		for id in Tech.ALL:
 			if ai.has_tech(id) or Tech.tier(id) == 0:
 				continue
-			var err := s.research_error(ai, id)
-			if err != "" and err != "能量不足" and err != "矿石不足":
-				continue
+			if s.research_block_error(ai, id) != "":
+				continue  # 钱不够的先留着打分，攒够了再升
 			var score: float = PRIORITY.get(id, 1.0) + ai.taste.get(id, 0.0)
 			if id == "dyson":
 				score += ai.star_total(s.map)
@@ -73,9 +74,9 @@ static func _research(s: GameState, ai: Civ) -> void:
 			break
 		s.research(ai, best)
 	# 还没发现别人时升级射电望远镜，看得更远
-	if not ai.discovered and ai.energy >= Balance.COST_TELESCOPE + 2 * RESERVE:
+	if not ai.discovered and ai.energy >= GameState.upgrade_cost("telescope") + 2 * RESERVE:
 		s.upgrade(ai, "telescope")
-	if ai.times_hit > 0 and ai.has_warning and ai.energy >= Balance.COST_WARNING_UPGRADE + 3 * RESERVE:
+	if ai.times_hit > 0 and ai.has_warning and ai.energy >= GameState.upgrade_cost("warning") + 3 * RESERVE:
 		s.upgrade(ai, "warning")
 
 
@@ -146,7 +147,7 @@ static func _nearest_known(s: GameState, ai: Civ) -> Vector3i:
 	for t in ai.known:
 		if not s.cell_exists(t):
 			continue
-		var d := GameState._nearest(ai.colonies, Vector3(t))
+		var d := GameState.nearest_distance(ai.colonies, Vector3(t))
 		if d < best_d:
 			best_d = d
 			best = t
@@ -158,7 +159,7 @@ static func _try_grain(s: GameState, ai: Civ, target: Vector3i) -> bool:
 	if not ai.has_tech("grain") or (ai.aimed.has(target) and s.turn - ai.aimed[target] < GRAIN_WAIT):
 		return false
 	for c in ai.grains:
-		if ai.energy < Balance.COST_GRAIN_LAUNCH:
+		if ai.energy < GameState.action_cost("launch_grain"):
 			return false
 		if s.launch_grain(ai, Vector3(target - c), c)["error"] == "":
 			ai.aimed[target] = s.turn
@@ -225,17 +226,17 @@ static func _try_turn_warships(s: GameState, ai: Civ) -> bool:
 		if best == GameState.NO_HIT or best_d < 1.0:
 			continue
 		var want := (Vector3(best) - sh.pos).normalized()
-		if want.angle_to(sh.direction) > deg_to_rad(25) and ai.energy >= Balance.COST_TURN + RESERVE:
+		if want.angle_to(sh.direction) > deg_to_rad(25) and ai.energy >= GameState.dispatch_cost(sh) + RESERVE:
 			return s.turn_ship(ai, sh.id, want)["error"] == ""
 	return false
 
 
 ## 离自己远的已知目标，广播出去借刀杀人（每个坐标一次）。
 static func _try_broadcast(s: GameState, ai: Civ) -> bool:
-	if ai.energy < Balance.COST_BROADCAST + RESERVE:
+	if ai.energy < GameState.action_cost("broadcast") + RESERVE:
 		return false
 	for t in ai.known:
-		if ai.broadcasted.has(t) or GameState._nearest(ai.colonies, Vector3(t)) < 4.0:
+		if ai.broadcasted.has(t) or GameState.nearest_distance(ai.colonies, Vector3(t)) < 4.0:
 			continue
 		for c in ai.colonies:
 			if s.can_broadcast_from(ai, c) and s.broadcast(ai, t, c)["error"] == "":
@@ -259,7 +260,7 @@ static func _try_sophon(s: GameState, ai: Civ) -> bool:
 		var info: Dictionary = ai.intel.get(t, {})
 		if ai.sophon_tried.has(t) or locked.has(info.get("owner", -1)) or not s.cell_exists(t):
 			continue
-		var d := GameState._nearest(ai.colonies, Vector3(t))
+		var d := GameState.nearest_distance(ai.colonies, Vector3(t))
 		if d < best_d:
 			best_d = d
 			best = t
@@ -271,7 +272,7 @@ static func _try_sophon(s: GameState, ai: Civ) -> bool:
 			ship = sh
 	var built := false
 	if ship == null:
-		if ai.energy < Balance.COST_SOPHON[0] + Balance.COST_SOPHON_LAUNCH + 4 * RESERVE:
+		if ai.energy < s.build_cost(ai, "sophon")[0] + GameState.action_cost("send_sophon") + 4 * RESERVE:
 			return false
 		ship = s.build(ai, "sophon", _nearest_colony(ai, Vector3(best)))["ship"]
 		if ship == null:
@@ -325,12 +326,10 @@ static func _try_foil(s: GameState, ai: Civ) -> bool:
 	if target == GameState.NO_HIT:
 		return false
 	var to_line := s.all_flat()
-	if to_line and (s.linearized.has(target) or target.z != s.flat_plane):
-		return false
-	if not to_line and s.flattened.has(target):
+	if s.foil_target_error(ai, to_line, target) != "":
 		return false
 	if not (ai.line_reduced if to_line else ai.reduced):
-		var cost := Balance.COST_LINE_FOIL if to_line else Balance.COST_FOIL
+		var cost := GameState.action_cost("launch_line_foil" if to_line else "launch_foil")
 		var need := maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + cost)
 		if ai.energy < need:
 			s.ai_note(ai, "想发%s，要攒到 %dE（降维加发射）" % ["单向著" if to_line else "二向箔", need])
@@ -349,7 +348,7 @@ static func _try_colonize(s: GameState, ai: Civ) -> bool:
 	for t in s.known_habitable(ai):
 		if ai.colony_tried.has(t):
 			continue
-		var d := GameState._nearest(ai.colonies, Vector3(t))
+		var d := GameState.nearest_distance(ai.colonies, Vector3(t))
 		if d < best_d:
 			best_d = d
 			best = t
@@ -443,7 +442,7 @@ static func _starship_turn(s: GameState, ai: Civ) -> void:
 		return
 	if ship.direction != Vector3.ZERO and not ship.docked:
 		return  # 还在飞
-	if s.can_settle(ship.cell()):
+	if s.settle_error(ai) == "":
 		s.settle_starship(ai)
 		return
 	var best := GameState.NO_HIT
@@ -469,10 +468,6 @@ static func _flat_near(s: GameState, ai: Civ) -> bool:
 	if not ai.has_tech("dimension"):
 		return false
 	for c in ai.origins():
-		if s.all_flat():
-			for zone in s.line_zones:
-				if GameState.line_covers(zone["center"], zone["age"] + Balance.AI_REDUCE_ALERT * Balance.FOIL_SPREAD, c):
-					return true
-		elif s.turns_until_flat(c) <= Balance.AI_REDUCE_ALERT:
+		if s.turns_until_flat(c) <= Balance.AI_REDUCE_ALERT:
 			return true
 	return false

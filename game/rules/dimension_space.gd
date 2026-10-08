@@ -2,11 +2,10 @@ class_name DimensionSpace
 extends RefCounted
 ## 整数坐标的一一映射、阶段换图和只读的展开布局。每个阶段仍有 729 格。
 
-const SIZE := 9
-const PLANE_SIZE := 27
-const COUNT := 729
 const Layout := preload("res://rules/unfolding_layout.gd")
-const WAVE_WIDTH := 2.0
+const SIZE := Layout.SIZE
+const PLANE_SIZE := Layout.SIZE * 3
+const COUNT := Layout.COUNT
 
 
 static func plane_cell(c: Vector3i, layer: int) -> Vector3i:
@@ -63,7 +62,7 @@ static func commit(s: GameState, to_line: bool) -> void:
 		remapped_light.resize(COUNT)
 		for c in mapping:
 			var d: Vector3i = mapping[c] - next.origin
-			remapped_light[(d.x * next.extent.y + d.y) * next.extent.z + d.z] = s.light[s._li(c)]
+			remapped_light[(d.x * next.extent.y + d.y) * next.extent.z + d.z] = s.light[s.light_index(c)]
 	for civ in s.civs:
 		civ.home = mapping.get(civ.home, Vector3i(point(Vector3(civ.home), anchor, to_line, old)))
 		for i in civ.colonies.size():
@@ -144,15 +143,15 @@ static func frame(s: GameState) -> Dictionary:
 			var reserved := 0.0
 			for zone in zones:
 				var center: Vector3i = zone["center"]
-				var distance := absf(x - center.x) if to_line else Vector2(x - center.x, y - center.y).length()
-				value = maxf(value, Layout.smooth_amount((zone["age"] - distance + WAVE_WIDTH) / WAVE_WIDTH))
-				reserved = maxf(reserved, Layout.spread(Layout.smooth_amount((zone["age"] - distance + WAVE_WIDTH + 0.8) / WAVE_WIDTH)))
+				var distance := GameState.zone_distance(center, Vector3i(x, y, 0), to_line)
+				value = maxf(value, Layout.smooth_amount((zone["age"] - distance + Layout.WAVE_WIDTH) / Layout.WAVE_WIDTH))
+				reserved = maxf(reserved, Layout.spread(Layout.smooth_amount((zone["age"] - distance + Layout.WAVE_WIDTH + Layout.SPACE_LEAD) / Layout.WAVE_WIDTH)))
 			q[Vector2i(x, y)] = value
 			widths[x] = maxf(widths[x], 1.0 + (26.0 if to_line else 2.0) * reserved)
 			if not to_line:
 				heights[y] = maxf(heights[y], 1.0 + 2.0 * reserved)
-	var cx := _centers(widths, anchor.x)
-	var cy := _centers(heights, anchor.y if not to_line else 0)
+	var cx := Layout.centers(widths, anchor.x)
+	var cy := Layout.centers(heights, anchor.y if not to_line else 0)
 	for c in s.map.cells():
 		var t: float = q[Vector2i(c.x, 0 if to_line else c.y)]
 		var p: Vector3
@@ -167,17 +166,6 @@ static func frame(s: GameState) -> Dictionary:
 		positions[c] = p + s.visual_offset
 		amounts[c] = t
 	return {"positions": positions, "amounts": amounts}
-
-
-static func _centers(widths: PackedFloat32Array, anchor: int) -> PackedFloat32Array:
-	var result := PackedFloat32Array()
-	result.resize(widths.size())
-	result[anchor] = anchor
-	for i in range(anchor, widths.size() - 1):
-		result[i + 1] = result[i] + (widths[i] + widths[i + 1]) / 2.0
-	for i in range(anchor - 1, -1, -1):
-		result[i] = result[i + 1] - (widths[i] + widths[i + 1]) / 2.0
-	return result
 
 
 ## 图外来袭使用射线进入旧星图的位置作新航向，不能把位置和方向都夹到同一边缘后停住。

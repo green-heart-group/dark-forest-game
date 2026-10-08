@@ -4,6 +4,11 @@ extends RefCounted
 
 ## 记结果的对象（tests/test_log.gd），运行器填上
 var results
+## 仓库根目录（game/ 的上一层），末尾不带 /。读文档的测试用
+var root := ProjectSettings.globalize_path("res://").trim_suffix("/").get_base_dir()
+
+## 规则编号，比如 T23、F3.5（前后不能紧挨着字母或数字，所以 E7F6 这样的名字不算）
+const RULE_ID := "(?<![A-Za-z0-9_])[A-Z]\\d+(?:\\.\\d+)?(?![A-Za-z0-9_])"
 
 
 func check(ok: bool, what: String) -> void:
@@ -88,25 +93,10 @@ func _three_civs() -> GameState:
 	return s
 
 
-## 测试里改过的数值，测完换回来。
-func _restore_balance(values: Dictionary) -> void:
-	var r := Replay.new()
-	r.balance = values
-	r.apply_balance()
-
-
 func _flatten_whole_column(s: GameState, col: Vector2i, plane: int) -> void:
 	s._flatten_cell(Vector3i(col.x, col.y, plane), plane)
 	for z in StarMap.SIZE:
 		s._flatten_cell(Vector3i(col.x, col.y, z), plane)
-
-
-func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
-	s._unfold_foil(anchor)
-	for i in 40:
-		if s.all_flat():
-			break
-		s._spread_flat()
 
 
 func _collapse_match() -> GameState:

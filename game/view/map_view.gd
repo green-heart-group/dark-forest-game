@@ -445,8 +445,6 @@ func _nearest_cell(pos: Vector2) -> Vector3i:
 	var best := NO_CELL
 	var best_score := INF
 	for c in state.map.cells():
-		if not state.cell_exists(c):
-			continue
 		var p := _world.to_global(_warp_point(Vector3(c)))
 		if _camera.is_position_behind(p):
 			continue
@@ -840,7 +838,7 @@ func _funnel_mesh() -> ImmediateMesh:
 
 
 ## 当前整数坐标中的邻接线；完成换图后自动变成 27² 或 729 的网格。
-func _grid_segments(_flat: Dictionary = {}, _line: Dictionary = {}) -> Dictionary:
+func _grid_segments() -> Dictionary:
 	var segs := {}
 	for c in state.map.cells():
 		for axis in [Vector3i.RIGHT, Vector3i.UP, Vector3i.BACK]:
@@ -1072,10 +1070,10 @@ func _draw_foil_preview(from: Vector3, target: Vector3i, line_mode: bool) -> voi
 	var layer: Array[Vector3i] = []
 	for x in state.map.extent.x:
 		if line_mode:
-			layer.append(Vector3i(x, state.line_y if state.line_y >= 0 else target.y, state.flat_plane))
+			layer.append(Vector3i(x, state.line_y_for(target), state.flat_plane))
 		else:
 			for y in state.map.extent.y:
-				layer.append(Vector3i(x, y, state.flat_plane if state.flat_plane >= 0 else target.z))
+				layer.append(Vector3i(x, y, state.foil_plane_for(target)))
 	var tile := BoxMesh.new()
 	tile.size = Vector3(1.0, 0.06 if line_mode else 1.0, 0.03)
 	_markers.add_child(_instances(tile, layer, _fill(layer.size(), COLOR_FOIL_COLUMN), _fill_f(layer.size(), 1.0)))
@@ -1112,15 +1110,14 @@ func _draw_vision(me: Civ) -> void:
 
 ## 星图上大家都看得到的东西：压平的空间、黑域。
 func _draw_space() -> void:
-	# 黑域（G14）：光速低于 0.95 的格子画成半透明的方块，光速越低越不透明；中心还保持光速为 0 的再加一圈边框
+	# 黑域（G14）：光速低到光粒没有杀伤力的格子画成半透明的方块，光速越低越不透明；中心还保持光速为 0 的再加一圈边框
 	var slow_cells: Array[Vector3i] = []
 	var slow_colors: Array[Color] = []
 	if not state.light.is_empty():
 		for c in state.map.cells():
-			var speed := state.light_at(c)
-			if speed < Balance.GRAIN_MIN_LIGHT:
+			if state.in_black_domain(c):
 				slow_cells.append(c)
-				slow_colors.append(Color(COLOR_DOMAIN, COLOR_DOMAIN.a * (1.0 - speed)))
+				slow_colors.append(Color(COLOR_DOMAIN, COLOR_DOMAIN.a * (1.0 - state.light_at(c))))
 	if not slow_cells.is_empty():
 		var cube := BoxMesh.new()
 		cube.size = Vector3.ONE
@@ -1541,7 +1538,7 @@ func _draw_path(s: Ship, color: Color) -> void:
 	for i in trail.size() - 1:
 		var fade := float(i + 1) / trail.size()
 		_tube(trail[i], trail[i + 1], Color(color, 0.08 + 0.4 * fade), PATH_WIDTH * 0.6)
-	var points := _predict(s, PATH_TURNS)
+	var points := state.predict_path(state.ship_owner(s), s, PATH_TURNS)
 	var ticks: Array[Vector3] = []
 	var tick_colors: Array[Color] = []
 	for i in points.size() - 1:
@@ -1563,26 +1560,6 @@ func _draw_path(s: Ship, color: Color) -> void:
 	tick.radial_segments = 8
 	tick.rings = 4
 	_markers.add_child(_instances_at(tick, ticks, tick_colors, _fill_f(ticks.size(), 1.0)))
-
-
-## 照现在的速度和加速度，单位接下来 turns 个回合的位置（第一项是现在的位置）。
-## 只是画面上的估计：不管曲率引擎、慢速出发、吞噬者停下来吃行星。
-func _predict(s: Ship, turns: int) -> Array[Vector3]:
-	var points: Array[Vector3] = [s.pos]
-	if not s.moving():
-		return points
-	var speed := s.speed
-	var p := s.pos
-	for i in turns:
-		speed = minf(speed + s.accel, s.max_speed)
-		if s.has_target and p.distance_to(s.target) <= speed + 1e-6:
-			points.append(s.target)
-			break
-		p += s.direction * speed
-		points.append(p)
-		if Ship.outside(p, state.map.bounds()):
-			break
-	return points
 
 
 ## 记下自己单位的位置，画身后的轨迹用。位置变了（过了一回合）才多记一个，最多记 TRAIL_TURNS 个。

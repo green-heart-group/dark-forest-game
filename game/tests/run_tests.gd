@@ -25,7 +25,9 @@ func _init() -> void:
 		if suite == null:
 			continue
 		results.begin(full)
+		var balance := Balance.values()
 		suite.call(full.get_slice(".", 1))
+		Balance.apply(balance)  # 测试改过的数值都换回来，中途出错跳出来的也一样
 		results.end()
 	quit(results.finish("规则测试"))
 

@@ -5,7 +5,7 @@ extends PanelContainer
 ##   任何不由 AI 控制的文明都可以直接操作（以后有多个玩家时同样适用）。
 ## - 播放：暂停、播放、一回合一回合前进或后退、跳到任意回合。
 ##   往回退时从开局按记录重算（规则里的随机数都来自同一个种子，所以结果一样）。
-## - 数值：随时改 balance.gd 的数值和任意文明的属性、科技。改动记进对局记录，回放时同样重做。
+## - 数值：随时改 balance.cfg 的数值和任意文明的属性、科技。改动记进对局记录，回放时同样重做。
 ## - 记录：存下、打开对局记录；新开一局（自己玩或全由 AI 打的观战局）。
 ## 面板的设置（开没开、上帝视角、播放速度、在哪一页）存在 user://debug.cfg，下次打开还是一样。
 
@@ -24,8 +24,6 @@ const CIV_FIELD_NAMES := {"energy": "能量", "mineral": "矿石", "actions_left
 	"discovered": "发现过别人", "tier1_turn": "I 级开放的回合", "tier2_turn": "II 级开放的回合", "tier3_turn": "III 级开放的回合",
 	"reduce_left": "降维还剩几回合", "reduced": "已降到二维", "line_reduced": "已降到一维",
 	"singularity_left": "奇异点还剩几回合"}
-## 不能在面板里直接改的属性（改了会破坏规则里的约定；接管用「由 AI 控制」开关）
-const CIV_FIELD_SKIP := ["is_ai", "alive", "name", "home"]
 
 var main: Node
 ## 现在看的是第几个文明（GameState.civs 的序号）
@@ -56,10 +54,10 @@ var _tabs := TabContainer.new()
 var _table := GridContainer.new()
 var _log := RichTextLabel.new()
 var _show_notes := CheckBox.new()
-## 数值页：每个 balance.gd 数值一行
+## 数值页：每个 balance.cfg 数值一行
 var _balance_rows: Dictionary[String, Dictionary] = {}
 var _balance_filter := LineEdit.new()
-## balance.gd 文件里写的数值，「↺」和「恢复默认」恢复成这个
+## balance.cfg 文件里写的数值，「↺」和「恢复默认」恢复成这个
 var _balance_defaults := {}
 ## 数值方案（见 rules/balance_presets.gd）
 var _preset_pick := OptionButton.new()
@@ -296,10 +294,10 @@ func _build_overview_page() -> VBoxContainer:
 	return page
 
 
-## 数值页：balance.gd 的每个数值一行，改了马上生效（也记进对局记录）。
+## 数值页：balance.cfg 的每个数值一行，改了马上生效（也记进对局记录）。
 func _build_balance_page() -> VBoxContainer:
 	var page := VBoxContainer.new()
-	_balance_defaults = BalancePresets.file_values()
+	_balance_defaults = Balance.file_values()
 	page.add_child(_build_preset_box())
 	var top := HBoxContainer.new()
 	_balance_filter.placeholder_text = "🔍 按名字或说明筛选"
@@ -312,7 +310,7 @@ func _build_balance_page() -> VBoxContainer:
 	top.add_child(only_changed)
 	page.add_child(top)
 	_balance_filter.set_meta("only_changed", only_changed)
-	page.add_child(_small("改动从这一回合起生效；整局重算时也会在同一回合改。灰色说明来自 balance.gd 的注释。",
+	page.add_child(_small("改动从这一回合起生效；整局重算时也会在同一回合改。灰色说明来自 balance.cfg 的注释。",
 			Color(0.6, 0.6, 0.7)))
 	var grid := GridContainer.new()
 	grid.columns = 3
@@ -341,14 +339,14 @@ func _build_balance_page() -> VBoxContainer:
 		grid.add_child(editor)
 		var reset := Button.new()
 		reset.text = "↺"
-		reset.tooltip_text = "恢复成 balance.gd 里的 %s" % str(value)
+		reset.tooltip_text = "恢复成 balance.cfg 里的 %s" % str(value)
 		reset.pressed.connect(func(): _on_balance_edit(name, _balance_defaults[name]))
 		grid.add_child(reset)
 		_balance_rows[name] = {"cell": cell, "label": label, "editor": editor, "reset": reset, "doc": docs.get(name, "")}
 	return page
 
 
-## 数值页上面的「方案」：一组数值存成文件，可以切换、导入导出、设成新局默认、写回 balance.gd。
+## 数值页上面的「方案」：一组数值存成文件，可以切换、导入导出、设成新局默认、写回 balance.cfg。
 func _build_preset_box() -> VBoxContainer:
 	var box := VBoxContainer.new()
 	var row := HBoxContainer.new()
@@ -357,8 +355,8 @@ func _build_preset_box() -> VBoxContainer:
 	_preset_pick.tooltip_text = "📁 共享的（game/balance_presets/，进 git）　👤 自己的（user://balance_presets/）"
 	_preset_pick.item_selected.connect(func(_i): _on_preset_picked())
 	row.add_child(_preset_pick)
-	for spec in [["用上", "把数值换成这个方案的（没写的数值用 balance.gd 里的），从这一回合起生效", apply_preset],
-			["恢复默认", "所有数值换回 balance.gd 里的", func(): _apply_values({}, "balance.gd 里的数值")]]:
+	for spec in [["用上", "把数值换成这个方案的（没写的数值用 balance.cfg 里的），从这一回合起生效", apply_preset],
+			["恢复默认", "所有数值换回 balance.cfg 里的", func(): _apply_values({}, "balance.cfg 里的数值")]]:
 		var b := Button.new()
 		b.text = spec[0]
 		b.tooltip_text = spec[1]
@@ -375,7 +373,7 @@ func _build_preset_box() -> VBoxContainer:
 	_preset_default.add_theme_font_size_override("font_size", 13)
 	_preset_default.toggled.connect(func(on):
 		_save_pref("default_preset", _selected_preset() if on else "")
-		_note = "新开一局时用「%s」" % _selected_preset().get_file().get_basename() if on else "新开一局时用 balance.gd 里的数值"
+		_note = "新开一局时用「%s」" % _selected_preset().get_file().get_basename() if on else "新开一局时用 balance.cfg 里的数值"
 		refresh_panel())
 	box.add_child(_preset_default)
 
@@ -390,7 +388,7 @@ func _build_preset_box() -> VBoxContainer:
 	save_row.add_child(_preset_shared)
 	var save := Button.new()
 	save.text = "存成方案"
-	save.tooltip_text = "把现在和 balance.gd 不一样的数值存成方案（同名的会覆盖）"
+	save.tooltip_text = "把现在和 balance.cfg 不一样的数值存成方案（同名的会覆盖）"
 	save.pressed.connect(save_preset)
 	save_row.add_child(save)
 	box.add_child(save_row)
@@ -425,8 +423,8 @@ func _build_preset_box() -> VBoxContainer:
 			else:
 				WebFiles.download(_selected_preset()))
 	file_row.add_child(folder)
-	_write_back.text = "写回 balance.gd"
-	_write_back.tooltip_text = "把现在的数值写进 game/rules/balance.gd（只改值，注释留着）。之后记得同步 docs/design/current-rules.md"
+	_write_back.text = "写回 balance.cfg"
+	_write_back.tooltip_text = "把现在的数值写进 game/balance.cfg（只改值，注释留着）。之后跑 uv run game/tools/update_docs.py 更新文档里的数字"
 	_write_back.visible = BalancePresets.can_write_back()
 	_write_back.pressed.connect(write_back)
 	file_row.add_child(_write_back)
@@ -495,13 +493,13 @@ func apply_preset() -> void:
 	_apply_values(p["values"], "方案「%s」" % path.get_file().get_basename(), p["warnings"])
 
 
-## 把数值换成 balance.gd 里的、再盖上 values。只改和现在不一样的，每一项都记进对局记录。
+## 把数值换成 balance.cfg 里的、再盖上 values。只改和现在不一样的，每一项都记进对局记录。
 func _apply_values(values: Dictionary, what: String, warnings: Array = []) -> void:
 	if replaying():
 		_note = "回放中不能改数值，先按「从这里接着玩」"
 		refresh_panel()
 		return
-	var now := Replay.balance_values()
+	var now := Balance.values()
 	var changed: Array[String] = []
 	var errors: Array[String] = []
 	for name in _balance_defaults:
@@ -520,7 +518,7 @@ func _apply_values(values: Dictionary, what: String, warnings: Array = []) -> vo
 	main.refresh()
 
 
-## 把现在和 balance.gd 不一样的数值存成方案。
+## 把现在和 balance.cfg 不一样的数值存成方案。
 func save_preset() -> void:
 	var name := _preset_name.text.strip_edges()
 	if name == "":
@@ -528,11 +526,11 @@ func save_preset() -> void:
 		refresh_panel()
 		return
 	var path := BalancePresets.path_for(name, _preset_shared.button_pressed)
-	var values := Replay.balance_values()
+	var values := Balance.values()
 	var err := BalancePresets.save(path, values, "")
 	if err == OK:
 		var count: int = BalancePresets.read(path)["values"].size()
-		_note = "已存方案「%s」（%d 个数值和 balance.gd 不一样）：%s" % [name, count, ProjectSettings.globalize_path(path)]
+		_note = "已存方案「%s」（%d 个数值和 balance.cfg 不一样）：%s" % [name, count, ProjectSettings.globalize_path(path)]
 		if path.begins_with("res://"):
 			_note += "\n记得把这个文件提交进 git"
 	else:
@@ -569,16 +567,16 @@ func _delete_preset() -> void:
 	refresh_panel()
 
 
-## 把现在的数值写进 balance.gd（只在编辑器版里能用）。之后「默认」就是新写进去的值。
+## 把现在的数值写进 balance.cfg（只在编辑器版里能用）。之后「默认」就是新写进去的值。
 func write_back() -> void:
-	var r := BalancePresets.write_back(Replay.balance_values())
+	var r := BalancePresets.write_back(Balance.values())
 	if r["error"] != "":
 		_note = "没写回：" + r["error"]
 	elif r["changed"].is_empty():
-		_note = "现在的数值和 balance.gd 一样，不用写"
+		_note = "现在的数值和 balance.cfg 一样，不用写"
 	else:
-		_balance_defaults = BalancePresets.file_values()
-		_note = "已写回 balance.gd：%s\n记得同步 docs/design/current-rules.md，看看这些数值旁边的注释还对不对" \
+		_balance_defaults = Balance.file_values()
+		_note = "已写回 balance.cfg：%s\n记得跑 uv run game/tools/update_docs.py 更新文档里的数字，看看这些数值旁边的注释还对不对" \
 				% "，".join(r["changed"])
 	refresh_panel()
 
@@ -613,7 +611,7 @@ func _build_civ_page() -> VBoxContainer:
 	var probe := Civ.new("", false, Vector3i.ZERO)
 	for p in probe.get_property_list():
 		var field: String = p["name"]
-		if not (p["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE) or CIV_FIELD_SKIP.has(field):
+		if not (p["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE) or GameState.DEV_SET_LOCKED.has(field):
 			continue
 		if not p["type"] in [TYPE_INT, TYPE_FLOAT, TYPE_BOOL]:
 			continue
@@ -941,7 +939,7 @@ func _on_balance_edit(name: String, value: Variant) -> void:
 func _filter_balance() -> void:
 	var words := _balance_filter.text.strip_edges().to_lower()
 	var only_changed: bool = (_balance_filter.get_meta("only_changed") as CheckBox).button_pressed
-	var now := Replay.balance_values()
+	var now := Balance.values()
 	for name in _balance_rows:
 		var row := _balance_rows[name]
 		var hit: bool = words == "" or name.to_lower().contains(words) or String(row["doc"]).to_lower().contains(words)
@@ -952,7 +950,7 @@ func _filter_balance() -> void:
 
 
 func _refresh_balance() -> void:
-	var now := Replay.balance_values()
+	var now := Balance.values()
 	for name in _balance_rows:
 		var row := _balance_rows[name]
 		_set_editor(row["editor"], now[name])
@@ -1008,9 +1006,9 @@ func _set_editor(editor: Control, value: Variant) -> void:
 		(editor as LineEdit).text = str(value)
 
 
-## balance.gd 里每个数值的说明（取自 balance_index.gd）。
+## 每个数值的说明（取自 balance.cfg 的注释）。
 func _balance_docs() -> Dictionary:
-	return BalanceIndex.DOCS
+	return Balance.docs()
 
 
 # ---------- 对局记录 ----------
@@ -1058,20 +1056,17 @@ func load_replay(path: String) -> void:
 
 
 ## 新开一局。watch 为 true 时所有文明都由 AI 控制。
-## 数值换回 balance.gd 里的；设了「新开一局时用的方案」时再换成那个方案。
+## 数值换回 balance.cfg 里的；设了「新开一局时用的方案」时再换成那个方案。
 func new_game(seed_value: int, watch: bool) -> void:
 	pause()
 	replay = null
 	desync_step = -1
 	view_idx = 1 if watch else 0
-	BalancePresets.apply(_balance_defaults)
+	Balance.apply(_balance_defaults)
 	var preset := default_preset()
 	if preset != "":
-		BalancePresets.apply(BalancePresets.read(preset).get("values", {}))
-	var s := GameState.new_game(seed_value)
-	if watch:
-		s.spectator = true
-		s.human().is_ai = true
+		Balance.apply(BalancePresets.read(preset).get("values", {}))
+	var s := GameState.new_game(seed_value, Balance.AI_COUNT, watch)
 	s.add_log("新的一局，种子 %d%s%s" % [seed_value, "（观战）" if watch else "",
 			"，数值方案「%s」" % preset.get_file().get_basename() if preset != "" else ""])
 	_seed.set_value_no_signal(seed_value)

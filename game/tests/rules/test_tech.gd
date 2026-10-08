@@ -22,6 +22,20 @@ func test_tech_tiers_and_prerequisites() -> void:
 	check(s.research(me, "starship")["error"] != "", "已经有的不能再升")
 
 
+## 规则：科技树
+func test_research_money_errors() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	_open_tiers(me, 1)
+	me.energy = Tech.cost("starship")[0] - 3
+	check_eq(s.research_error(me, "starship"), "能量不足（还差 3）", "钱不够时说差多少，和别的行动一样")
+	check_eq(s.research_block_error(me, "starship"), "", "只差钱时，除了钱以外没有别的原因")
+	me.actions_left = 0
+	me.energy = 1000
+	check_eq(s.research_error(me, "starship"), "", "升级科技不看行动点")
+	check(s.research_block_error(me, "grain") != "", "等级没开放这种原因照样报出来")
+
+
 ## E8：III 级要 II 级开放以后、能量收入达到门槛，再比 II 级晚 TIER_GAP 回合。
 ## 规则：科技树，E8
 func test_tier3_needs_tier2_and_income() -> void:

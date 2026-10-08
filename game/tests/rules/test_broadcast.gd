@@ -46,8 +46,6 @@ func test_broadcast_reveals_owner_and_needs_source() -> void:
 
 ## 规则：广播和隐藏文明
 func test_hidden_civ_strikes_after_hearing() -> void:
-	var old_chance := Balance.HIDDEN_STRIKE_CHANCE
-	var old_foil := Balance.HIDDEN_FOIL_CHANCE
 	Balance.HIDDEN_STRIKE_CHANCE = 1.0
 	Balance.HIDDEN_FOIL_CHANCE = 0.0
 	var s := _two_civs(Vector3i(5, 0, 0))
@@ -59,8 +57,6 @@ func test_hidden_civ_strikes_after_hearing() -> void:
 	check(s.hidden_listen.is_empty() and s.hidden_ships.is_empty() and s.human().alive, "广播还没传到隐藏文明")
 	_turns(s, 10)
 	check(not s.human().alive, "隐藏文明听到后发光粒，从星图外飞过来")
-	Balance.HIDDEN_STRIKE_CHANCE = old_chance
-	Balance.HIDDEN_FOIL_CHANCE = old_foil
 
 
 ## 没钱时广播失败：失败的操作不进对局记录，所以也不能动随机数，不然回放会走偏。
@@ -78,8 +74,6 @@ func test_failed_broadcast_keeps_rng() -> void:
 ## 离星图好几格的隐藏文明：光粒第一回合还在星图外，不能当成「飞出星图」删掉。
 ## 规则：广播和隐藏文明
 func test_hidden_grain_from_far_outside() -> void:
-	var old_chance := Balance.HIDDEN_STRIKE_CHANCE
-	var old_foil := Balance.HIDDEN_FOIL_CHANCE
 	Balance.HIDDEN_STRIKE_CHANCE = 1.0
 	Balance.HIDDEN_FOIL_CHANCE = 0.0
 	var s := _two_civs(Vector3i(5, 0, 0))
@@ -89,5 +83,3 @@ func test_hidden_grain_from_far_outside() -> void:
 	s.broadcast(ai, Vector3i.ZERO)
 	_turns(s, 20)
 	check(not s.human().alive, "离星图 3 格的隐藏文明发的光粒也能飞到")
-	Balance.HIDDEN_STRIKE_CHANCE = old_chance
-	Balance.HIDDEN_FOIL_CHANCE = old_foil

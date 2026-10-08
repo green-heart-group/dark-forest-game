@@ -4,7 +4,7 @@
 # ///
 """更新文档里由代码决定的部分，免得手抄的数字和代码对不上：
 
-1. 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 balance.gd 里写的值。
+1. 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 balance.cfg 里写的值。
    原来写成百分数的按百分数写（0.55 写成 55%），原来带小数点的保留小数点（2.0 还写 2.0）。
 2. `<!-- [[[cog ... ]]] -->` 和 `<!-- [[[end]]] -->` 之间的整块内容，用 cog 重新生成（比如科技价格表）。
    cog 的代码里可以 `import update_docs`，用这里的函数取数据。
@@ -12,7 +12,7 @@
     uv run game/tools/update_docs.py           # 改文件
     uv run game/tools/update_docs.py --check   # 只检查，有要改的就退出码 1
 
-数值取自 balance_index.gd（从 balance.gd 生成的数值目录），科技取自 tech.gd。
+数值取自 balance.cfg，科技取自 tech.gd。
 test.py 跑全部测试、全部通过时也会调用这里，GitHub 上跑完测试以后 docs/ 有变化就算失败。
 """
 
@@ -43,8 +43,10 @@ def _gd_dict(path: Path, const: str) -> dict:
 
 
 def balance() -> dict:
-    """balance.gd 里写的每个数值（取自数值目录 balance_index.gd）。"""
-    return _gd_dict(GAME / "rules" / "balance_index.gd", "DEFAULTS")
+    """balance.cfg 里写的每个数值（用 sync_balance.py 读）。"""
+    from sync_balance import read_cfg  # 同一目录下的 sync_balance.py
+
+    return {name: ast.literal_eval(value) for name, value in read_cfg() if name != "---"}
 
 
 def techs() -> dict:
@@ -60,7 +62,7 @@ def price(cost: list) -> str:
 
 def tech_table(conditions: list[str]) -> str:
     """原型现在的规则 §4 的科技表：每一级一行，列出科技、价格和前置。
-    conditions 是每一级的条件（文档里的说法），里面可以写 {数值名}，填 balance.gd 里的值。"""
+    conditions 是每一级的条件（文档里的说法），里面可以写 {数值名}，填 balance.cfg 里的值。"""
     all_techs = techs()
     values = balance()
     costs = values["TECH_COST"]
@@ -100,7 +102,7 @@ def fix_numbers(text: str, values: dict) -> tuple[str, list[str]]:
         line_start = text.rfind("\n", 0, m.start()) + 1
         n = NUMBER.search(text, line_start, m.start())
         if name not in values:
-            problems.append(f"{label} 不是 balance.gd 里的数值")
+            problems.append(f"{label} 不是 balance.cfg 里的数值")
             continue
         if n is None:
             problems.append(f"{label} 前面没有数字（数字和标记之间最多隔几个字的单位）")

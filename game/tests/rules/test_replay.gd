@@ -37,11 +37,9 @@ func _player_game(seed_value: int, n: int) -> GameState:
 
 
 func test_same_seed_same_game() -> void:
-	var a := GameState.new_game(11)
-	var b := GameState.new_game(11)
+	var a := GameState.new_game(11, Balance.AI_COUNT, true)
+	var b := GameState.new_game(11, Balance.AI_COUNT, true)
 	for s in [a, b]:
-		s.spectator = true
-		s.human().is_ai = true
 		for i in 180:
 			s.end_turn()
 	check(a.checksums.size() == b.checksums.size() and a.checksums == b.checksums, "同一个种子的两局 AI 对局每回合都一样")
@@ -118,7 +116,7 @@ func test_replay_truncate_branches() -> void:
 
 
 func test_dev_changes_are_replayed() -> void:
-	var before := Replay.balance_values()
+	var before := Balance.values()
 	var s := GameState.new_game(8)
 	for i in 5:
 		_scripted_player_turn(s)
@@ -139,13 +137,14 @@ func test_dev_changes_are_replayed() -> void:
 	check(r.desync_step == -1 and again.checksum() == s.checksum(), "改过数值的对局也能原样重算")
 	r.play_to(3)
 	check(Balance.ENERGY_PER_STAR == before["ENERGY_PER_STAR"], "退回到改数值以前，数值也回到当时的")
-	_restore_balance(before)
 
 
 func test_dev_set_rejects_bad_input() -> void:
 	var s := _two_civs(Vector3i(5, 5, 5))
 	var me := s.human()
 	check(s.dev_set(me, "is_ai", true)["error"] != "" and not me.is_ai, "不能用它改由谁控制")
+	check(s.dev_set(me, "alive", false)["error"] != "" and me.alive, "不能用它让文明灭亡")
+	check(s.dev_set(me, "home", Vector3i(1, 1, 1))["error"] != "", "不能用它搬母星系")
 	check(s.dev_set(me, "no_such", 1)["error"] != "", "没有的属性改不了")
 	check(s.dev_set(me, "energy", "lots")["error"] != "", "类型不对改不了")
 	check(s.dev_balance("NO_SUCH", 1)["error"] != "", "没有的数值改不了")
@@ -153,9 +152,7 @@ func test_dev_set_rejects_bad_input() -> void:
 
 
 func test_ai_writes_notes() -> void:
-	var s := GameState.new_game(2)
-	s.spectator = true
-	s.human().is_ai = true
+	var s := GameState.new_game(2, Balance.AI_COUNT, true)
 	for i in 15:
 		s.end_turn()
 	var notes := s.history.filter(func(h): return h["name"] == "note")

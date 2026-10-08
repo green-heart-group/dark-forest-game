@@ -25,28 +25,34 @@
 | `tech.gd` | 科技树：编号、名字、等级、前置 |
 | `geometry.gd` | 沿方向飞行、视野圆锥用到的几何计算 |
 | `ai.gd` | AI 每回合怎么行动（顺序见 [原型现在的规则 §11](../design/current-rules.md#11-ai-怎么行动)） |
-| `balance.gd` | 所有数值 |
-| `balance_presets.gd` | 数值方案：存、读、写回 `balance.gd`；生成数值目录 |
-| `balance_index.gd` | 数值目录（自动生成，不要手改）：有哪些数值、每个的说明、`balance.gd` 里写的值 |
+| `balance.gd` | 所有数值的名字和类型（按 `game/balance.cfg` 生成）；读 `balance.cfg`，按名字读改数值、检查类型 |
+| `balance_presets.gd` | 数值方案：存、读；把数值写回 `balance.cfg` |
 | `replay.gd` | 对局记录 |
 
 要守的规矩：
 
-- **数值**都是 `Balance`（`balance.gd`）里的 `static var`，平衡模拟和调试面板可以临时改。
-  调试面板的「写回 balance.gd」会改这个文件，它认的格式是：每行一个 `static var 名字 := 值  # 注释`，
-  多行的字典以单独一行的 `}` 结尾。改这个文件时别破坏这个样子。
-  每个数值的说明取自同一行后面的注释；没有的话，取上面那段注释（连着几行合成一段），
-  这段注释算作下面连着的一组数值共同的说明，直到空行为止。所以只适合组里某一个数值的说明，要写在那一行后面。
-  数值方案只存和 `balance.gd` 不一样的值。
-  Godot 在运行时列不出 `static var`，所以对局记录、调试面板的数值页、数值方案都从**数值目录** `balance_index.gd` 里取名字、说明和原来的值，
-  运行时不读 `balance.gd` 的原文。**加、删数值，改注释或值以后**，运行
-  `godot_console --headless --path game --script res://tools/make_balance_index.gd` 重新生成目录（调试面板写回时会自动生成）；
-  忘了的话规则测试会失败，GitHub 发布前也跑规则测试，所以过时的目录发布不出去。
+- **数值**的值和说明写在 `game/balance.cfg`（Godot 的 ConfigFile 文本格式），调数值只改这个文件，不用改代码。
+  代码里用的是 `Balance`（`balance.gd`）里的 `static var`：那里只写名字和类型，脚本加载时从 `balance.cfg` 读值。
+  平衡模拟和调试面板可以临时改这些 `static var`。
+  - 加、删数值只改 `balance.cfg`：`balance.gd` 里的声明由 `game/tools/sync_balance.py` 按它生成，
+    `test.py` 每次跑测试前先生成一遍（GitHub 上生成以后 `balance.gd` 变了就算失败）。类型按值猜（整数、小数、数组、字典）；
+    要更具体的类型（比如 `Array[int]`）就直接改 `balance.gd` 里那一行，重新生成时会留着。
+  - `balance.cfg` 的格式：每行 `名字 = 值  ; 注释`，多行的字典以单独一行的 `}` 结尾。
+    调试面板的「写回 balance.cfg」只换 `=` 后面的值，改这个文件时别破坏这个样子。
+  - 每个数值的说明取自同一行后面的注释；没有的话，取上面那段注释（连着几行合成一段），
+    这段注释算作下面连着的一组数值共同的说明，直到空行为止。所以只适合组里某一个数值的说明，要写在那一行后面。
+  - Godot 在运行时列不出 `static var`，所以名字、说明和文件里写的值都从 `balance.cfg` 取。
+    导出的游戏要带上这个文件（导出设置的「要导出的非资源文件」里写了它）。
+  - **按名字读改数值只走 `Balance` 的函数**：`names()`、`docs()`、`values()`（现在的值）、`file_values()`（文件里写的值）、
+    `set_value()` / `apply()`（改值，类型不对时不改并说明原因）。对局记录、调试面板、数值方案、平衡模拟都用它们，
+    不要自己 `get` / `set` 脚本，类型检查只写在这一处。Python 工具读 `balance.cfg` 都用 `sync_balance.py` 的 `read_cfg()`。
+  - 数值方案只存和 `balance.cfg` 不一样的值。
 - **行动要花多少、为什么不能做，只写一次**，写在 `GameState` 里：
-  - 花费：`action_cost(规则函数名)`、`dispatch_cost(单位)`、`upgrade_cost(种类)`；
+  - 花费：`action_cost(规则函数名)`、`dispatch_cost(单位)`、`upgrade_cost(种类)`、`build_cost(文明, 种类)`（战舰带的武器也算上），
+    科技是 `Tech.cost()`，自身降维是 `Civ.reduce_cost()`（按带上的单位数算）；
   - 不能做的原因：每个行动一个 `xxx_error()`，能做时返回空字符串。行动函数自己先调用它，画面也调用它来显示按钮能不能按、为什么。
   - 目标还没选时传 `GameState.ANY_TARGET`，只检查和目标无关的条件（钱、行动点、科技）。
-  - AI 也用这些函数。`ai.gd` 会比较「能量不足」「矿石不足」这两句原话，改 `research_error` 的提示时要一起改。
+  - AI 也用这些函数，不自己写花费和条件。AI 要挑「钱不够、攒够了就能升」的科技时用 `research_block_error()`（除了钱以外的原因）。
 - **对局记录**靠「同样的种子 + 同样的玩家操作 = 同样的对局」，规则代码要守的几条
   （随机数只用 `GameState.rng`、操作成功时 `_record()` 等）见 [调试模式：写规则代码时要注意](debug-tools.md#写规则代码时要注意)。
 - **提速**不能改变规则的结果。先用平衡模拟的 `PROFILE=1` 找出慢在哪；改完以后，同样的 `RUNS` 跑出来的统计和最后一行「所有对局的校验值」都要和改之前一模一样。
@@ -54,7 +60,8 @@
   （星系格子按位置分好、光速几乎为 0 的格子、星系快照），看完就清空；光走的时间不会比直线距离短，所以直线距离已经太远的不细算（`_light_within`）；
   `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
 - **空间阶段**由 `GameState.dimension` 和 `StarMap.extent/origin` 管理，不能再用固定 `StarMap.SIZE`
-  检查对局中的坐标。几何扫描必须传 `map.bounds()`；`SIZE` 只用于生成 9³ 的初始地图。
+  检查对局中的坐标。几何扫描（`Geometry` 的函数、`Ship.outside()`）都要传 `map.bounds()`，这个参数没有默认值，免得忘了传时悄悄按 9³ 算；
+  `SIZE` 只用于生成 9³ 的初始地图。
 - **降维换坐标**只在 `DimensionSpace.commit()` 里做，一次换掉所有存坐标的地方。展开的过程中规则里的坐标不动，
   画面从 `frame()` 读展开到一半的样子；换完以后用 `last_mapping` 查一格换之前在哪。画面算出来的位置不能写回规则。
 - **对局记录**现在是第 2 版，10×10×10 星图时的第 1 版读的时候直接拒绝，免得悄悄按新规则重算成另一局。
@@ -86,6 +93,8 @@
 - **画面不能直接改规则数据**，只能调用 `GameState` 的函数，不然对局记录重算不出来
   （调试改数值怎么走，见 [调试模式：写规则代码时要注意](debug-tools.md#写规则代码时要注意)）。
 - **能不能做、要花多少，问规则**（上一节的 `xxx_error()`、`action_cost()`），不在画面里另写判断。
+  画面要用的其他规则上的答案也问规则：单位接下来飞到哪（`predict_path()`）、箔压到哪一层（`foil_plane_for()`、`line_y_for()`）、
+  哪些格子在黑域里（`in_black_domain()`）、哪些单位能派出或转向（`Ship.AIMED`、`Ship.TURNABLE`、`Ship.waiting()`）。
 - **按「正在看的文明」画**：用 `main.viewed()`，不要写死 `state.human()`。调试时可以换成别的文明的视角，
   以后多人对战也靠它。
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
@@ -126,7 +135,7 @@
 
 | 文件 | 做什么 |
 | --- | --- |
-| `game/tools/test.py` | 一条命令跑全部测试：先导入，再同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
+| `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
 | `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
 | `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |
 | `game/tests/rules/test_*.gd` | 规则测试，按规则分组（星图、移动、科技、交战、黑域、降维、AI、回放……），一组一个文件 |
@@ -135,8 +144,8 @@
 | `game/tests/run_unfolding_tests.gd` | 展开演示的测试：格子一个不少、相邻的列展开时不重叠、控件和关键画面。`test.py` 也跑它 |
 | `game/tests/test_log.gd` | 各套测试共用的记结果的部分：数测试和检查、失败时写出是哪个测试、最后的汇总；命令行参数 `only=`、`tests=`、`report=`、`stop_on_fail`（说明在文件开头） |
 | `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计对局怎么发展 |
-| `game/tools/make_balance_index.gd` | 从 `balance.gd` 重新生成数值目录 `balance_index.gd`（见上面「数值」） |
-| `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.gd` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
+| `game/tools/sync_balance.py` | 按 `game/balance.cfg` 重新生成 `balance.gd` 里的数值声明；`--check` 只检查（见上面「数值」） |
+| `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.cfg` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
 | `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
 
@@ -154,7 +163,9 @@
 - **一个测试只测一件事**，名字写清楚测的是什么（`test_torpedo_needs_two_hits`）。检查的说明写「应该怎样」，失败时一看就懂。
   比较两个值时用 `check_eq(实际, 期望, 说明)`，失败时会写出两边的值。
 - **结果每次都一样**：用固定的种子（`GameState.new_game(5)`、`StarMap.generate(42)`），不靠运气。
-  测试里改了 `Balance` 的数值，测完要改回来（见 `_restore_balance`）。
+  规则测试里可以直接改 `Balance` 的数值，每个测试跑完运行器会全部换回来（`run_tests.gd`）；画面测试没有这一步，改了要自己改回来。
+- **代码出错也算失败**：测试里的代码出错时，Godot 只打印一行「SCRIPT ERROR」就跳出这个测试，前面的检查照样算通过。
+  `test.py` 会在输出里找这样的行，有就算失败，并把出错的地方写出来。
 - **规则测试互不依赖**：`test.py` 把规则测试分给几个进程，变异测试还会按快慢换顺序，所以一个测试不能指望别的测试先跑过、
   留下什么局面或文件。要写文件时用测试专用的名字（比如 `_test.cfg`），测完删掉。画面测试不受这条限制，它总是按顺序在一个进程里跑。
 - **测试局面自己摆**：用 `rule_suite.gd` 里的 `_two_civs`、`_set_star`、`_ship` 摆出只有要测的东西的小局面，比开一整局更快、更好懂。
@@ -174,8 +185,8 @@
   - `docs/` 下每个目录都有 `README.md`，列出目录里的每个文件和下一级目录。
 - **文档里由代码决定的部分自动更新**，不手改（`game/tools/update_docs.py`，只管它的 `FILES` 里列出的文件，
   现在只有原型现在的规则；开发日志这类历史记录写着当时的数字，不跟着改）：
-  - 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 `balance.gd` 里写的值，
-    写法照原来的（55% 还写百分数，2.0 还带小数点）。文档里新写一个来自 `balance.gd` 的数字，就在它后面加上标记；
+  - 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 `balance.cfg` 里写的值，
+    写法照原来的（55% 还写百分数，2.0 还带小数点）。文档里新写一个来自 `balance.cfg` 的数字，就在它后面加上标记；
     标记和数字之间最多隔几个字的单位（E、格、回合）。
   - 整块的表格用 cog 生成：`<!-- [[[cog ... ]]] -->` 和 `<!-- [[[end]]] -->` 之间的内容每次重新生成，
     比如 [原型现在的规则 §4](../design/current-rules.md#4-科技树) 的科技表取自 `tech.gd` 和 `TECH_COST`。要改表的样子，改 `update_docs.py` 里的函数。

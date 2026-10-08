@@ -17,12 +17,13 @@
 
 ## 改代码时一起更新的文档
 
-**自动的，不用管**：`uv run game/tools/test.py` 全部通过时会更新下面这些，把它改的文档一起提交就行
-（GitHub 上跑完测试，`docs/` 有变化就算失败）：
+**自动的，不用管**：`uv run game/tools/test.py` 会更新下面这些（文档要全部通过才更新），把它改的文件一起提交就行
+（GitHub 上跑完测试，`docs/` 或 `balance.gd` 有变化就算失败）：
 
+- `game/rules/balance.gd` 里的数值声明（每次跑测试前按 `game/balance.cfg` 生成，`game/tools/sync_balance.py`）。
 - `docs/status.md` 的测试个数。
 - `docs/design/current-rules.md` 里标了数值名的数字、§4 科技表（`game/tools/update_docs.py`）。
-  新写一个来自 `balance.gd` 的数字时，在后面加上标记 `<!-- 数值名 -->`（见 `docs/guides/code.md`「写测试的规矩」）。
+  新写一个来自 `balance.cfg` 的数字时，在后面加上标记 `<!-- 数值名 -->`（见 `docs/guides/code.md`「写测试的规矩」）。
 
 **会被测试查出来的**：忘了会让规则测试失败（`game/tests/rules/test_docs.gd`），按提示改：
 

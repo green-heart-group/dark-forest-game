@@ -1,4 +1,4 @@
-# 跑测试：开 PR、往 PR 里推新提交、合并进 master 时，跑规则测试和画面测试。
+# 跑测试：开 PR、往 PR 里推新提交、合并进 master 时，跑规则测试、画面测试和展开演示测试。
 # master 的保护规则要求这里的 tests 通过才能合并（见 docs/decisions/0003-github-flow.md）。
 # 所以不按改了哪些文件过滤：只改文档的 PR 也要跑，不然一直等不到结果、合并不了。
 name: 测试
@@ -30,10 +30,11 @@ jobs:
       - name: 导入并跑测试
         run: uv run game/tools/test.py
 
-      # 全部通过时 test.py 会更新文档里由代码决定的部分（测试个数、数值、科技表）；这里变了，说明提交的文档是旧的
-      - name: 检查文档里由代码决定的部分是不是最新的
+      # test.py 会按 balance.cfg 生成 balance.gd 的数值声明，全部通过时还会更新文档里由代码决定的部分（测试个数、数值、科技表）；
+      # 这些变了，说明提交的是旧的
+      - name: 检查文档和 balance.gd 里生成的部分是不是最新的
         run: |
-          git diff --exit-code -- docs/ || {
-            echo "::error::文档过时了：本地跑 uv run game/tools/test.py（只改了数值时跑 uv run game/tools/update_docs.py），把改动的文档一起提交"
+          git diff --exit-code -- docs/ game/rules/balance.gd || {
+            echo "::error::文档或 balance.gd 过时了：本地跑 uv run game/tools/test.py（只改了数值时跑 uv run game/tools/sync_balance.py 和 uv run game/tools/update_docs.py），把改动的文件一起提交"
             exit 1
           }

@@ -92,6 +92,24 @@ func test_probe_slow_start_until_out_of_vision() -> void:
 	check(not p.slow_start and p.speed > Balance.SLOW_START_SPEED, "飞出视野后开始加速")
 
 
+## 画航线用的预测和真正的移动用同一套算法（F4.3）。
+## 规则：移动
+func test_predicted_path_matches_movement() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	_give(me, ["interstellar_probe"])
+	var p := s.build(me, "probe")["ship"] as Ship
+	s.dispatch(me, p.id, Vector3(1, 0.3, 0), true)
+	var path := s.predict_path(me, p, 20)
+	var slow := p.slow_start
+	check(path.size() > 1, "在飞的单位有预测的航线")
+	for i in range(1, path.size()):
+		s._move_ship(me, p)
+		check(p.pos.distance_to(path[i]) < 1e-4, "第 %d 回合的位置和预测的一样（慢速出发、加速都算上）" % i)
+	check(slow and not p.slow_start, "这一段里经过了慢速出发和飞出视野两种情况")
+	check_eq(s.predict_path(me, _ship(s, me, Ship.WARSHIP, Vector3(3, 0, 0), Vector3.ZERO), 6).size(), 1, "停着的单位只有现在的位置")
+
+
 ## 规则：移动
 func test_warp_ship_flies_at_light_speed_outside_vision() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))

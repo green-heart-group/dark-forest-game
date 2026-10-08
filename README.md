@@ -112,11 +112,12 @@ godot --path game --editor
 
 ```text
 game/
-├── rules/    规则代码：不依赖任何画面节点，所有数值在 balance.gd
+├── balance.cfg  所有数值（调数值只改这个文件）
+├── rules/    规则代码：不依赖任何画面节点
 ├── view/     画面代码：只读取规则数据
 ├── tests/    规则测试（rules/ 里按规则分文件）和画面测试
-├── tools/    跑测试、变异测试、平衡模拟、生成数值目录、做网页字体、录 README 的动图
-└── balance_presets/  共享的数值方案（和 balance.gd 不一样的一组数值）
+├── tools/    跑测试、变异测试、平衡模拟、更新文档里的数字、做网页字体、录 README 的动图
+└── balance_presets/  共享的数值方案（和 balance.cfg 不一样的一组数值）
 docs/         设计、要确定的问题、现状、路线图、开发日志、提议和重要决定（入口 docs/README.md）
 ```
 
@@ -146,7 +147,7 @@ godot_console --headless --path game --script res://tools/simulate.gd
 # 找哪里慢：最后列出回合里每一步一共花了多少秒
 godot_console --headless --path game --script res://tools/simulate.gd -- PROFILE=1 RUNS=10
 
-# 临时覆盖 balance.gd 里的数值（整数或小数；数组、字典要用数值方案）
+# 临时覆盖 balance.cfg 里的数值（整数或小数；数组、字典要用数值方案）
 godot_console --headless --path game --script res://tools/simulate.gd -- TIER3_ENERGY=40 RUNS=100
 
 # 用一个数值方案（game/balance_presets/ 里的，或调试面板里存的自己的方案）

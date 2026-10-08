@@ -57,9 +57,7 @@ func _run() -> void:
 
 ## 一局全由 AI 打的观战局，先自己打 turns 回合。
 func spectator(turns: int) -> GameState:
-	var s := GameState.new_game(SEED)
-	s.spectator = true
-	s.human().is_ai = true
+	var s := GameState.new_game(SEED, Balance.AI_COUNT, true)
 	for i in turns:
 		s.end_turn()
 	view.set_state(s)
