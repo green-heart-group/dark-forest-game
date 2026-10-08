@@ -1,6 +1,6 @@
 # 降维展开动画演示
 
-状态：实现与验证完成，待返回本地功能分支并清理临时 worktree。独立演示，不修改正式对局的规则、入口或存档。
+状态：已在本地 `codex/dimension-unfolding` 分支完成并提交，未推送。独立演示，不修改正式对局的规则、入口或存档。
 
 ## 目标
 
@@ -15,7 +15,9 @@
 - [x] Godot 演示场景：单列 / 全图、播放 / 暂停 / 重播、进度拖动、锚点与视角。
 - [x] 映射、边界、布局和控制的终端测试；现有规则与画面回归测试。
 - [x] 实际运行并检查关键帧和操作。
-- [ ] 提交实现，合回本地功能分支，移除临时 worktree。
+- [x] 提交实现，干净快进到本地功能分支。
+- [ ] 移除临时 worktree：Codex 归档工具返回「This worktree is protected by a pinned task or workspace.」，
+  因此保留 `/Users/hrwu/.codex/worktrees/dimension-unfolding/dark-forest-game`；实现已完整保存在主工作目录的功能分支。
 
 ## 完成标准
 
