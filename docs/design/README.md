@@ -1,5 +1,7 @@
 # 设计说明
 
+- [r4-current-rules.md](r4-current-rules.md)：默认数值候选入口的实际规则、时间语义和当前范围。
+- [r4-parameters.md](r4-parameters.md)：按 `balance.cfg` 自动生成的 B/C 科技、单位、模块成本与共用物理参数。
 - [game-design.md](game-design.md)：游戏的目标设计，大部分已经做进原型。和原型不一样的地方以它为准。
 - [decision-log.md](decision-log.md)：决定记录：每个定下的规则都有编号，查得到是谁、什么时候定的，讨论过程在哪里。只往后加。
 - [current-rules.md](current-rules.md)：原型现在实际的规则和数值：星图生成、收入、移动和视野、科技树、

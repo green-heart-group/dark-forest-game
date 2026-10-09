@@ -12,6 +12,10 @@
 
 ## 规则代码（`game/rules/`）
 
+默认入口的规则集中在 `rules/r4/`：`state.gd` 统一行动校验与状态，`ledger.gd` 管预付和维护，`space.gd` 管固定格子与场，`simulation.gd` 推进时间，`intel.gd` 和 `commands.gd` 处理有限传播，`combat.gd` 批量结算命中，`ai.gd` 使用同一行动接口。`config.gd` 只从 Balance 取数值，从 `catalog.json` 取节点身份；`replay.gd` 校验配置并保存完整状态。旧规则文件和模拟器服务于兼容入口。
+
+新界面为 `view/r4_main.tscn`、`r4_main.gd`、`r4_map.gd`，只向规则提交命令。`tools/r4_simulate.gd` 输出流式事件、指标、检查点和状态哈希，`r4_diagnostics.gd` 只生成观测提示，不参与胜负。`tools/r4_test.py` 顺序执行独立回归；`tools/r4_parameters.py` 按统一的 `read_cfg()` 生成[参数表](../design/r4-parameters.md)。新增 R4 测试须加入该运行器的 SUITES；CI 同时保留兼容回归。完整状态不与兼容版 `.forest` 混用。
+
 都继承 `RefCounted`（不挂在场景里的普通对象），不依赖任何画面节点。每个文件开头有一段说明。
 
 | 文件 | 管什么 |
@@ -72,7 +76,7 @@
 
 ## 画面代码（`game/view/`）
 
-入口是 `main.tscn`，上面挂着 `main.gd`。
+默认入口是 `r4_main.tscn`；下表描述兼容入口 `main.tscn`，上面挂着 `main.gd`。
 
 | 文件 | 管什么 |
 | --- | --- |

@@ -13,7 +13,7 @@
 
 [**在浏览器里玩**](https://green-heart-group.github.io/dark-forest-game/) ·
 [下载 Windows 版](https://github.com/green-heart-group/dark-forest-game/releases) ·
-[完整规则](docs/design/current-rules.md)
+[数值候选规则](docs/design/r4-current-rules.md)
 
 <table>
   <tr>
@@ -44,7 +44,35 @@
 
 </div>
 
+## 数值候选：运行与检查
+
+默认入口使用新的数值候选规则和独立实验界面。它包含经济、科技、时间、降维与自然终局的规则迁移；C 是待验证候选参数，B 是初值参数。运行需要已有的 Godot 4.7.2 普通版。下面的截图、简介与详细操作描述对应仍保留的兼容入口，在线版本不会随本地选择改变。
+
+```bash
+# 从仓库根目录导入，再启动默认候选 C
+godot_console --headless --path game --import
+godot --path game -- SEED=0 PROFILE=C
+
+# 同种子选择初值 B
+godot --path game -- SEED=0 PROFILE=B
+
+# 新引擎回归（按顺序运行，不安装依赖；也可用 GODOT 环境变量指定已有程序）
+python game/tools/r4_test.py --no-import
+python game/tools/r4_parameters.py --check
+python game/tools/sync_balance.py --check
+
+# 固定种子、相同策略和正常观察上限的 B/C 对照；两个输出目录必须是新目录
+godot_console --headless --path game --script res://tools/r4_simulate.gd -- PROFILE=B FIRST=0 RUNS=1 TURNS=400 STRATEGY=balanced OUT=../build/r4-B
+godot_console --headless --path game --script res://tools/r4_simulate.gd -- PROFILE=C FIRST=0 RUNS=1 TURNS=400 STRATEGY=balanced OUT=../build/r4-C
+```
+
+界面顶部提供存档、读档与同种子重开；右侧先选执行来源，再选科技、船坞、行动或迁维队列。空格结束回合，1～4 切换页，Q/E 切换来源，F12 截图；输入框获得焦点时这些游戏快捷键暂停。现实思考时间没有限制，只有明确结束回合才推进游戏。
+
+规则见[数值候选规则](docs/design/r4-current-rules.md)，完整 B/C 成本和物理值见[参数表](docs/design/r4-parameters.md)，通过与未验证范围见[现状](docs/status.md)。模拟产生事件、逐回合指标、完整检查点、操作记录与状态哈希。400 回合未结束是右截尾且未达到时长目标，不是败局；没有资源评分强制胜负。
+
 ## 简介
+
+本节至「操作」描述兼容入口 `res://view/main.tscn`。默认数值候选以[上面的运行说明](#数值候选运行与检查)和独立规则文档为准。
 
 在一个 9×9×9 的星图里，你和 4 个 AI 文明各自藏好自己的位置。谁先暴露，谁就可能被消灭。
 
@@ -86,8 +114,8 @@ winget install --id GodotEngine.GodotEngine --exact --version 4.7.2
 # 第一次运行前生成缓存
 godot_console --headless --path game --import
 
-# 开始游戏
-godot --path game
+# 开始兼容规则游戏
+godot --path game res://view/main.tscn
 
 # 打开编辑器
 godot --path game --editor
@@ -108,7 +136,7 @@ godot --path game --editor
 - **重开**：回合状态旁边的「🔄 重开」随时可以换一张新星图，或者在同一张星图上从头打。
 - **界面大小**：拖动窗口时界面跟着缩放；按 Ctrl + 加号 / 减号调整字的大小，Ctrl + 0 恢复。
 - **开发者调试**：按 F12 打开调试面板，可以换成任意文明的视角、播放和回退对局、随时改数值。
-  `godot --path game -- watch seed=123` 开一局全由 AI 打的观战局。详见 [调试模式](docs/guides/debug-tools.md)。
+  `godot --path game res://view/main.tscn -- watch seed=123` 开一局全由 AI 打的兼容规则观战局。详见 [调试模式](docs/guides/debug-tools.md)。
 
 ## 开发
 
