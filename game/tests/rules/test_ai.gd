@@ -84,6 +84,51 @@ func test_ai_builds_in_order_when_nobody_known() -> void:
 	check_eq(_builds(s, ai), ["miner"], "探测器够了不再造；能量不多于 20E 不建恒星广播器")
 
 
+## 让 AI 派一个探测器，返回它的方向（没派出时为零向量）。每次先拿走它的探测器、补满行动点。
+func _probe_direction(s: GameState, ai: Civ) -> Vector3:
+	ai.ships.assign(ai.ships.filter(func(sh): return sh.kind != Ship.PROBE))
+	ai.actions_left = 6
+	AI._try_probe(s, ai)
+	for sh in ai.ships:
+		if sh.kind == Ship.PROBE and not sh.docked:
+			return sh.direction
+	return Vector3.ZERO
+
+
+## 探测器出星图前能飞出母星系视野多远。
+func _probe_reach(s: GameState, ai: Civ, dir: Vector3) -> float:
+	return Geometry.distance_to_edge(Vector3(ai.home), dir, s.map.bounds()) - s.sphere_radius(ai, Balance.VISION_HOME)
+
+
+## E7F6 看到 AI 朝宇宙边缘探测：母星系在角上时，一半的随机方向飞出视野不远就出了星图。
+## 规则：AI 怎么行动
+func test_probe_from_corner_heads_into_map() -> void:
+	var s := _ai_game()  # AI 在 (8,8,8)，星图的一个角
+	var ai := s.civs[1]
+	for i in 20:
+		var dir := _probe_direction(s, ai)
+		check(dir != Vector3.ZERO, "派出了探测器")
+		check(_probe_reach(s, ai, dir) >= AI.PROBE_MIN_REACH,
+				"探测器朝星图里面飞，出星图前至少飞出视野 %.1f 格（方向 %s）" % [AI.PROBE_MIN_REACH, dir])
+
+
+## 被打的方向朝星图外（隐藏文明从星图外打来）时不往那边派；朝星图里面时照样会派。
+## 规则：AI 怎么行动
+func test_probe_ignores_hit_direction_leading_off_map() -> void:
+	var s := _ai_game()
+	var ai := s.civs[1]
+	var outward := Vector3(1, 1, 1).normalized()
+	ai.hit_dirs.append({"at": ai.home, "dir": outward, "turn": 0})
+	for i in 20:
+		check(_probe_direction(s, ai).dot(outward) < 0.99, "不朝星图外被打来的方向派探测器")
+	var inward := Vector3(-1, -1, -1).normalized()
+	ai.hit_dirs.append({"at": ai.home, "dir": inward, "turn": 0})
+	var used := false
+	for i in 20:
+		used = used or _probe_direction(s, ai).dot(inward) > 0.99
+	check(used, "被打的方向朝星图里面时，还是会朝那边派")
+
+
 ## 被打过以后：有两个以上星系时母星系躲进黑域，有类木行星的星系建掩体，造一艘星舰。没被打过时都不做。
 ## 规则：AI 怎么行动
 func test_ai_protects_itself_after_hit() -> void:

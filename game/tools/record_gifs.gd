@@ -32,6 +32,8 @@ func _run() -> void:
 		push_error("要给出 out=<目录>")
 		quit(1)
 		return
+	var debug_script: Script = load("res://view/debug_panel.gd")
+	debug_script.set("prefs_path", "user://_record_gifs_debug.cfg")
 	view = load("res://view/main.tscn").instantiate()
 	root.add_child(view)
 	view.autosave_path = ""  # 不覆盖玩家自己的 last.replay
@@ -43,7 +45,7 @@ func _run() -> void:
 		await process_frame
 	map = view.map
 	if view.debug != null:
-		view.debug.window.hide()
+		view.debug.visible = false
 	view.set_process(false)
 	map.set_process(false)
 	if only in ["", "explore"]:
@@ -52,6 +54,7 @@ func _run() -> void:
 		await domain()
 	if only in ["", "foil"]:
 		await foil()
+	DirAccess.remove_absolute("user://_record_gifs_debug.cfg")
 	quit(0)
 
 

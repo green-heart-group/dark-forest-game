@@ -67,3 +67,16 @@ func test_sphere_stays_inside_map() -> void:
 		var cells := Geometry.sphere_cells(corner, 1.0, BOX)
 		check(cells.all(func(x): return StarMap.in_bounds(x)), "星图角上的球不含星图外的格子")
 		check_eq(cells.size(), 4, "星图角上半径 1.0 的球只有自己和 3 个相邻格子")
+
+
+## 沿一个方向走多远出星图：和 Ship.outside 判断的边缘一致（格子边缘多算半格）。
+## 规则：AI 怎么行动
+func test_distance_to_edge() -> void:
+	check_eq(Geometry.distance_to_edge(Vector3(8, 8, 8), Vector3(1, 0, 0), BOX), 0.5, "在角上朝外，半格就出去")
+	check_eq(Geometry.distance_to_edge(Vector3(8, 8, 8), Vector3(-1, 0, 0), BOX), 8.5, "朝里面要走 8.5 格")
+	var d := Vector3(-1, -1, 0).normalized()
+	var t := Geometry.distance_to_edge(Vector3(8, 4, 4), d, BOX)
+	check(absf(t - 4.5 * sqrt(2.0)) < 1e-4, "斜着走按先碰到的那一面算（y 先到边）")
+	check(not Ship.outside(Vector3(8, 4, 4) + d * (t - 0.01), BOX) and Ship.outside(Vector3(8, 4, 4) + d * (t + 0.01), BOX),
+			"走到这个距离正好出星图")
+	check_eq(Geometry.distance_to_edge(Vector3(10, 4, 4), Vector3(1, 0, 0), BOX), 0.0, "已经在外面时是 0")

@@ -18,24 +18,24 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/explore.gif" alt="三维星图：自己的视野和探测器" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/bc278161-e36d-429d-9cbd-3c326392e903" alt="三维星图：自己的视野和探测器" width="100%"><br>
       <b>藏在三维星图里</b><br>
       只看得到自己周围一小片，探测器飞出去看，情报按光速传回
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/black-domain.gif" alt="黑域在母星系周围扩散" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/d19784f3-cef3-4a9e-9a4d-e9007e2234a2" alt="黑域在母星系周围扩散" width="100%"><br>
       <b>黑域</b><br>
       一格的光速变成 0，再慢慢向周围扩散；躲在里面打不进来，自己也出不去
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/dimension-strike.gif" alt="二向箔把三维星图压成平面" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/407011eb-fd03-4d1f-b756-638c955fb8dc" alt="二向箔把三维星图压成平面" width="100%"><br>
       <b>二向箔</b><br>
       展开以后一圈圈扩散，把整张星图压成一个平面
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/zero-dimension.gif" alt="平面压成直线，最后缩成一个点" width="100%"><br>
+      <img src="https://github.com/user-attachments/assets/0a2ad7a6-ef57-4820-bb71-1184aba50eeb" alt="平面压成直线，最后缩成一个点" width="100%"><br>
       <b>降到零维</b><br>
       单向著把平面压成直线，先发射奇异点、降到零维的文明获胜
     </td>
@@ -101,6 +101,10 @@ godot --path game --editor
 - **选目标**：单击星图上的东西选中它；单击空处可以瞄准那一格。点不准时，在面板里直接输入 x、y、z 坐标。
 - **行动**：右侧面板分科技、建造、行动、情况四页。升级科技不花行动点；建造、派出单位、发射武器各花 1 个行动点。
   最后按「结束回合」。鼠标停在按钮上能看到说明。
+- **科技树**：科技页打开独立全屏界面，前置科技在左、后续在右，箭头表示直接依赖；选节点查看说明和开放条件，再按研究。
+- **星图层次**：图例和全体视野默认收起。概览保留星系、全部飞行单位和敌情，停泊单位合并显示数量；悬停看具体种类、设施和情报，选中或在行动页选择单位后显示航线。「详细星图」展开全部航线与设施。广播只显示最近三条传播波前，每条一个圈，摘要保留实际条数。
+- **存档与读档**：星图左上角「保存」「读取」，或 Ctrl+S / Ctrl+O。存档为 `.forest` 文件，恢复保存时的回合和已经执行的操作；较长读档显示进度，可按取消或 Esc，失败时保留当前对局。桌面版默认打开个人存档目录，网页版下载或上传文件。
+- **面板与快捷键**：右上角按钮或 Ctrl+B 收起面板，竖屏自动收起；Alt+1 打开全屏科技树（Esc 返回），Alt+2～4 切页，Alt+左右方向键选行动，Ctrl+Enter 执行，Shift+Enter 结束回合。正在输入坐标或操作弹窗时不触发这些快捷键。
 - **重开**：回合状态旁边的「🔄 重开」随时可以换一张新星图，或者在同一张星图上从头打。
 - **界面大小**：拖动窗口时界面跟着缩放；按 Ctrl + 加号 / 减号调整字的大小，Ctrl + 0 恢复。
 - **开发者调试**：按 F12 打开调试面板，可以换成任意文明的视角、播放和回退对局、随时改数值。

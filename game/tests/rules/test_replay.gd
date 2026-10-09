@@ -2,6 +2,21 @@ extends "res://tests/rules/rule_suite.gd"
 ## 对局记录和回放、调试面板改数值、AI 的想法记录。
 
 
+func test_replay_validates_external_commands() -> void:
+	var s := GameState.new_game(1)
+	s.build(s.human(), "probe")
+	var data := Replay.from_state(s).to_dict()
+	check(Replay.valid_data(data), "有效的记录可以导入")
+	for patch in [{"name": "free"}, {"step": -1}, {"civ": 999}, {"args": [42]}, {"args": ["probe", "不是坐标"]}]:
+		var bad := data.duplicate(true)
+		bad["commands"][0].merge(patch, true)
+		check(not Replay.valid_data(bad), "损坏的命令参数在执行前被拒绝")
+	var r := Replay.from_state(s)
+	r.commands[0]["args"][0] = "starship"
+	r.play_to(0)
+	check_eq(r.desync_step, 0, "最后一个未结束回合操作失败也报告不一致")
+
+
 ## 「你」照固定的做法行动（不用随机数）：能升的科技升一项，造探测器朝固定方向派出，有已知目标就派战舰。
 func _scripted_player_turn(s: GameState) -> void:
 	var me := s.human()
@@ -137,6 +152,182 @@ func test_dev_changes_are_replayed() -> void:
 	check(r.desync_step == -1 and again.checksum() == s.checksum(), "改过数值的对局也能原样重算")
 	r.play_to(3)
 	check(Balance.ENERGY_PER_STAR == before["ENERGY_PER_STAR"], "退回到改数值以前，数值也回到当时的")
+
+
+## v 里（包括数组、字典里）的所有对象。
+func _objects_in(v: Variant) -> Array:
+	if v is Object:
+		return [v]
+	var found := []
+	if v is Array:
+		for x in v:
+			found.append_array(_objects_in(x))
+	elif v is Dictionary:
+		for k in v:
+			found.append_array(_objects_in(k))
+			found.append_array(_objects_in(v[k]))
+	return found
+
+
+## 对象放在了 StateCopy.LINKS 以外的变量里的地方（打包时会被当成普通数据而丢掉）。
+func _loose_objects(o: Object, path: String, seen := {}) -> Array:
+	if seen.has(o) or o is RandomNumberGenerator:
+		return []
+	seen[o] = true
+	var found := []
+	var links: Array = StateCopy.LINKS.get(o.get_script().get_global_name(), [])
+	for p in o.get_property_list():
+		if not p["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			continue
+		var inside := _objects_in(o.get(p["name"]))
+		if links.has(p["name"]):
+			for x in inside:
+				found.append_array(_loose_objects(x, path + "." + p["name"], seen))
+		elif not inside.is_empty():
+			found.append(path + "." + p["name"])
+	return found
+
+
+func test_state_copy_is_independent() -> void:
+	var s := GameState.new_game(3, Balance.AI_COUNT, true)
+	for i in 40:
+		s.end_turn()
+	var loose := _loose_objects(s, "s")
+	check(loose.is_empty(), "文明、舰船这些对象只放在 StateCopy.LINKS 列出的变量里：%s" % [loose])
+	var copy := StateCopy.copy(s)
+	check(copy.checksum() == s.checksum() and copy.checksums == s.checksums and copy.history == s.history,
+			"复制出来的局面和原来一样")
+	check(copy.civs[0] != s.civs[0] and copy.map != s.map and copy.rng != s.rng, "文明、星图、随机数都是新对象")
+	var shared := 0
+	for i in s.civs.size():
+		for j in s.civs[i].ships.size():
+			if copy.civs[i].ships[j] == s.civs[i].ships[j]:
+				shared += 1
+	check(shared == 0, "舰船也都是新对象")
+	# 同一个文明被几处引用时，复制品里指向同一个复制出来的文明（字典的键也是）
+	var other := StateCopy.copy(s)
+	other.zero_winner = other.civs[1]
+	other.broadcasts.append({"sender": other.civs[2], "heard": {other.civs[1]: true}})
+	var again := StateCopy.copy(other)
+	var b: Dictionary = again.broadcasts[-1]
+	check(again.zero_winner == again.civs[1] and b["sender"] == again.civs[2] and b["heard"].has(again.civs[1]),
+			"引用的文明换成复制品里的那个")
+	check(again.civs[0].colonies.get_typed_builtin() == TYPE_VECTOR3I
+			and again.civs[0].known.get_typed_key_builtin() == TYPE_VECTOR3I,
+			"类型化的数组和字典保留类型")
+	# 改复制品不影响原来的；两份各走 30 回合，每回合都一样
+	var before := s.checksum()
+	copy.civs[0].energy += 100
+	copy.civs[1].ships.clear()
+	copy.end_turn()
+	check(s.checksum() == before, "改复制品、让它结束回合，原来的局面不变")
+	var twin := StateCopy.copy(s)
+	for i in 30:
+		s.end_turn()
+		twin.end_turn()
+	check(twin.checksums == s.checksums, "复制品往后走和原来每回合都一样（随机数状态也复制了）")
+
+
+## 玩家照固定做法打到 n 回合，第 20 回合改一次数值，最后一回合做了操作还没结束。
+func _dev_game(n: int) -> GameState:
+	var s := GameState.new_game(8)
+	for i in n:
+		if s.is_over():
+			break
+		if i == 20:
+			s.dev_balance("ENERGY_PER_STAR", Balance.ENERGY_PER_STAR + 3)
+		_scripted_player_turn(s)
+		s.end_turn()
+	_scripted_player_turn(s)
+	return s
+
+
+func test_snapshots_match_full_replay() -> void:
+	var before := Balance.values()
+	var s := _dev_game(60)
+	var r := Replay.from_state(s)
+	var snaps := Snapshots.new()
+	var last := r.play_to(r.last_step(), snaps)
+	check(last.checksum() == s.checksum() and r.desync_step == -1, "带缓存重算到最后和原来一样（最后一回合的操作也补上）")
+	check(snaps.has(r.last_step() - 1) and snaps.has(10) and not snaps.has(11), "存了最近几回合和每 10 回合一份")
+	check(snaps.size() <= Snapshots.RECENT + r.last_step() / Snapshots.EVERY + 1, "缓存份数有上限")
+	check(r.begin(r.last_step() - 2, snaps).steps == r.last_step() - 2, "回退一回合直接取缓存，不用补算")
+	check(r.begin(15, snaps).steps == 10, "没存的回合从不晚于它的最近一份补算")
+	# 连续单步回退、长距离跳转，每次都和从开局重算一样，数值也回到当时的
+	var wrong := []
+	for n in [r.last_step() - 1, r.last_step() - 2, r.last_step() - 3, 35, 21, 20, 19, 4, 3, 0, r.last_step()]:
+		var full := Replay.from_state(s).play_to(n)
+		var energy := Balance.ENERGY_PER_STAR
+		var fast := r.play_to(n, snaps)
+		if fast.checksum() != full.checksum() or fast.checksums != full.checksums or Balance.ENERGY_PER_STAR != energy:
+			wrong.append(n)
+	check(wrong.is_empty(), "从缓存补算的局面和从开局重算的一样：%s" % [wrong])
+	# 取出来的局面怎么改都不影响缓存
+	var mid := r.play_to(35, snaps)
+	var expected := mid.checksum()
+	mid.civs[0].energy += 500
+	mid.end_turn()
+	check(r.play_to(35, snaps).checksum() == expected, "改了取出来的局面，缓存里的不变")
+	Balance.apply(before)
+
+
+func test_snapshots_ignore_other_history() -> void:
+	var before := Balance.values()
+	var s := _player_game(6, 30)
+	var r := Replay.from_state(s)
+	var snaps := Snapshots.new()
+	r.play_to(r.last_step(), snaps)
+	# 从第 10 回合另开一条路：之后的缓存是另一条历史，不能取
+	var branch := r.play_to(10)
+	branch.dev_set(branch.human(), "energy", 999)
+	for i in 10:
+		branch.end_turn()
+	var other := Replay.from_state(branch)
+	check(snaps.nearest(25, other) == 10, "另一条路只能用分叉点及以前的缓存")
+	check(other.play_to(18, snaps).checksum() == Replay.from_state(branch).play_to(18).checksum(),
+			"从分叉点补算出的局面是这条路的")
+	snaps.drop_after(10)
+	check(not snaps.has(20) and snaps.has(10), "另开一条路时丢掉分叉点以后的")
+	check(snaps.nearest(25, Replay.from_state(_player_game(9, 12))) == -1, "别的种子的记录取不到")
+	Balance.apply(before)
+
+
+## 规则：二向箔，二维、单向著和奇异点
+func test_snapshots_across_dimensions() -> void:
+	var s := GameState.new_game(71, 1)
+	for civ in s.civs:
+		s.set_autoplay(civ, false)
+		s.dev_set(civ, "energy", 2000)
+		s.dev_set(civ, "reduced", true)
+		s.dev_set(civ, "line_reduced", true)
+		s.dev_tech(civ, "dimension", true)
+	var target := Vector3i(4, 4, 4)
+	if s.human().owns(target):
+		target.x += 1
+	s.launch_foil(s.human(), target)
+	var flat_step := -1
+	for i in 100:
+		if s.all_flat():
+			break
+		s.end_turn()
+		if s.dimension == 2 and flat_step < 0:
+			flat_step = s.steps
+	s.launch_line_foil(s.human(), Vector3i(13, 13, s.flat_plane))
+	for i in 200:
+		if s.all_linear():
+			break
+		s.end_turn()
+	check(flat_step > 0 and s.dimension == 1, "对局从三维到二维再到一维")
+	check(_loose_objects(s, "s").is_empty(), "降维以后对象也只放在 StateCopy.LINKS 列出的变量里")
+	var r := Replay.from_state(s)
+	var snaps := Snapshots.new()
+	r.play_to(r.last_step(), snaps)
+	var wrong := []
+	for n in [r.last_step() - 1, flat_step + 1, flat_step, flat_step - 1, 2, r.last_step() - 2]:
+		var got := r.play_to(n, snaps)
+		if got.checksum() != s.checksums[n - 1] or got.dimension != (3 if n < flat_step else 2 if n == flat_step else got.dimension):
+			wrong.append(n)
+	check(wrong.is_empty(), "跨三维、二维、一维来回跳，局面都和原来那一回合一样：%s" % [wrong])
 
 
 func test_dev_set_rejects_bad_input() -> void:

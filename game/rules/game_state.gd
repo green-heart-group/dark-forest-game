@@ -1,5 +1,8 @@
 class_name GameState
 extends RefCounted
+
+## 仅供模拟统计；不参与规则状态或回放校验。
+signal civilization_eliminated(civ: Civ, cause: String)
 ## 一局游戏的全部规则状态。画面只读取它，通过它的方法来行动。
 ## 日志只写玩家应该知道的事：自己的行动、自己被打、有文明灭亡。
 ## AI 怎么行动在 ai.gd。
@@ -75,11 +78,11 @@ var hidden_foils: Array[Foil] = []
 var broadcasts: Array[Dictionary] = []
 ## 航迹：每项是 {"a": 起点, "b": 终点, "turn": 第几回合留下, "gone": 被降维抹掉了}
 var wakes: Array[Dictionary] = []
-## 展开的二向箔：每项是 {"center": 展开的格子, "age": 压平的圆的半径（每回合加 FOIL_SPREAD）}
+## 展开的二向箔：每项是 {"center": 展开的格子, "age": 压平的球的半径（每回合加 FOIL_SPREAD）}
 var foil_zones: Array[Dictionary] = []
-## 第一片二向箔确定全图共同平面，后续展开不会再产生不同高度的平面。
+## 全图共同平面的高度：第一回合展开的二向箔 z 的平均（U3），后续展开不会再产生不同高度的平面。
 var flat_plane := -1
-## 二维格子压到共同直线的 y；z 始终为 flat_plane，直线沿 x 轴。
+## 二维格子压到共同直线的 y（第一回合展开的单向著 y 的平均）；z 始终为 flat_plane，直线沿 x 轴。
 var linearized: Dictionary[Vector3i, int] = {}
 var line_zones: Array[Dictionary] = []
 var line_y := -1
@@ -1533,7 +1536,7 @@ func _grain_hit(c: Vector3i, owner: Civ, g: Ship, shooter: Civ) -> void:
 		var ss := civ.starship()
 		if civ.alive and ss != null and ss.cell() == c and ss.direction == Vector3.ZERO:
 			_destroy(civ, ss, "光粒")
-	_lose_system(c, owner)
+	_lose_system(c, owner, "光粒")
 
 
 ## 戴森球不能比恒星多。
@@ -1593,8 +1596,8 @@ func _combat() -> void:
 			continue
 		if a[0] == human() or b[0] == human():
 			add_log("%s的%s和%s的%s相遇，一起毁掉了" % [a[0].name, a[1].label(), b[0].name, b[1].label()])
-		_destroy(a[0], a[1], "")
-		_destroy(b[0], b[1], "")
+		_destroy(a[0], a[1], "舰船交战")
+		_destroy(b[0], b[1], "舰船交战")
 	for u in units:
 		var civ: Civ = u[0]
 		var s: Ship = u[1]
@@ -1655,13 +1658,13 @@ func _fire_weapons(units: Array) -> void:
 			"beam":
 				if told:
 					add_log("%s用高能粒子束毁掉了%s" % [who, whom])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 			"torpedo":
 				t.damage += 1
 				if t.damage >= Balance.TORPEDO_HITS:
 					if told:
 						add_log("%s用星际鱼雷打中%s，%s毁掉了" % [who, whom, t.label()])
-					_destroy(other, t, "")
+					_destroy(other, t, "战舰")
 				elif told:
 					add_log("%s用星际鱼雷打中%s（%d/%d）" % [who, whom, t.damage, Balance.TORPEDO_HITS])
 			"hbomb":
@@ -1669,7 +1672,7 @@ func _fire_weapons(units: Array) -> void:
 				civ.mineral += t.cost[1]
 				if told:
 					add_log("%s用次声波氢弹杀死了%s的船员，收回 %dE、%dM" % [who, whom, t.cost[0], t.cost[1]])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 
 
 ## 开一次火的钱够不够（够时为 false）。
@@ -1688,7 +1691,7 @@ func _warship_strike(civ: Civ, s: Ship) -> void:
 			if not t.dead and t.kind == Ship.COLONY and t.pos.distance_to(s.pos) <= r:
 				if other == human() or civ == human():
 					add_log("%s的%s打掉了%s的%s" % [civ.name, s.label(), other.name, t.label()])
-				_destroy(other, t, "")
+				_destroy(other, t, "战舰")
 				return
 	for other in civs:
 		if other == civ or not other.alive or other.antimatter > 0:
@@ -1703,7 +1706,7 @@ func _warship_strike(civ: Civ, s: Ship) -> void:
 					add_log("敌方战舰打到你的星系 %s，那里的文明被抹掉了" % c)
 				elif civ == human():
 					add_log("%s抹掉了 %s 在 %s 的星系" % [s.label(), other.name, c])
-				_lose_system(c, other)
+				_lose_system(c, other, "战舰")
 				return
 
 
@@ -1716,7 +1719,7 @@ func _destroy(civ: Civ, s: Ship, cause: String) -> void:
 		if civ == human() and cause != "":
 			add_log("你的星舰被%s毁掉" % cause)
 		if civ.colonies.is_empty():
-			_die(civ)
+			_die(civ, cause)
 
 
 func _remove_ship(civ: Civ, s: Ship) -> void:
@@ -2148,7 +2151,8 @@ func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -
 
 
 ## 每片箔：还在准备的，准备回合减一；已经起飞的，前进一段。
-## 碰到别人的星系（隐藏文明的不会），或到达目标（最后一步直接落在目标上），就在那里展开。
+## 二向箔只在到达目标（最后一步直接落在目标上）时展开，路上不停（U2）；
+## 单向著途中碰到别人的星系（隐藏文明的不会）就在那里展开。
 func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
 	var still_flying: Array[Foil] = []
 	for foil: Foil in list.duplicate():
@@ -2166,7 +2170,7 @@ func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
 		foil.traveled = minf(foil.traveled + foil.speed, foil.total_distance())
 		var arrived := foil.traveled >= foil.total_distance() - 1e-6
 		var at := NO_HIT
-		if not foil.precise:
+		if foil.to_line and not foil.precise:
 			# 多算一点点，免得浮点误差把目标格子漏掉
 			for c in Geometry.cylinder_cells_between(foil.origin, foil.direction(), from_t,
 					foil.traveled + 1e-4, 0.0, map.bounds()):
@@ -2204,10 +2208,7 @@ static func foil_kind(f: Foil) -> String:
 func _flatten_cell(c: Vector3i, plane: int) -> void:
 	if dimension != 3 or flattened.has(c) or not map.contains(c):
 		return
-	if flat_plane < 0:
-		flat_plane = plane
-		fold_anchor = Vector3i(c.x, c.y, plane)
-	flattened[c] = flat_plane
+	flattened[c] = plane
 	_compress_cell(c, false)
 	if flattened.size() == DimensionSpace.COUNT:
 		DimensionSpace.commit(self, false)
@@ -2229,7 +2230,7 @@ func _compress_cell(c: Vector3i, to_line: bool) -> void:
 	if owner != null and not (owner.line_reduced if to_line else owner.reduced):
 		if owner == human():
 			add_log("你的星系 %s 被%s扫过，文明失去该据点" % [c, weapon])
-		_lose_system(c, owner)
+		_lose_system(c, owner, weapon)
 	for civ in civs:
 		if civ.line_reduced if to_line else civ.reduced:
 			continue
@@ -2284,15 +2285,18 @@ func line_y_for(target: Vector3i) -> int:
 	return line_y if line_y >= 0 else target.y
 
 
-## 二向箔在格子 at 展开：平面的高度是第一片箔定下的，马上压平它能压到的格子。
+## 二向箔在格子 at 展开，从这里按球形向外扩散（U3），马上压平它能压到的格子。
+## 平面的高度由第一回合展开的箔定下：同一回合有几片时取它们 z 的平均，之后的箔不再改。
 func _unfold_foil(at: Vector3i) -> void:
 	if dimension != 3 or not map.contains(at):
 		return
-	if flat_plane < 0:
-		flat_plane = foil_plane_for(at)
-		fold_anchor = at
-	var zone := {"center": Vector3i(at.x, at.y, flat_plane), "age": 0.0}
+	var zone := {"center": at, "age": 0.0}
 	foil_zones.append(zone)
+	if foil_zones.all(func(z): return z["age"] == 0.0):
+		flat_plane = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(foil_zones)).z)
+		fold_anchor = Vector3i(foil_zones[0]["center"].x, foil_zones[0]["center"].y, flat_plane)
+		for c in flattened:
+			flattened[c] = flat_plane
 	_apply_zone(zone)
 
 
@@ -2322,23 +2326,25 @@ func _spread_flat() -> void:
 func _unfold_line_foil(at: Vector3i) -> void:
 	if dimension != 2 or not map.contains(at):
 		return
-	if line_y < 0:
-		line_y = line_y_for(at)
-		line_anchor = at
-	var zone := {"center": Vector3i(at.x, line_y, flat_plane), "age": 0.0}
+	var zone := {"center": at, "age": 0.0}
 	line_zones.append(zone)
+	if line_zones.all(func(z): return z["age"] == 0.0):
+		line_y = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(line_zones), true).y)
+		line_anchor = Vector3i(line_zones[0]["center"].x, line_y, flat_plane)
+		for c in linearized:
+			linearized[c] = line_y
 	_apply_line_zone(zone)
 
 
-## 二维里沿 x 扩散，每列 27 格展开到一维。
+## 二维里在平面上按圆形扩散，扫过的格子压到一维（U3）。
 static func line_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c, true) <= age
+	return zone_distance(center, c) <= age
 
 
-## 箔的波前离格子 c 多远：三维里看水平距离（along_x 为假），二维里只看 x。
-## 规则（压没哪些格子）和展开画面（DimensionSpace.frame）都用它，两边不会对不上。
-static func zone_distance(center: Vector3i, c: Vector3i, along_x: bool) -> float:
-	return absf(c.x - center.x) if along_x else Vector2(c.x - center.x, c.y - center.y).length()
+## 箔的波前离格子 c 多远：从落点算的直线距离（三维里是球形，二维里是圆形，U3）。
+## 规则（压没哪些格子）和展开画面（DimensionSpace.frame 用的 Layout.arrivals）算法一样，两边不会对不上。
+static func zone_distance(center: Vector3i, c: Vector3i) -> float:
+	return Vector3(c - center).length()
 
 
 func _apply_line_zone(zone: Dictionary) -> void:
@@ -2352,9 +2358,9 @@ func _apply_line_zone(zone: Dictionary) -> void:
 	_check_winner()
 
 
-## 波前按原三维坐标的水平距离推进，覆盖后整列完成二维展开。
+## 波前从落点按球形推进，扫过的格子展开到二维（U3）。
 static func zone_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c, false) <= age
+	return zone_distance(center, c) <= age
 
 
 ## 按波前处理整列；同时展开多片箔时只处理尚未展开的格子。
@@ -2375,7 +2381,7 @@ func turns_until_flat(c: Vector3i) -> float:
 	var zones := line_zones if all_flat() else foil_zones
 	for zone in zones:
 		var center: Vector3i = zone["center"]
-		var distance := zone_distance(center, c, all_flat())
+		var distance := zone_distance(center, c)
 		best = minf(best, maxf(0.0, (distance - zone["age"]) / Balance.FOIL_SPREAD))
 	return best
 
@@ -2652,7 +2658,7 @@ func _check_hiding() -> void:
 			all_in = all_in and light_at(c) < Balance.SHIP_MIN_SPEED
 		if all_in:
 			add_log("%s 把自己全部困在了光速为 0 的黑域里，再也出不来，算输" % civ.name)
-			_die(civ)
+			_die(civ, "黑域")
 
 
 ## 这个格子在不在黑域里：光速低到光粒没有杀伤力（G14）。在里面的星系产出只有 1/10。
@@ -2693,7 +2699,7 @@ func _may_block(lo: Vector3, hi: Vector3) -> bool:
 # ---------- 失去星系和灭亡 ----------
 
 ## 文明失去一个星系，那里的设施和停着的单位（星舰除外）也没了。星系全丢了、又没有星舰，文明灭亡。
-func _lose_system(c: Vector3i, owner: Civ) -> void:
+func _lose_system(c: Vector3i, owner: Civ, cause := "其他") -> void:
 	owner.colonies.erase(c)
 	owner.dysons.erase(c)
 	owner.miners.erase(c)
@@ -2710,18 +2716,19 @@ func _lose_system(c: Vector3i, owner: Civ) -> void:
 			owner.home = owner.starship().cell()
 			add_log("%s 失去了所有星系，只剩星舰" % owner.name)
 		else:
-			_die(owner)
+			_die(owner, cause)
 	elif owner.home == c:
 		owner.home = owner.colonies[0]
 
 
 ## 文明灭亡，准备中和在飞的东西也随之消失（已经发出的光粒除外）。
-func _die(owner: Civ) -> void:
+func _die(owner: Civ, cause := "其他") -> void:
 	if not owner.alive:
 		return
 	for s in sophons_on(owner):
 		s.dead = true
 	owner.alive = false
+	civilization_eliminated.emit(owner, cause if cause != "" else "其他")
 	for s in owner.ships:
 		if s.kind != Ship.GRAIN:
 			s.dead = true

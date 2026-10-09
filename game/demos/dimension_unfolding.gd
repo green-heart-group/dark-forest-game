@@ -7,10 +7,17 @@ const COLORS: Array[Color] = [Color("5375bd"), Color("647dd4"), Color("7d8ee0"),
 		Color("929ee8"), Color("64b9c7"), Color("54ccb9"), Color("8ad7b2"),
 		Color("b4df9b"), Color("d7df9b")]
 const GOLD := Color("ffc875")
+## 球形扩张的场景，原点见 origins()。第一个原点总是锚点输入框里的格子。
+const SCENES := ["固定映射 · 单原点", "固定映射 · 同时两个原点", "固定映射 · 先后两个原点", "固定映射 · 范围重叠"]
+const CURVE_MODE := 6
+const LINE_MODE := 7
+const OWNER_COLORS: Array[Color] = [Color("ffc875"), Color("f08aa8")]
 
 var progress := 0.0
 var playing := false
 var single := true
+## 0 单列，1 全图按列展开，2 起是 SCENES 里的球形扩张场景。
+var scene := 0
 var anchor := Vector3i(4, 4, 4)
 var speed := 1.0
 var layout := {}
@@ -24,6 +31,11 @@ var _world := Node3D.new()
 var camera := Camera3D.new()
 var instances := MultiMeshInstance3D.new()
 var _guides := MeshInstance3D.new()
+var _curve := MeshInstance3D.new()
+var curve_points := PackedVector3Array()
+var curve_toggle := CheckBox.new()
+var cells_toggle := CheckBox.new()
+var _ends: Array[Label3D] = []
 var _numbers: Array[Label] = []
 var _number_points := PackedVector3Array()
 var _focus := Vector3.ZERO
@@ -61,6 +73,7 @@ func _ready() -> void:
 	var material := StandardMaterial3D.new()
 	material.vertex_color_use_as_albedo = true
 	material.roughness = 0.7
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	var box := BoxMesh.new()
 	instances.multimesh = MultiMesh.new()
 	instances.multimesh.transform_format = MultiMesh.TRANSFORM_3D
@@ -75,9 +88,26 @@ func _ready() -> void:
 	lines.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_guides.material_override = lines
 	_world.add_child(_guides)
+	_curve.material_override = lines
+	_world.add_child(_curve)
+	for spec in [["起点 #0", Color("64efb1")], ["终点 #728", Color("ff7f99")]]:
+		var label := Label3D.new()
+		label.text = spec[0]
+		label.font = load("res://view/ui_font.tres")
+		label.font_size = 34
+		label.pixel_size = 0.001
+		label.fixed_size = true
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.modulate = spec[1]
+		label.outline_size = 8
+		_world.add_child(label)
+		_ends.append(label)
 	_build_ui()
 	get_viewport().size_changed.connect(_update_camera)
 	set_progress(0.0)
+	if OS.get_cmdline_user_args().has("curve"):
+		set_mode(CURVE_MODE)
 
 
 func _build_ui() -> void:
@@ -102,7 +132,7 @@ func _build_ui() -> void:
 	ui.add_child(heading)
 	_label(heading, "DARK FOREST  /  MOTION STUDY 01", 14, Color("81a1bd"))
 	_label(heading, "空间展开", 32, Color("edf4ff"))
-	_label(heading, "9×9×9 → 27×27 · 每个格子保留自己的位置编号", 17, Color("9cacbf"))
+	_label(heading, "9×9×9 → 27×27 → 729 · 同一条线串起全部格子", 17, Color("9cacbf"))
 	var metrics := VBoxContainer.new()
 	metrics.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 	metrics.position = Vector2(-290, 28)
@@ -115,7 +145,7 @@ func _build_ui() -> void:
 	panel.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	panel.offset_left = 24
 	panel.offset_right = -24
-	panel.offset_top = -182
+	panel.offset_top = -218
 	panel.offset_bottom = -24
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("151f30")
@@ -154,6 +184,10 @@ func _build_ui() -> void:
 	mode = OptionButton.new()
 	mode.add_item("单列 · 9 → 3×3")
 	mode.add_item("全图 · 729 → 27×27")
+	for text in SCENES:
+		mode.add_item(text)
+	mode.add_item("皮亚诺 · 体到平面")
+	mode.add_item("皮亚诺 · 平面到直线")
 	mode.custom_minimum_size = Vector2(220, 40)
 	mode.item_selected.connect(set_mode)
 	options.add_child(mode)
@@ -176,6 +210,16 @@ func _build_ui() -> void:
 	options.add_child(framing)
 	_button(options, "俯视", top_view)
 	_button(options, "重置视角", reset_view)
+	var layers := HBoxContainer.new()
+	stack.add_child(layers)
+	curve_toggle.text = "显示皮亚诺连线"
+	curve_toggle.toggled.connect(func(_on): set_progress(progress))
+	layers.add_child(curve_toggle)
+	cells_toggle.text = "显示体素"
+	cells_toggle.button_pressed = true
+	cells_toggle.toggled.connect(func(on): instances.visible = on)
+	layers.add_child(cells_toggle)
+	_label(layers, "绿：起点 #0　红：终点 #728　白：降维原点", 14, Color("acbecf"))
 	_note = _label(stack, "", 15, Color("9cacbf"))
 
 
@@ -200,7 +244,10 @@ func _button(parent: Node, text: String, action: Callable) -> Button:
 
 func set_mode(index: int) -> void:
 	single = index == 0
+	scene = index
 	mode.select(index)
+	curve_toggle.disabled = index < 2
+	curve_toggle.set_pressed_no_signal(index >= CURVE_MODE)
 	playing = false
 	reset_view()
 	set_progress(0.0)
@@ -239,6 +286,14 @@ func set_progress(value: float) -> void:
 	progress = clampf(value, 0.0, 1.0)
 	if progress >= 1.0:
 		playing = false
+	if scene >= 2:
+		_show_spread()
+		return
+	_curve.hide()
+	curve_points.clear()
+	for label in _ends:
+		label.hide()
+	curve_toggle.disabled = true
 	layout = Layout.sample(progress, anchor, single)
 	var points: PackedVector3Array = layout["positions"]
 	instances.multimesh.visible_instance_count = points.size()
@@ -261,6 +316,84 @@ func set_progress(value: float) -> void:
 	_status.text = "%d / %d 列已展开" % [layout["finished"], 1 if single else 81]
 	_note.text = "金色为固定锚点 · 颜色对应原 z 层 · 拖动旋转 / 滚轮缩放 · 空格播放 · ← → 逐步查看"
 	_update_camera()
+
+
+## 当前场景的原点和开始时间（单位和扩张半径相同，每单位时间扩张 1 格）。
+func origins() -> Array:
+	if scene == LINE_MODE:
+		var at := Layout.fixed_plane(anchor)
+		return [{"at": Vector3i(at.x, at.y, anchor.z), "start": 0.0}]
+	var second := Vector3i(8 - anchor.x, 8 - anchor.y, (anchor.z + 4) % 9)
+	match scene - 2:
+		1: return [{"at": anchor, "start": 0.0}, {"at": second, "start": 0.0}]
+		2: return [{"at": anchor, "start": 0.0}, {"at": second, "start": 5.0}]
+		3: return [{"at": anchor, "start": 0.0},
+				{"at": (anchor + Vector3i(3, 2, 2)).clamp(Vector3i.ZERO, Vector3i.ONE * 8), "start": 1.5}]
+	return [{"at": anchor, "start": 0.0}]
+
+
+func _show_spread() -> void:
+	var list := origins()
+	var to_line := scene == LINE_MODE
+	var time := lerpf(-Layout.SPACE_LEAD, Layout.spread_duration(list, to_line), progress)
+	layout = Layout.sample_spread(time, list, to_line)
+	var points: PackedVector3Array = layout["positions"]
+	instances.multimesh.visible_instance_count = points.size()
+	for i in points.size():
+		var c: Vector3i = layout["cells"][i]
+		var q: float = layout["amounts"][i]
+		var size := Vector3(lerpf(0.48, 0.87, q), lerpf(0.48, 0.87, q), lerpf(0.48, 0.055, q * q))
+		if to_line:
+			size.y = lerpf(0.48, 0.055, q * q)
+		if curve_toggle.button_pressed:
+			size *= 0.35
+		instances.multimesh.set_instance_transform(i, Transform3D(Basis.from_scale(size), points[i]))
+		var color := COLORS[c.z].lerp(OWNER_COLORS[layout["owners"][i] % OWNER_COLORS.size()], q * 0.55)
+		if list.any(func(o): return o["at"] == c):
+			color = Color.WHITE
+		instances.multimesh.set_instance_color(i, color)
+	for number in _numbers:
+		number.visible = false
+	_guides.mesh = null
+	_draw_curve()
+	timeline.set_value_no_signal(progress)
+	_percent.text = "%d%%" % floori(progress * 100)
+	play_button.text = "暂停" if playing else "播放"
+	_counter.text = "%d 格 · 全部保留" % points.size()
+	_status.text = "%d / %d 格已落到%s" % [layout["finished"], Layout.COUNT, "直线" if to_line else "平面"]
+	if curve_toggle.button_pressed:
+		_counter.text = "729 格 · 728 段 · 2 个端点"
+	_note.text = "白色原点不是线头；曲线两端始终是 #0 / #728。原点两侧按同一编号顺序连接。"
+	_update_camera()
+
+
+## 永远按固定线序连接，绝不把空间邻居或每个展开片区当成另一条线。
+func _draw_curve() -> void:
+	curve_points.clear()
+	_curve.visible = curve_toggle.button_pressed
+	for label in _ends:
+		label.visible = _curve.visible
+	if not _curve.visible:
+		return
+	var positions := {}
+	for i in layout["cells"].size():
+		positions[layout["cells"][i]] = layout["positions"][i]
+	for i in Layout.COUNT:
+		var cell := Layout.line_origin(i)
+		if scene == LINE_MODE:
+			var p := Layout.fixed_plane(cell)
+			cell = Vector3i(p.x, p.y, anchor.z)
+		curve_points.append(positions[cell])
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	for i in Layout.COUNT - 1:
+		for j in [i, i + 1]:
+			mesh.surface_set_color(Color("64efb1").lerp(Color("ff7f99"), float(j) / (Layout.COUNT - 1)))
+			mesh.surface_add_vertex(curve_points[j])
+	mesh.surface_end()
+	_curve.mesh = mesh
+	_ends[0].position = curve_points[0] + Vector3(0, 0, 0.45)
+	_ends[1].position = curve_points[-1] + Vector3(0, 0, 0.45)
 
 
 func _draw_guides() -> void:
@@ -313,7 +446,8 @@ func _update_camera() -> void:
 		_focus = bounds.get_center()
 	var orbit := Vector3(cos(deg_to_rad(pitch)) * sin(deg_to_rad(yaw)),
 			sin(deg_to_rad(pitch)), cos(deg_to_rad(pitch)) * cos(deg_to_rad(yaw)))
-	camera.position = _focus + orbit * 80.0
+	camera.far = 5000.0
+	camera.position = _focus + orbit * maxf(80.0, bounds.size.length() * 1.2)
 	camera.look_at(_focus)
 	if auto_frame:
 		var projected := AABB(camera.to_local(bounds.position), Vector3.ZERO)
@@ -324,7 +458,7 @@ func _update_camera() -> void:
 		_frame_size = maxf(projected.size.y / 0.57, projected.size.x / (aspect * 0.85))
 	camera.size = maxf(5.0, _frame_size) * zoom
 	# 留出下方控制栏；相机在自己的向上方向平移，物体在画面里上移。
-	camera.v_offset = -camera.size * 0.035
+	camera.v_offset = -camera.size * 0.075
 	for z in 9:
 		_numbers[z].position = camera.unproject_position(_world.to_global(_number_points[z])) - _numbers[z].size / 2.0
 

@@ -98,9 +98,12 @@ func run_tests() -> void:
 	await run(test_ui_helpers)
 	await capture("start")
 	await run(test_research)
+	await run(test_tech_tree)
+	await run(test_map_clarity)
 	await run(test_build_and_dispatch)
 	await run(test_colony)
 	await run(test_hover_intel)
+	await run(test_hover_stored_grain)
 	await run(test_camera)
 	await run(test_selection)
 	await run(test_grid_modes)
@@ -110,14 +113,19 @@ func run_tests() -> void:
 	await run(test_intel_on_starless_system)
 	await run(test_reduction_controls)
 	await run(test_flat_and_line)
+	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
 	await run(test_restart)
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
+	await run(test_debug_rewind_cache)
 	await run(test_debug_edit_values)
 	await run(test_debug_presets)
 	await run(test_debug_after_death)
+	await run(test_save_load)
+	await run(test_save_across_dimensions)
+	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
 	await capture("debug_panel", view.debug.window)
 	view.queue_free()
@@ -130,16 +138,183 @@ func run_tests() -> void:
 	quit(results.finish("画面测试"))
 
 
+func test_save_load() -> void:
+	view.debug.pause()
+	view.debug.replay = null
+	view.debug.view_idx = 0
+	var defaults := Balance.values()
+	var s := GameState.new_game(1)
+	s.end_turn()
+	s.dev_balance("FOIL_SPREAD", 0.4)
+	s.build(s.human(), "probe")  # 保存未结束回合里的操作
+	show_state(s)
+	var path := "user://_test_save.forest"
+	check_eq(view.saves.save_file(path), OK, "普通对局可以保存")
+	check_eq(view.saves.save_file(path), OK, "可以安全覆盖同名存档")
+	var expected := s.checksum()
+	show_state(GameState.new_game(2))
+	await view.saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "读取恢复保存回合和回合内操作")
+	check_eq(Balance.FOIL_SPREAD, 0.4, "读取恢复当时的数值")
+	check(not view.debug.replaying(), "读档后能继续操作")
+	view.state.end_turn()
+	s.end_turn()
+	check_eq(view.state.checksum(), s.checksum(), "读取后下一回合仍与原局一致")
+	var kept = view.state
+	var f := FileAccess.open(path, FileAccess.READ)
+	var data: Dictionary = f.get_var()
+	f.close()
+	data["checksum"] += 1
+	f = FileAccess.open(path, FileAccess.WRITE)
+	f.store_var(data)
+	f.close()
+	await view.saves.load_file(path)
+	check(view.state == kept, "校验不一致保留原对局")
+	check_eq(Balance.FOIL_SPREAD, 0.4, "失败不会改变原对局数值")
+	data["replay"]["commands"].append({"step": 1, "civ": 0, "ai": false, "name": "free", "args": []})
+	f = FileAccess.open(path, FileAccess.WRITE)
+	f.store_var(data)
+	f.close()
+	await view.saves.load_file(path)
+	check(view.state == kept, "损坏文件不能执行非玩家操作")
+	# 强制分帧，在重建期间取消，检查既不替换状态也不污染数值。
+	show_state(s)
+	view.saves.save_file(path)
+	show_state(GameState.new_game(3))
+	kept = view.state
+	Balance.apply(defaults)
+	view.saves.slice_msec = 0
+	view.saves.load_file(path)
+	check(view.saves.busy, "长读档显示进度并让出界面")
+	view.saves.cancel()
+	await process_frame
+	check(view.state == kept and not view.saves.busy, "取消读档后保留原对局")
+	check_eq(Balance.values(), defaults, "取消恢复读档前的数值")
+	view.saves.slice_msec = 50
+	DirAccess.remove_absolute(path)
+
+
+func test_game_shortcuts_and_compact_layout() -> void:
+	show_state(GameState.new_game(1))
+	map.reset_view(true)
+	view.debug.view_idx = 0
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.alt_pressed = true
+	key.keycode = KEY_1
+	view._on_key(key, root)
+	check(view.tech_tree.visible, "Alt+1 打开全屏科技树")
+	view.tech_tree.close_tree()
+	key.keycode = KEY_RIGHT
+	view._on_key(key, root)
+	check_eq(panel._tabs.current_tab, 2, "选择行动快捷键打开行动页")
+	var action_before: int = actions._action
+	key.keycode = KEY_LEFT
+	view._on_key(key, root)
+	check(actions._action != action_before, "左右快捷键切换行动")
+	key.alt_pressed = false
+	key.ctrl_pressed = true
+	key.keycode = KEY_B
+	view._on_key(key, root)
+	check(not panel.visible and view.panel_width() == 0.0, "Ctrl+B 收起面板并释放地图宽度")
+	check_eq(map._camera.h_offset, 0.0, "收起面板后镜头居中")
+	view._on_key(key, root)
+	check(panel.visible and view.panel_width() > 0.0, "再次按键展开面板")
+	view.state.build(view.state.human(), "probe")
+	view.refresh()
+	key.keycode = KEY_ENTER
+	view._on_key(key, root)
+	check(not view.state.human().ships[0].docked, "Ctrl+Enter 通过规则执行所选行动")
+	key.ctrl_pressed = false
+	key.shift_pressed = true
+	var step: int = view.state.steps
+	view._on_key(key, root)
+	check_eq(view.state.steps, step + 1, "Shift+Enter 结束回合")
+	key.ctrl_pressed = true
+	key.shift_pressed = false
+	key.keycode = KEY_B
+	var edit: LineEdit = actions._coord_boxes[0].get_line_edit()
+	edit.grab_focus()
+	view._on_key(key, root)
+	check(panel.visible, "在输入框里不抢操作快捷键")
+	edit.release_focus()
+	var old_size := root.size
+	root.size = Vector2i(600, 900)
+	view.window_settings._responsive_size()
+	await process_frame
+	view.update_layout()
+	check(view.compact and not panel.visible, "竖屏自动收起面板")
+	check(map._aim.is_empty(), "竖屏自动收起面板时也清除隐藏行动的预览")
+	await capture("portrait_map")
+	view.show_panel(2)
+	await process_frame
+	check(panel.get_global_rect().end.x <= root.get_visible_rect().size.x + 1, "竖屏面板在窗口以内")
+	check(not overlay._top.visible, "展开面板时隐藏会重叠的地图工具")
+	await capture("portrait_panel")
+	root.size = old_size
+	if _output != "":
+		root.size = Vector2i(1280, 800)
+	view.window_settings._responsive_size()
+	await process_frame
+	view.update_layout()
+	view.show_panel(2)
+	await capture("game_controls")
+
+
+func test_save_across_dimensions() -> void:
+	var defaults := Balance.values()
+	var s := GameState.new_game(1, 1)
+	s.set_autoplay(s.civs[1], false)
+	for c in s.civs:
+		s.dev_set(c, "energy", 10000)
+		s.dev_tech(c, "dimension", true)
+		s.start_reduce(c)
+	for i in Balance.REDUCE_TURNS:
+		s.end_turn()
+	s.dev_balance("FOIL_SPEED", 10.0)
+	check_eq(s.launch_foil(s.human(), Vector3i(4, 4, 4))["error"], "", "通过记录里的正式行动展开")
+	for dim in [3, 2, 1]:
+		if dim == 3:
+			for i in Balance.FOIL_PREPARE_TURNS + 2:
+				s.end_turn()
+		else:
+			for i in 90:
+				if s.dimension == dim:
+					break
+				s.end_turn()
+		check_eq(s.dimension, dim, "保存各阶段局面")
+		show_state(s)
+		var expected := s.checksum()
+		var path := "user://_test_dimension_save.forest"
+		check_eq(view.saves.save_file(path), OK, "降维中或完成后可以保存")
+		await view.saves.load_file(path)
+		check_eq(view.state.checksum(), expected, "降维存档回放与保存状态一致")
+		check_eq(view.state.foil_zones, s.foil_zones, "多回合半格半径完整恢复")
+		DirAccess.remove_absolute(path)
+		s = view.state
+		if dim == 2:
+			for c in s.civs:
+				s.start_reduce(c)
+			for i in Balance.REDUCE_TURNS:
+				s.end_turn()
+			check_eq(s.launch_line_foil(s.human(), Vector3i(13, 13, s.flat_plane))["error"], "", "二维发射单向著")
+	Balance.apply(defaults)
+
+
 func test_panel_layout() -> void:
 	# 固定种子：随机开局里约一成的局一开始就看得到邻居（I 级马上开放），下面的检查就不成立了
 	show_state(GameState.new_game(1))
 	check(not view.state.human().discovered, "种子 1 开局还没发现别人（不成立就换一个种子）")
 	check(panel._tabs.get_tab_count() == 4, "面板有科技、建造、行动、情况四页")
-	check(panel._tech_tiles.size() == Tech.ALL.size(), "每项科技一个按钮")
+	check(view.tech_tree.tiles.size() == Tech.ALL.size(), "每项科技一个按钮")
 	check(panel._build_tiles.size() == panel.BUILD_ORDER.size() + 1, "每种建造一个按钮，外加自身降维")
 	check(overlay._status.text.contains("第 1 回合"), "状态栏显示回合")
 	var me: Civ = view.state.human()
-	check(panel._tech_tiles["probe"].disabled and panel._tech_tiles["dyson"].disabled, "已有的和没开放的科技不能点")
+	view.tech_tree.select_tech("probe")
+	check(view.tech_tree._research.disabled, "已有科技不能重复研究")
+	view.tech_tree.select_tech("dyson")
+	check(view.tech_tree._research.disabled, "没开放的科技不能研究")
+	check(not overlay._legend.visible and not overlay.show_vision.button_pressed, "开局收起图例和全体视野")
 	check(panel._tier_labels[1].text.contains("未开放"), "I 级开局未开放")
 	check(not panel._build_tiles["probe"].disabled, "开局可以造探测器")
 	check(panel._build_tiles["warship"].disabled, "没有战舰科技不能造战舰")
@@ -157,7 +332,7 @@ func test_panel_width() -> void:
 				"第 %d 页不把面板撑宽（最小 %.0f，面板 %.0f）" % [tab, panel.get_combined_minimum_size().x, width])
 	panel._tabs.current_tab = shown
 	# 方块按钮的高度跟着里面的字走，字不超出边框
-	var tiles: Array = actions._action_tiles.values() + panel._tech_tiles.values() + panel._upgrade_tiles.values() \
+	var tiles: Array = actions._action_tiles.values() + panel._upgrade_tiles.values() \
 			+ panel._build_tiles.values()
 	var fits := true
 	for tile: Button in tiles:
@@ -197,16 +372,27 @@ func test_research() -> void:
 	var s := fixture()
 	var me := s.human()
 	show_state(s)
-	panel._tech_tiles["warship"].pressed.emit()
+	view.tech_tree.select_tech("warship")
+	view.tech_tree._research.pressed.emit()
 	check(not me.has_tech("warship"), "I 级没开放时按钮不起作用")
 	me.tier1_turn = s.turn
 	view.refresh()
-	check(not panel._tech_tiles["warship"].disabled, "发现别人后可以升 I 级")
+	check(not view.tech_tree._research.disabled, "发现别人后可以升 I 级")
 	var energy := me.energy
-	panel._tech_tiles["warship"].pressed.emit()
+	var ap := me.actions_left
+	view.tech_tree.select_tech("warship")
+	view.tech_tree._research.pressed.emit()
 	check(me.has_tech("warship") and me.energy == energy - Tech.cost("warship")[0], "按钮升级科技并扣资源")
-	check(panel._tech_tiles["warship"].disabled and (panel._tech_tiles["warship"].get_meta("cost") as Label).text == "已有",
+	check(view.tech_tree._research.disabled and view.tech_tree.tiles["warship"].text.contains("已有"),
 			"升级后显示已有")
+	check_eq(me.actions_left, ap, "科技树研究不花行动点")
+	view.tech_tree.select_tech("beam")
+	check(not view.tech_tree._research.disabled, "研究战舰后同级武器解除前置锁定")
+	me.is_ai = true
+	view.refresh()
+	check(view.tech_tree._research.disabled, "AI 视角不能从科技树研究")
+	me.is_ai = false
+	view.refresh()
 	var actions := me.actions_left
 	panel._upgrade_tiles["telescope"].pressed.emit()
 	check(me.telescope == 1 and me.actions_left == actions, "升级射电望远镜不花行动点")
@@ -334,7 +520,7 @@ func test_selection() -> void:
 				return o
 		return {}
 	var home: Dictionary = find.call("c%s" % c)
-	check(not home.is_empty() and is_equal_approx(home["r"], 0.45 * 1.4), "母星系点得中，大小和画出来的光晕一样")
+	check(not home.is_empty() and is_equal_approx(home["r"], 0.35 * 1.4), "母星系点得中，大小和画出来的方块轮廓一样")
 	var hidden_system: Vector3i = map.NO_CELL
 	for sc in s.system_cells:
 		if s.map.star_at(sc) != StarMap.Star.NONE and not me.intel.has(sc) and not me.owns(sc) and not me.known.has(sc):
@@ -403,6 +589,9 @@ func test_ship_paths() -> void:
 	var probe: Ship = me.ships[-1]
 	s.dispatch(me, probe.id, Vector3(1, 0, 0))
 	view.refresh()
+	for obj in map._pickables():
+		if obj["key"] == "s%d" % probe.id:
+			map.select_object(obj)
 	var points: Array[Vector3] = s.predict_path(me, probe, map.PATH_TURNS)
 	check(points.size() == map.PATH_TURNS + 1 and points[1].x > points[0].x, "预测接下来几个回合的位置")
 	var tubes: int = map._tube_parts.size()
@@ -437,6 +626,33 @@ func test_hover_intel() -> void:
 	map._set_hover({})
 	map._set_hover(_pickable_at(c))
 	check(map._cursor_label.text.contains("10 回合前") and map._cursor_label.modulate.a < 1.0, "旧情报写明多久以前，字变淡")
+
+
+## 规则：V3，光粒
+## 光粒库存按有无记录，不能像戴森球、采矿船一样直接和整数比较。
+func test_hover_stored_grain() -> void:
+	var s := fixture()
+	var me := s.human()
+	me.dysons[me.home] = 2
+	me.miners[me.home] = 3
+	show_state(s)
+	map._set_hover(_pickable_at(me.home))
+	check(not map._cursor_label.text.contains("光粒"), "无库存时不显示光粒")
+	me.grains[me.home] = true
+	var checksum := s.checksum()
+	view.refresh()
+	var text: String = map._cursor_label.text
+	check(text.contains("光粒 ×1"), "有库存时悬停显示一颗光粒")
+	check(text.contains("戴森球 ×2") and text.contains("采矿船 ×3"), "计数设施仍显示真实数量")
+	map.select_object(_pickable_at(me.home))
+	check(map._selection_label.text.contains("光粒 ×1"), "选择同一星系也能显示光粒库存")
+	check_eq(s.checksum(), checksum, "悬停与选择不改变库存或对局状态")
+	await capture("hover-stored-grain")
+	me.grains.erase(me.home)
+	view.refresh()
+	check(not map._cursor_label.text.contains("光粒") and not map._selection_label.text.contains("光粒"), "库存用掉后刷新移除悬停与选择提示中的光粒")
+	map._set_hover({})
+	map.select_object({})
 
 
 func test_sightings_drawn() -> void:
@@ -542,11 +758,16 @@ func test_flat_and_line() -> void:
 	check(s.human().foils.size() == 1, "通过执行按钮发射二向箔")
 	s.launch_foil(s.civs[1], Vector3i(7, 7, 7))
 	map._set_hover(_pickable_at(s.human().home))
+	var plane_captured := false
 	for i in 180:
 		if s.all_flat():
 			break
 		panel._end.pressed.emit()
 		await process_frame
+		if not plane_captured and s.flattened.size() > 150:
+			await settled_frame()
+			await capture("collapsing-to-plane")
+			plane_captured = true
 	await settled_frame()
 	check(s.all_flat() and not s.is_over(), "3D 结束后进入可玩的 2D")
 	check(not panel._end.disabled, "二维可以继续结束回合")
@@ -566,6 +787,7 @@ func test_flat_and_line() -> void:
 	check(actions._target_cell() == Vector3i(26, 26, s.flat_plane), "远端二维目标选取准确")
 	for segment in segments.values():
 		check(segment[0].z == s.flat_plane and segment[1].z == s.flat_plane, "二维每条线段位于同一平面")
+	_check_flat_helpers(s, "二维", 48, func(p: Vector3, at: Vector3) -> bool: return absf(p.z - at.z) < 1e-4)
 	await capture("two-dimensional")
 
 	panel._build_tiles["reduce"].pressed.emit()
@@ -590,6 +812,9 @@ func test_flat_and_line() -> void:
 			captured = true
 	await settled_frame()
 	check(s.all_linear(), "整张星图压成直线")
+	_check_flat_helpers(s, "一维", 3, func(p: Vector3, at: Vector3) -> bool:
+		return absf(p.z - at.z) < 1e-4 and absf(p.y - at.y) <= 0.6 + 1e-4)
+	await _check_line_camera_and_controls(s)
 	actions._action_tiles[actions.Action.SINGULARITY].pressed.emit()
 	check(not actions._go.disabled, "一维里可以发射奇异点")
 	actions._go.pressed.emit()
@@ -615,6 +840,106 @@ func test_flat_and_line() -> void:
 	map.redraw_grid()
 	check(not map.animating() and map._zero_dot.visible and not map._grid.visible, "换局面时直接画成零维，不放动画")
 	await capture("zero-dimensional")
+
+
+## 二维、一维里自己发出的广播和视野不伸出平面或直线：广播画成 rings 根粗线，每根的两头都满足
+## in_space(端点, 广播者画在哪)；视野不再画成球。
+func _check_flat_helpers(s: GameState, label: String, rings: int, in_space: Callable) -> void:
+	var me := s.human()
+	var from := Vector3(me.home)
+	s.broadcasts.append({"from": from, "target": me.home, "sender": me, "exposed": false, "radius": 3.0,
+			"heard": {}, "hidden_heard": {}})
+	view.overlay.show_vision.button_pressed = true
+	view.refresh()
+	var at: Vector3 = map._warp_point(from)
+	var parts: Array = map._tube_parts.filter(func(p): return p[2] == Color(map.COLOR_BROADCAST, 0.45))
+	check_eq(parts.size(), rings, "%s的广播画 %d 根粗线" % [label, rings])
+	for p in parts:
+		check(in_space.call(p[0], at) and in_space.call(p[1], at), "%s的广播圆圈不伸出%s（%s → %s）" % [label, label, p[0], p[1]])
+	var balls := 0
+	for node in map._markers.get_children():
+		if node is MeshInstance3D and node.mesh is SphereMesh:
+			balls += 1
+	check(balls == 0, "%s的视野不画成球" % label)
+	s.broadcasts.pop_back()
+	view.refresh()
+
+
+## 一维的镜头和操作：进入一维时对准自己的据点、直线横着；拖动沿直线走，能从一头走到另一头；
+## 近看能点中母星；方向只有 -x、+x 两个按钮，没有角度圆盘和 y、z 输入。
+func _check_line_camera_and_controls(s: GameState) -> void:
+	var me := s.human()
+	map._snap_camera()
+	var home: Vector3 = map._warp_point(Vector3(me.home))
+	check(absf(map._goal_yaw) < 1e-4 and map._goal_distance == map.LINE_DISTANCE, "进入一维时直线横着、离得近")
+	check(map._goal_focus.distance_to(home) < 1e-3, "进入一维时对准自己的母星")
+	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell") == me.home, "一维近看时能点中母星")
+	var bounds: AABB = map._visual_bounds()
+	for side in [1.0, -1.0]:
+		var end: float = bounds.end.x if side > 0.0 else bounds.position.x
+		for i in 3000:
+			if (map._goal_focus.x - end) * side >= 0.0:
+				break
+			map._pan(-300.0 * side, 0.0)
+		check((map._goal_focus.x - end) * side >= 0.0, "拖动能沿直线走到 x = %.0f 那一头（停在 %.1f）" % [end, map._goal_focus.x])
+		check(absf(map._goal_focus.y - home.y) < 1e-3 and absf(map._goal_focus.z - home.z) < 1e-3, "拖动只沿直线走")
+	# 转过视角以后左右拖动仍沿直线走，包括顺着直线看（水平角 90°）
+	for yaw in [45.0, 89.0, 90.0, 180.0, -90.0]:
+		map.reset_view(true)
+		map._goal_yaw = yaw
+		map._snap_camera()
+		var before: Vector3 = map._goal_focus
+		map._pan(-300.0, 0.0)
+		check(absf(map._goal_focus.x - before.x) > 1.0, "水平角 %.0f° 时左右拖动沿直线走" % yaw)
+		check(absf(map._goal_focus.y - before.y) < 1e-3 and absf(map._goal_focus.z - before.z) < 1e-3, "水平角 %.0f° 时仍只沿直线走" % yaw)
+	map.reset_view(true)
+	check(map._focus.distance_to(home) < 1e-3, "V 回到自己的母星")
+	check(absf(map._yaw) < 1e-4, "V 也把视角转回来")
+	actions._action_tiles[actions.Action.DISPATCH].pressed.emit()
+	check(actions._line_dirs.visible and not actions._yaw_box.visible and not actions._pitch_box.visible, "一维只有 -x、+x 两个方向按钮")
+	check(not actions._coord_boxes[1].visible and not actions._coord_boxes[2].visible, "一维不显示 y、z 输入")
+	actions._line_left.pressed.emit()
+	check_eq(actions._direction(), Vector3(-1, 0, 0), "按 -x 朝 x 变小的一边")
+	actions._line_right.pressed.emit()
+	check_eq(actions._direction(), Vector3(1, 0, 0), "按 +x 朝 x 变大的一边")
+	check(actions._line_right.button_pressed and not actions._line_left.button_pressed, "按钮显示现在的方向")
+	await capture("one-dimensional")
+
+
+## 回合推得很快、展开动画还没播完就进入一维时，镜头仍对准自己据点最后的位置。
+func test_fast_line_collapse_frames_home() -> void:
+	var s := fixture()
+	for civ in s.civs:
+		civ.reduced = true
+		civ.line_reduced = true
+	s._unfold_foil(Vector3i(4, 4, 4))
+	for i in 40:
+		if s.all_flat():
+			break
+		s._spread_flat()
+	check(s.all_flat(), "测试准备：进入二维")
+	show_state(s)
+	await settled_frame()
+	s._unfold_line_foil(Vector3i(0, 13, s.flat_plane))
+	view.set_process(false)
+	map.set_process(false)
+	for i in 80:
+		if s.all_linear():
+			break
+		panel._end.pressed.emit()  # 不等动画，马上推下一回合
+	check(s.all_linear(), "测试准备：进入一维")
+	view.set_process(true)
+	map.set_process(true)
+	await settled_frame()
+	var home: Vector3 = map._warp_point(Vector3(s.human().home))
+	check(map._goal_focus.distance_to(home) < 1e-3, "动画追上以后镜头对准母星（差 %.1f 格）" % map._goal_focus.distance_to(home))
+	map._snap_camera()
+	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell") == s.human().home, "近看能点中母星")
+	map._pan(-300.0, 0.0)
+	await settled_frame()
+	check(map._goal_focus.distance_to(home) > 1.0, "之后手动平移不会被拉回去")
 
 
 ## 胜负分出以后不再按按钮，画面每帧自己把还没压完的空间压完。
@@ -714,6 +1039,53 @@ func test_debug_take_over_ai() -> void:
 	view.debug._autoplay.toggled.emit(true)
 	check(ai.is_ai, "再勾上就交还给 AI")
 	view.debug.set_view(0)
+
+
+## 往回跳用局面缓存：缓存里有的直接取；没有的分段补算，能看到进度、能取消；改过数值也能退回去。
+func test_debug_rewind_cache() -> void:
+	var d = view.debug
+	var s := _debug_game(26, true)
+	for i in 25:
+		d.step_forward(true, false)
+	var sums: Array[int] = s.checksums.duplicate()
+	d.seek(24)
+	check(view.state.steps == 24 and view.state.checksum() == sums[23] and d._note.contains("缓存"),
+			"退一回合直接取缓存里的局面")
+	d.seek(23)
+	d.seek(22)
+	check(view.state.checksum() == sums[21] and d._note.contains("缓存"), "连着往回退也直接取")
+	d.seek(25)
+	check(view.state.checksum() == s.checksum() and not d.replaying(), "再跳回最后，和原来一样，回到实时")
+	# 缓存清空后从开局补算：每算一回合停一下，能看到进度；中途取消，留在原来的局面
+	d.snapshots.clear()
+	d.seek_slice = 0
+	var before: GameState = view.state
+	d.seek(12)
+	check(d.seeking and d._note.contains("补算") and d.locked_reason() != "" and panel._end.disabled,
+			"算的时候显示进度，不能操作")
+	await process_frame
+	await process_frame
+	d.cancel_seek()
+	for i in 5:
+		await process_frame
+	check(not d.seeking and view.state == before and not d.replaying() and view.state.steps == 25,
+			"取消后留在原来的局面")
+	d.seek(12)
+	while d.seeking:
+		await process_frame
+	check(view.state.steps == 12 and view.state.checksum() == sums[11] and d.replaying(), "不取消就算完再换局面")
+	# 从中间接着玩、改数值，再往回退：数值回到当时的，局面和当时一样
+	d.seek_slice = 100
+	d.resume_here()
+	var energy := Balance.ENERGY_PER_STAR
+	d._dev(func(st): return st.dev_balance("ENERGY_PER_STAR", energy + 5))
+	for i in 3:
+		d.step_forward(true, false)
+	var changed_sum: int = view.state.checksum()
+	d.seek(11)
+	check(Balance.ENERGY_PER_STAR == energy and view.state.checksum() == sums[10], "改数值以前的回合，数值也是当时的")
+	d.seek(15)
+	check(Balance.ENERGY_PER_STAR == energy + 5 and view.state.checksum() == changed_sum, "跳回改数值以后，数值又是改过的")
 
 
 func test_debug_playback() -> void:
@@ -837,3 +1209,121 @@ func test_debug_after_death() -> void:
 	view.debug.set_view(1)
 	check(view.viewed() == view.state.civs[1], "可以换成活着的 AI 的视角接着看")
 	view.debug.set_view(0)
+
+
+## 规则：V1
+## 全屏依赖树：实际前置始终从左到右，查看锁定节点不扣资源，模态界面不触发星图快捷键。
+func test_tech_tree() -> void:
+	var s := fixture()
+	show_state(s)
+	var tree = view.tech_tree
+	tree.open_tree()
+	await process_frame
+	check(tree.visible and tree.size.is_equal_approx(root.get_visible_rect().size), "科技树覆盖整个逻辑画布")
+	var count := 0
+	for id in Tech.ALL:
+		for need in Tech.ALL[id]["needs"]:
+			count += 1
+			check(tree.edges.has([need, id]), "真实前置都有连线：" + id)
+			check(tree.tiles[need].position.x + tree.tiles[need].size.x < tree.tiles[id].position.x, "前置始终在目标左边：" + id)
+	check_eq(tree.edges.size(), count, "没有凭空添加前置连线")
+	tree.tiles["domain"].pressed.emit()
+	check(tree._research.disabled and tree._details.text.contains("曲率引擎"), "锁定节点可查看前置和研究条件")
+	var before := s.checksum()
+	tree._research.pressed.emit()
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.shift_pressed = true
+	key.keycode = KEY_ENTER
+	view._on_key(key, root)
+	check_eq(s.checksum(), before, "锁定研究和结束回合快捷键不会修改局面")
+	key.physical_keycode = KEY_G
+	var grid: int = map.grid_mode
+	check(not map._camera_key(key) and map.grid_mode == grid, "全屏科技树阻止地图快捷键")
+	s.human().tier1_turn = s.turn
+	s.human().energy = 0
+	tree.select_tech("warship")
+	check(tree._research.disabled and tree._details.text.contains(s.research_error(s.human(), "warship")), "资源不足说明来自规则")
+	view.window_settings.apply_ui_scale(1.0)
+	root.size = Vector2i(1280, 800)
+	await process_frame
+	tree.select_tech("warship")
+	s.human().energy = 1000
+	view.refresh()
+	await capture("tech-tree")
+	root.size = Vector2i(600, 900)
+	await process_frame
+	await process_frame
+	check(tree.size.x <= root.get_visible_rect().size.x + 1, "窄屏科技树在屏幕内，图可滚动")
+	tree._scroll.ensure_control_visible(tree.tiles["domain"])
+	await capture("tech-tree-portrait")
+	key.shift_pressed = false
+	key.keycode = KEY_ESCAPE
+	view._on_key(key, root)
+	check(not tree.visible, "Esc 返回星图")
+	root.size = Vector2i(1280, 800)
+	await process_frame
+	await process_frame
+	view.show_panel(2)
+
+
+## 规则：V2，V3
+## 密集局面：停泊聚合、航线按需、广播有上限，同时保留全部可见舰船和敌情。
+func test_map_clarity() -> void:
+	var s := fixture()
+	var me := s.human()
+	s.turn = 25
+	for i in 36:
+		var ship := Ship.make(Ship.PROBE if i % 2 == 0 else Ship.WARSHIP, Vector3.ZERO, i + 1)
+		if i >= 12:
+			ship.pos = Vector3(1 + i % 6, 1 + (i / 6) % 4, 2 + i % 3)
+			ship.docked = false
+			ship.direction = Vector3.RIGHT
+		me.ships.append(ship)
+	me.dysons[me.home] = 3
+	me.miners[me.home] = 4
+	me.broadcasters[me.home] = true
+	for i in 8:
+		s.broadcasts.append({"from": Vector3(me.home), "target": Vector3i(8, 8, 8), "sender": me, "radius": 1.0 + i * 0.5})
+	me.sightings.append({"pos": Vector3(5, 4, 4), "kind": Ship.WARSHIP, "turn": s.turn})
+	me.alerts.append({"pos": Vector3(2, 2, 2)})
+	me.known[Vector3i(8, 8, 8)] = s.turn
+	me.intel[Vector3i(8, 8, 8)] = s.snapshot(Vector3i(8, 8, 8))
+	show_state(s)
+	view.show_panel(3)
+	overlay.show_details.button_pressed = false
+	overlay.show_vision.button_pressed = false
+	view.refresh()
+	map.reset_view(true)
+	var overview: int = map._tube_parts.size()
+	var keys: Array = map._pickables().map(func(obj): return obj["key"])
+	check_eq(map._wave_nodes.size(), 3, "八条传播只显示最近三条，每条一个圈")
+	for i in map._wave_nodes.size():
+		check(is_equal_approx((map._wave_nodes[i].mesh as TorusMesh).outer_radius, 3.51 + i * 0.5), "显示的是最新广播的半径")
+	s.broadcasts.append({"from": Vector3(8, 8, 8), "target": Vector3i.ZERO, "sender": s.civs[1], "radius": 2.0})
+	view.refresh()
+	check_eq(map.active_broadcasts(me).size(), 8, "概览不会泄露未听到的敌方广播")
+	check_eq(map._wave_nodes.size(), 3, "敌方广播不会挤掉己方波前")
+	check(overlay._broadcast_summary.text.contains("8 条"), "摘要说明实际传播条数")
+	check_eq(keys.filter(func(key): return key.begins_with("s")).size(), 24, "所有飞行单位仍可见可选")
+	check(keys.any(func(key): return key.begins_with("a")), "简洁模式保留预警")
+	check(map._cell_info(me.home).contains("×6") and map._cell_info(me.home).contains("戴森球"), "聚合舰队及设施仍有具体信息")
+	var dock_labels := 0
+	for child in map._markers.get_children():
+		if child is Label3D and child.text == "停泊 12":
+			dock_labels += 1
+	check_eq(dock_labels, 1, "十二艘停泊舰船合并成一个数量标记")
+	await capture("midgame-overview")
+	overlay.show_details.button_pressed = true
+	check(map._tube_parts.size() > overview + 24, "详细模式展开全体航线")
+	check_eq(map._pickables().map(func(obj): return obj["key"]), keys, "显示密度不改变可见情报和点选对象")
+	await capture("midgame-detail")
+	overlay.show_details.button_pressed = false
+	for obj in map._pickables():
+		if obj["key"] == "s13":
+			map.select_object(obj)
+	check(map._tube_parts.size() > overview, "点击单位立即显示其航线")
+	check(map._tube_parts.size() < overview + 24, "选中单位不会展开整支舰队的航线")
+	map.select_object({})
+	check_eq(map._tube_parts.size(), overview, "取消选择立即收起航线")
+	view.show_panel(2)

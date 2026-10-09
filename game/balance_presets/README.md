@@ -24,3 +24,8 @@ STAR_WEIGHTS=[6, 3, 1]
 
 方案定下来要成为正式数值时，写回 `balance.cfg`，再跑 `uv run game/tools/update_docs.py` 更新文档里的数字，
 然后可以把这个方案文件删掉。
+
+## 科技节奏候选
+
+`longer-tech-stages.cfg` 提高 II、III 级研究价格，略提高殖民成本，降低战舰建造与调度成本。
+这是供后续试玩比较的候选，不是默认数值；首轮对照没有证明能解决长期对局问题，结果见[现状](../../docs/status.md#平衡模拟的最新结果)。

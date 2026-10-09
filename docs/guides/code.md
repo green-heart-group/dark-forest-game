@@ -5,6 +5,7 @@
 
 代码都在 `game/`（Godot 4.7 项目，GDScript）。最重要的一条：**规则和画面分开**。
 规则代码不知道画面存在，所以能不开窗口跑测试和平衡模拟；画面只读规则数据，要改局面就调用规则的函数。
+旧 Python 版已归档，不再改动，也不合并回主分支，见[归档决定](../decisions/0002-archive-python.md)。
 
 只看画面效果、不开对局的演示放在 `game/demos/`，现在有一个：[降维展开演示](dimension-unfolding.md)。
 它和规则共用 `unfolding_layout.gd`。
@@ -21,13 +22,15 @@
 | `foil.gd` | 飞行中的二向箔、单向著 |
 | `star_map.gd` | 星图生成，以及每局当前阶段的原点、边长和边界 |
 | `dimension_space.gd` | 降维时每一格在三维、二维、一维里各在哪；全图展开完一次性换坐标；给画面算展开到一半时的样子 |
-| `unfolding_layout.gd` | 一列 9 格怎样按顺时针铺成 3×3，展开到一半时画在哪（规则和演示共用） |
+| `unfolding_layout.gd` | 一列 9 格怎样按顺时针铺成 3×3，展开到一半时画在哪；每格在三维、二维、一维里的固定位置（皮亚诺曲线），多个原点球形扩张时画在哪（规则和演示共用） |
 | `tech.gd` | 科技树：编号、名字、等级、前置 |
 | `geometry.gd` | 沿方向飞行、视野圆锥用到的几何计算 |
 | `ai.gd` | AI 每回合怎么行动（顺序见 [原型现在的规则 §11](../design/current-rules.md#11-ai-怎么行动)） |
 | `balance.gd` | 所有数值的名字和类型（按 `game/balance.cfg` 生成）；读 `balance.cfg`，按名字读改数值、检查类型 |
 | `balance_presets.gd` | 数值方案：存、读；把数值写回 `balance.cfg` |
 | `replay.gd` | 对局记录 |
+| `state_copy.gd` | 把一局的状态打包成压缩的字节、再恢复成新的一份（调试面板的局面缓存用） |
+| `snapshots.gd` | 调试面板往回跳用的局面缓存：存哪些回合、取的时候核对是不是同一条历史 |
 
 要守的规矩：
 
@@ -76,9 +79,11 @@
 | `main.gd` | 把下面几部分接起来：开局、刷新、结束回合、重开、快捷键 |
 | `map_view.gd` | 3D 星图：相机和视角快捷键、网格（几种画法）、压平和降到零维的动画、坐标轴、所有标记和航线；单击选中画出来的东西（`select_object`，贴着轮廓画黄圈，看不到的选不中），点了格子发出 `cell_clicked`。半透明颜色都经过 `_shown()`，网页版里才不会变淡 |
 | `side_panel.gd` | 右侧面板：资源、发射源、科技 / 建造 / 行动 / 情况四页、结束回合 |
+| `tech_tree.gd` | 全屏横向科技依赖图：拓扑分列、连线、节点状态、详情与研究；前置只取 `Tech.ALL`，条件只问规则 |
 | `action_page.gd` | 右侧面板的「行动」页：选行动、给方向或目标、执行 |
 | `angle_dial.gd` | 「行动」页上调方向的两个圆盘（水平角、俯仰角）。目标 = 发射源 + 方向 × 距离 |
 | `overlay.gd` | 盖在星图左边的一层：回合状态、重开、图例、视角操作说明、网格画法、日志、短暂提示 |
+| `saved_games.gd` | 普通游戏存读档界面：对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
 | `window_settings.gd` | 窗口位置和大小、界面大小，存在 `user://settings.cfg`；网页版改用随游戏带的字体 |
 | `debug_panel.gd` | 开发者调试面板（用法见 [调试模式](debug-tools.md)） |
 | `web_files.gd` | 网页版专用：读网址里的参数（`?debug&seed=123`），把文件下载到电脑、让玩家上传文件 |
@@ -86,7 +91,9 @@
 | `tip.gd` | 鼠标悬停说明，限宽换行 |
 
 各部分都通过 `main` 拿 `state`（当前的 `GameState`）和别的部分，例如 `main.panel`、`main.overlay`。
-规则状态变了以后调用 `main.refresh()`，它按顺序刷新面板、星图和叠加层。
+规则状态变了以后调用 `main.refresh()`，它按顺序刷新面板、星图、叠加层和科技树。
+星图概览与详细模式共用同一份可见对象；`select_object()` 会重画按选择显示的细节，刷新内部的重新选择传 `redraw=false`，避免递归。
+全屏科技树阻止底层星图输入，打开时暂停自动播放，节点研究仍走面板调用规则的路径。
 
 要守的规矩：
 
@@ -95,10 +102,11 @@
 - **能不能做、要花多少，问规则**（上一节的 `xxx_error()`、`action_cost()`），不在画面里另写判断。
   画面要用的其他规则上的答案也问规则：单位接下来飞到哪（`predict_path()`）、箔压到哪一层（`foil_plane_for()`、`line_y_for()`）、
   哪些格子在黑域里（`in_black_domain()`）、哪些单位能派出或转向（`Ship.AIMED`、`Ship.TURNABLE`、`Ship.waiting()`）。
+- **面板可收起**：星图镜头与点选用 `main.panel_width()` 读取实际占用宽度，不能写死面板宽度。窄屏切换逻辑画布并自动收起，读档完成后重新定位镜头。
 - **按「正在看的文明」画**：用 `main.viewed()`，不要写死 `state.human()`。调试时可以换成别的文明的视角，
   以后多人对战也靠它。
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
-- **快捷键**：Ctrl 组合键和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
+- **快捷键**：Ctrl / Alt 组合键、Shift+Enter 和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
   视角键在 `map_view.gd`（按住的 WASD 等每帧查，H、V、T、G 在 `_camera_key`）。新加快捷键前先看这两处，别撞键；
   认键的位置（`physical_keycode`），在输入框里打字时不响应。
 - **界面大小**：按 1280×800 等比缩放（项目设置 `canvas_items` + `expand`），再乘上 `ui_scale`
@@ -143,13 +151,18 @@
 | `game/tests/run_view_tests.gd` | 画面测试：检查界面和星图显示的东西和规则一致。按 `run_tests()` 里写的顺序跑 |
 | `game/tests/run_unfolding_tests.gd` | 展开演示的测试：格子一个不少、相邻的列展开时不重叠、控件和关键画面。`test.py` 也跑它 |
 | `game/tests/test_log.gd` | 各套测试共用的记结果的部分：数测试和检查、失败时写出是哪个测试、最后的汇总；命令行参数 `only=`、`tests=`、`report=`、`stop_on_fail`（说明在文件开头） |
-| `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计对局怎么发展 |
+| `game/tools/simulate.gd` | 平衡模拟：5 个文明全由 AI 控制，打很多局，统计各维度首次进入、最高已开放科技等级停留回合及全体文明淘汰原因；淘汰事件只用于统计，不参与规则 |
 | `game/tools/sync_balance.py` | 按 `game/balance.cfg` 重新生成 `balance.gd` 里的数值声明；`--check` 只检查（见上面「数值」） |
 | `game/tools/update_docs.py` | 把文档里标了数值名的数字改成 `balance.cfg` 的值，重新生成 cog 管的表格；`--check` 只检查（见「写测试的规矩」） |
 | `game/tools/make_web_fonts.py` | 做网页版带的字体（网页里用不了电脑上装的字体）：只留游戏文字用到的字，存到 `game/view/web_fonts/`（不进仓库） |
-| `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`docs/images/*.gif`）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
+| `game/tools/make_readme_gifs.py`、`record_gifs.gd` | 重新录 README 里的四段动图（`build/readme_gifs/*.gif`，不进仓库）：Godot 在屏幕外把每帧存成 PNG，ffmpeg 拼成 GIF。画面改了以后跑 `uv run game/tools/make_readme_gifs.py` |
 
-- 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样），所以只有输出「0 个失败」才可信。
+README 的四段演示动图保存在 GitHub 的 [README 演示素材](https://github.com/green-heart-group/dark-forest-game/issues/6) Issue 附件中，README 的 `<img src>` 使用附件地址。
+重录后把 `build/readme_gifs/` 中的新 GIF 上传到该 Issue 的新评论，再将 README 中对应的地址换成上传后生成的链接；保留已被旧文档引用的附件。
+不要把 GIF 提交进仓库，也不要用短期有效的下载链接。代码、录制脚本和文档仍由 Git 管理。
+
+- 改完代码，按根目录 [README「测试和平衡模拟」](../../README.md#测试和平衡模拟)跑全部测试，包括规则、画面和展开演示，每组都输出「0 个失败」才算通过。
+- 一个测试一次检查都没跑到也算失败（脚本编译出错时会这样）。
 - 新增 `class_name` 以后，要先跑一次 `godot_console --headless --path game --import`，让 Godot 认识这个新名字
   （`test.py` 每次都先导入）。
 - 在终端里用 `godot_console`，不要用 `godot`（原因见 [让 AI 助手操作 Godot](agent-tools.md#方法一命令行主力)）。
@@ -177,12 +190,7 @@
   `test_repo.gd` 的 `test_every_rule_has_a_test` 会检查：规则文档里每个最小的一节（「还没做的」除外）和正文里出现的每个编号，
   都至少有一个测试写到；测试上写的标题和编号在文档里都找得到。所以改了规则文档的标题、加了新的一节或新的编号，测试也要跟上。
   GDScript 还没有好用的工具统计「测试跑到了哪些代码行」，这个检查是用来代替它的：至少保证每条规则都有测试。
-- **文档也有测试**：`test_docs.gd` 检查文档的规矩（为什么这样分见 [文档入口](../README.md#现在的事实和历史记录)），
-  只改了文档时跑 `uv run game/tools/test.py rules --only docs` 就够了：
-  - 游戏设计、原型现在的规则和决定记录里写到的编号（U1、F3.5……），要么在 [决定记录「编号从哪里来」](../design/decision-log.md#编号从哪里来) 登记了来源，
-    要么是 [要确定的问题](../open-questions.md) 里还开着的问题；决定记录里已经有决定的编号，不能还留在要确定的问题里。
-  - 「现在的事实」那些文件里没有分支名、合没合并、本机路径、勾选清单（路线图除外）；测试个数只在 `docs/status.md`。
-  - `docs/` 下每个目录都有 `README.md`，列出目录里的每个文件和下一级目录。
+- **文档也有测试**：检查范围和只改文档时的验证方法，见[文档检查](../README.md#文档检查)。
 - **文档里由代码决定的部分自动更新**，不手改（`game/tools/update_docs.py`，只管它的 `FILES` 里列出的文件，
   现在只有原型现在的规则；开发日志这类历史记录写着当时的数字，不跟着改）：
   - 数字后面跟着看不见的标记 `<!-- 数值名 -->`（数组写 `<!-- 数值名[0] -->`）的，改成 `balance.cfg` 里写的值，
@@ -207,3 +215,4 @@
 
 - Godot 给每个脚本生成的 `*.uid` 文件要提交（Godot 靠它找文件）。
 - `game/.godot/` 是缓存，不提交。
+- 测试自动生成或更新的文件一起提交，包括 `balance.gd` 的数值声明和文档里生成的部分；GitHub 上跑完测试，`docs/` 或 `balance.gd` 有变化就算失败。

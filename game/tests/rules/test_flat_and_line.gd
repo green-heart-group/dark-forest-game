@@ -2,6 +2,20 @@ extends "res://tests/rules/rule_suite.gd"
 ## 全图压平以后：共同平面、二维、单向著、一维、奇异点和平局。
 
 
+## 规则：二维、单向著和奇异点，U5
+func test_line_wave_accumulates_half_steps() -> void:
+	var s := _two_dimensional_match()
+	for c in s.civs:
+		c.line_reduced = true
+	var at := Vector3i(13, 13, s.flat_plane)
+	s._unfold_line_foil(at)
+	s._spread_flat()
+	check_eq(s.line_zones[0]["age"], 0.5, "单向著也保留半格进度")
+	check(not s.linearized.has(at + Vector3i.RIGHT), "第一回合不波及邻格")
+	s._spread_flat()
+	check(s.linearized.has(at + Vector3i.RIGHT), "第二回合到达邻格")
+
+
 ## 规则：二向箔，U1
 func test_foils_share_one_plane() -> void:
 	var s := _collapse_match()
@@ -50,6 +64,26 @@ func test_line_foil_requires_two_dimensional_world() -> void:
 	check(s.launch_foil(s.human(), Vector3i(3, 3, 4))["error"] != "", "二维后不能再发二向箔")
 
 
+## 二向箔改成只在目标展开（U2），单向著仍然在路上碰到别人的星系就展开。
+## 规则：二维、单向著和奇异点，U2
+func test_line_foil_still_unfolds_on_enemy_in_path() -> void:
+	var s := _two_dimensional_match()
+	var me := s.human()
+	# AI 在平面中间有一个殖民地；从它左边一格的星舰发射，目标在右边一格，正好穿过它
+	var enemy := Vector3i(13, 13, s.flat_plane)
+	check(s.coord_owner(enemy) == null, "测试准备：这一格原来没有主人")
+	s.civs[1].colonies.append(enemy)
+	var from := enemy - Vector3i(1, 0, 0)
+	var target := enemy + Vector3i(1, 0, 0)
+	_ship(s, me, Ship.STARSHIP, Vector3(from))
+	check(s.launch_line_foil(me, target, from)["error"] == "", "从星舰发射单向著")
+	for i in Balance.FOIL_PREPARE_TURNS + 20:
+		if s.line_y >= 0:
+			break
+		s.end_turn()
+	check_eq(s.line_anchor, enemy, "单向著在路上碰到的别人的星系展开")
+
+
 ## 规则：自身降维
 func test_second_self_reduction() -> void:
 	var s := _two_dimensional_match()
@@ -84,7 +118,7 @@ func test_singularity_wins() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(4, 4, s.flat_plane))
-	for i in 30:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -124,7 +158,7 @@ func test_hidden_weapon_matches_dimension() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(4, 4, s.flat_plane))
-	for i in 30:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_linear():
 			break
 		s.end_turn()
@@ -232,7 +266,7 @@ func test_unfold_preserves_systems_assets_and_environment() -> void:
 	check(me.bunkers.has(dest) and me.broadcasters.has(dest) and me.pending[0]["at"] == dest, "防御和待建队列迁移")
 	check(me.pending_domains[0]["center"] == dest and s.black_domains[0]["center"] == dest, "黑域准备和中心迁移")
 	check(s.light_at(dest) == 0.25 and s.map.is_habitable(dest) and s.map.rocky[dest] == 1, "光速、行星及宜居信息保留")
-	check(scout.pos.z == 4 and scout.direction.z == 0 and scout.direction.length() > 0, "浮点舰船和竖直航向转入二维")
+	check(scout.pos.z == 4 and scout.direction == Vector3.ZERO and scout.speed == 0.0, "浮点舰船转入二维；正好竖着飞的没有平面里的方向，停下（U3）")
 	check(s.cell_exists(Vector3i(26, 26, 4)) and not s.cell_exists(Vector3i(27, 0, 4)), "新边界生效")
 	check(not s.cell_exists(Vector3i(26, 26, 5)), "二维平面外不是有效格子")
 
@@ -248,7 +282,7 @@ func test_dimension_mapping_bijection_and_movement() -> void:
 	for civ in s.civs:
 		civ.line_reduced = true
 	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		s._spread_flat()
 	check(s.all_linear() and s.map.extent == Vector3i(729, 1, 1), "二维再次展开为 729 格直线")
 	check(s.map.cells().size() == 729 and s.civs[0].home != s.civs[1].home, "一维仍没有坐标覆盖")
@@ -260,10 +294,10 @@ func test_dimension_mapping_bijection_and_movement() -> void:
 
 
 ## 规则：二向箔，二维、单向著和奇异点
-func test_unprepared_ship_entering_folded_column_dies() -> void:
+func test_unprepared_ship_entering_flattened_cell_dies() -> void:
 	var s := _collapse_match()
 	s.human().reduced = false
-	s._unfold_foil(Vector3i(3, 0, 0))
+	s._unfold_foil(Vector3i(3, 0, 4))
 	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2.9, 0, 4), Vector3.RIGHT)
 	ship.speed = 0.5
 	s._move_ship(s.human(), ship)
@@ -272,7 +306,96 @@ func test_unprepared_ship_entering_folded_column_dies() -> void:
 
 func _finish_flat(s: GameState, anchor := Vector3i(4, 4, 4)) -> void:
 	s._unfold_foil(anchor)
-	for i in 40:
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
 		if s.all_flat():
 			break
 		s._spread_flat()
+
+
+## 规则：二向箔，U3
+func test_foil_spreads_as_sphere_from_landing_cell() -> void:
+	var s := _collapse_match()
+	s._unfold_foil(Vector3i(4, 4, 2))
+	s.foil_zones[0]["age"] = 2.0
+	s._apply_zone(s.foil_zones[0])
+	check(s.flattened.has(Vector3i(4, 4, 4)) and s.flattened.has(Vector3i(6, 4, 2)), "上下和水平都按直线距离扫到 2 格")
+	check(not s.flattened.has(Vector3i(4, 4, 5)), "竖着超过 2 格的不扫（不再整列一起）")
+	check(not s.flattened.has(Vector3i(6, 4, 4)), "斜着超过 2 格的不扫")
+
+
+## 规则：二向箔，U3
+func test_flat_position_does_not_depend_on_strike() -> void:
+	var homes := []
+	for at in [Vector3i(4, 4, 4), Vector3i(0, 8, 1)]:
+		var s := _collapse_match()
+		var before: Array = s.civs.map(func(c): return c.home)
+		_finish_flat(s, at)
+		check(s.all_flat(), "测试准备：压平")
+		for i in s.civs.size():
+			var p := DimensionSpace.Layout.fixed_plane(before[i])
+			check_eq(Vector2i(s.civs[i].home.x, s.civs[i].home.y), p, "母星系落在固定映射的位置")
+		homes.append(s.civs.map(func(c): return Vector2i(c.home.x, c.home.y)))
+	check_eq(homes[0], homes[1], "打在不同地方，压平后的坐标一样")
+
+
+## 规则：二向箔，U3
+func test_same_turn_foils_average_plane_height() -> void:
+	for order in [[Vector3i(1, 1, 2), Vector3i(7, 6, 5)], [Vector3i(7, 6, 5), Vector3i(1, 1, 2)]]:
+		var s := _collapse_match()
+		for at in order:
+			s._unfold_foil(at)
+		check_eq(s.flat_plane, 4, "同一回合两片箔 z 是 2 和 5，平均 3.5 往上取 4，和先后无关")
+		check(s.flattened.values().all(func(z): return z == 4), "已经压平的格子也记到这个高度")
+		s._spread_flat()
+		s._unfold_foil(Vector3i(8, 0, 8))
+		check_eq(s.flat_plane, 4, "之后的箔不再改平面高度")
+
+
+## 规则：二维、单向著和奇异点，U3
+func test_line_spreads_as_circle_and_keeps_curve_order() -> void:
+	var s := _two_dimensional_match()
+	for civ in s.civs:
+		civ.line_reduced = true
+	var before: Array = s.civs.map(func(c): return c.home)
+	var at := Vector3i(13, 13, s.flat_plane)
+	s._unfold_line_foil(at)
+	s.line_zones[0]["age"] = 3.0
+	s._apply_line_zone(s.line_zones[0])
+	check(s.linearized.has(at + Vector3i(0, 3, 0)) and s.linearized.has(at + Vector3i(2, 2, 0)), "平面上按圆形扫到 3 格以内")
+	check(not s.linearized.has(at + Vector3i(4, 0, 0)), "超过 3 格的不扫")
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
+		if s.all_linear():
+			break
+		s.end_turn()
+	check(s.all_linear(), "测试准备：压成直线")
+	for i in s.civs.size():
+		check_eq(s.civs[i].home.x, DimensionSpace.Layout.plane_to_line(Vector2i(before[i].x, before[i].y)),
+				"直线上的位置沿二维时同一条曲线")
+
+
+## 规则：二向箔，U3
+func test_ship_without_destination_keeps_heading_when_flattened() -> void:
+	var s := _collapse_match()
+	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2, 3, 4), Vector3(0, 1, 1).normalized())
+	_finish_flat(s)
+	check(s.all_flat(), "测试准备：压平")
+	check(ship.direction.is_equal_approx(Vector3(0, 1, 0)), "朝 +y 斜上飞的换坐标后朝 +y（去掉 z），实际 %s" % ship.direction)
+	var up := _ship(s, s.human(), Ship.PROBE, Vector3(5, 5, s.flat_plane), Vector3(1, -1, 0).normalized())
+	for civ in s.civs:
+		civ.line_reduced = true
+	s._unfold_line_foil(Vector3i(13, 13, s.flat_plane))
+	for i in ceili(37.0 / Balance.FOIL_SPREAD) + 1:
+		if s.all_linear():
+			break
+		s._spread_flat()
+	check(s.all_linear(), "测试准备：压成直线")
+	check(up.direction.is_equal_approx(Vector3(1, 0, 0)), "进一维只留 x，实际 %s" % up.direction)
+
+
+## 规则：二向箔，U3
+func test_straight_up_ship_stops_when_flattened() -> void:
+	var s := _collapse_match()
+	var ship := _ship(s, s.human(), Ship.PROBE, Vector3(2, 3, 4), Vector3(0, 0, 1))
+	ship.speed = 0.5
+	_finish_flat(s)
+	check(ship.direction == Vector3.ZERO and ship.speed == 0.0, "正好沿 z 飞的换坐标后停下")

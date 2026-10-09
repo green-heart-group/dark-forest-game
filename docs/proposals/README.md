@@ -50,3 +50,5 @@
 | 2026-10-07 | [feedback-play-test-5.md](feedback-play-test-5.md) | E7F6 | 已整理（2026-10-07） | 广播球挡视线；降到零维要有动画；预警把单向著也叫二向箔，隐藏文明按维度换武器 |
 | 2026-10-07 | [feedback-play-test-6.md](feedback-play-test-6.md) | E7F6 | 已整理（2026-10-07） | 不是每局都赢；AI 打完躲进黑域，外面殖民地被打光后被自己的黑域包住；黑域慢慢扩散、每格有自己光速的想法（整理成 G14，已定） |
 | 2026-10-07 | [feedback-play-test-7.md](feedback-play-test-7.md) | E7F6（原著武器资料是 RainZL 找的） | 已整理（2026-10-07） | 战舰带反物质打战舰和星舰；以后加粒子束、星际鱼雷、次声波氢弹，之后造的战舰自动带上（整理成 T23，武器已定；带反物质还没定，见 [T24](../open-questions.md#t24-战舰带反物质)） |
+| 2026-10-08 | [dimension-followup-tasks.md](dimension-followup-tasks.md) | E7F6、RainZL、hrwu1、ccl | 大部分已采纳（2026-10-08） | 降维后续需求、验收条件与参考图。定下的是 U2～U6；做到哪一步见[路线图](../roadmap.md)；还没定的挪到 [E10～E13](../open-questions.md#一览) |
+| 2026-10-09 | [interface-clarity.md](interface-clarity.md) | 用户 | 已采纳 | 全屏横向科技树、图例默认收起、减少广播圈和中盘显示层次。 |

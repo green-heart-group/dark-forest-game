@@ -1,13 +1,14 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""重新录 README 里的四段动图（docs/images/*.gif）。画面改了以后跑一次：
+"""重新录 README 里的四段动图（build/readme_gifs/*.gif，不进仓库）。画面改了以后跑一次：
 
     uv run game/tools/make_readme_gifs.py
 
 要装好 Godot（和跑测试时一样找：环境变量 GODOT、godot_console 或 godot）和 ffmpeg。
 先由 game/tools/record_gifs.gd 把每一帧存成 PNG（会在屏幕外开一个游戏窗口，大约一分钟），
 再用 ffmpeg 拼成 480 像素宽的 GIF。帧放在 build/readme_frames/（不进仓库）。
+重录后上传到 GitHub 的 README 演示素材 Issue，再更新 README 的图片链接，见 docs/guides/code.md。
 """
 
 import subprocess
@@ -17,7 +18,7 @@ from test import find_godot  # 同一目录下的 test.py
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAMES = ROOT / "build" / "readme_frames"
-IMAGES = ROOT / "docs" / "images"
+IMAGES = ROOT / "build" / "readme_gifs"
 
 # 帧的目录名：每秒几帧
 GIFS = {"explore": 12, "domain": 10, "dimension-strike": 10, "zero-dimension": 10}
@@ -27,6 +28,7 @@ NAMES = {"domain": "black-domain"}
 
 def main() -> None:
     FRAMES.mkdir(parents=True, exist_ok=True)
+    IMAGES.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [find_godot(), "--path", "game", "--script", "res://tools/record_gifs.gd",
          "--", f"out={FRAMES.as_posix()}"],
