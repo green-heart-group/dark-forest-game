@@ -160,11 +160,6 @@ static var HIDDEN_FOIL_SPEED: float
 
 # ---------- 暗能量采集（科技 301） ----------
 static var DARK_ENERGY_CELLS: int
-
-# ---------- r4 numerical-loop profiles ----------
-static var R4_ECONOMY_B: Dictionary
-static var R4_ECONOMY_C: Dictionary
-static var R4_PHYSICS: Dictionary
 # <<< 生成的到这里为止
 
 
