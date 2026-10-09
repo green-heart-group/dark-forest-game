@@ -18,6 +18,7 @@ test.py 跑全部测试、全部通过时也会调用这里，GitHub 上跑完�
 
 import argparse
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -46,7 +47,17 @@ def balance() -> dict:
     """balance.cfg 里写的每个数值（用 sync_balance.py 读）。"""
     from sync_balance import read_cfg  # 同一目录下的 sync_balance.py
 
-    return {name: ast.literal_eval(value) for name, value in read_cfg() if name != "---"}
+    result = {}
+    for name, value in read_cfg():
+        if name == "---":
+            continue
+        try:
+            result[name] = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            # R4 dictionaries contain Godot/JSON true and false. Keep support
+            # for the existing Python-compatible literals without eval().
+            result[name] = json.loads(value)
+    return result
 
 
 def techs() -> dict:

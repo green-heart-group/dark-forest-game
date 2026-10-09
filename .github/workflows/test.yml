@@ -30,6 +30,11 @@ jobs:
       - name: 导入并跑测试
         run: uv run game/tools/test.py
 
+      - name: 数值候选回归与参数表
+        run: |
+          uv run game/tools/r4_test.py --no-import
+          uv run game/tools/r4_parameters.py --check
+
       # test.py 会按 balance.cfg 生成 balance.gd 的数值声明，全部通过时还会更新文档里由代码决定的部分（测试个数、数值、科技表）；
       # 这些变了，说明提交的是旧的
       - name: 检查文档和 balance.gd 里生成的部分是不是最新的
