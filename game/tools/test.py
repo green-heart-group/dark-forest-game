@@ -30,7 +30,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +38,7 @@ import time
 from pathlib import Path
 
 import sync_balance  # 同一目录下的 sync_balance.py
+from godot import find_godot
 
 GAME = Path(__file__).resolve().parents[1]
 SUITES = {
@@ -51,13 +51,6 @@ TIMES = GAME / ".godot" / "test_times.json"
 STATUS = GAME.parent / "docs" / "status.md"
 # 没有记录的测试，当它要这么多毫秒
 DEFAULT_MS = 100
-
-
-def find_godot() -> str:
-    for name in [os.environ.get("GODOT"), "godot_console", "godot"]:
-        if name and shutil.which(name):
-            return name
-    sys.exit("找不到 Godot：把 godot_console 或 godot 放进 PATH，或者用环境变量 GODOT 指定")
 
 
 def rule_tests(game: Path = GAME) -> list[str]:

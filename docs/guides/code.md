@@ -143,6 +143,7 @@
 
 | 文件 | 做什么 |
 | --- | --- |
+| `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
 | `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
 | `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
 | `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |
