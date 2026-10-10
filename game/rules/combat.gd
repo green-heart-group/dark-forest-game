@@ -4,32 +4,45 @@ extends RefCounted
 ## 本地自动战斗使用舰上已收到的传感历史，不更新玩家的远方地图。
 
 
-static func targets(s: GameState, include_grain := false) -> Array[Dictionary]:
+## observe：要不要带上实际运动的速度和加速度（传感观测用，航位推算靠它）。不带时速度照旧按舰速算，加速度为零，省掉逐艘计算运动。
+static func targets(s: GameState, include_grain := false, observe := false) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for civ in s.civs:
 		var owner := s.civs.find(civ)
 		for ship in civ.ships:
 			if ship.dead or (ship.kind == Ship.GRAIN and not include_grain):
 				continue
+			var motion := _motion(s, civ, ship, observe)
 			result.append({"id": ship.id, "kind": ship.kind, "owner": owner, "pos": ship.pos,
-					"velocity": ship.direction * ship.speed / s.physical_cell_size(),
+					"velocity": motion["velocity"], "acceleration": motion["acceleration"],
 					"hp": ship.max_hp() - ship.damage, "ship": ship})
 		for asset in civ.assets:
 			if asset["kind"] not in ["miner", "advanced_miner"]:
 				continue
+			var carrier := civ.ship_by_id(asset["carrier"]) if asset["carrier"] >= 0 else null
+			var motion := {"velocity": Vector3.ZERO, "acceleration": Vector3.ZERO} if carrier == null else _motion(s, civ, carrier, observe)
 			result.append({"id": asset["id"], "kind": asset["kind"], "owner": owner,
-					"pos": Signals.entity(s,owner,asset["id"])["pos"], "velocity": Vector3.ZERO if asset["carrier"] < 0 else civ.ship_by_id(asset["carrier"]).direction*civ.ship_by_id(asset["carrier"]).speed/s.physical_cell_size(), "hp": 1, "asset": asset})
+					"pos": Signals.entity(s,owner,asset["id"])["pos"], "velocity": motion["velocity"],
+					"acceleration": motion["acceleration"], "hp": 1, "asset": asset})
 	for payload in s.payloads:
 		if not payload.get("dead", false):
 			result.append({"id": payload["id"], "kind": "payload", "owner": payload["owner"],
-					"pos": payload["pos"], "velocity": payload.get("velocity", Vector3.ZERO),
+					"pos": payload["pos"], "velocity": payload.get("velocity", Vector3.ZERO), "acceleration": Vector3.ZERO,
 					"hp": Balance.HULL_HP["payload"] - payload.get("damage", 0), "payload": payload})
 	if include_grain:
 		for ship in s.hidden_ships:
 			if not ship.dead:
+				var motion := _motion(s, null, ship, observe)
 				result.append({"id": ship.id, "kind": ship.kind, "owner": -1, "pos": ship.pos,
-						"velocity": ship.direction * ship.speed / s.physical_cell_size(), "hp": 0, "ship": ship})
+						"velocity": motion["velocity"], "acceleration": motion["acceleration"], "hp": 0, "ship": ship})
 	return result
+
+
+## 速度和加速度取实际运动用的那一组（已按当地限速），航位推算才对得上。
+static func _motion(s: GameState, civ: Civ, ship: Ship, observe: bool) -> Dictionary:
+	if observe:
+		return Kinematics.motion(s, civ, ship, 0.0)
+	return {"velocity": ship.direction * ship.speed / s.physical_cell_size(), "acceleration": Vector3.ZERO}
 
 
 static func legal(weapon: String, kind: String) -> bool:
@@ -149,7 +162,7 @@ static func fire_ready(s: GameState) -> void:
 			var speed: float = data["speed"] * s.light_speed_at(ship.pos)
 			if speed <= 0.0:
 				continue
-			var direction := aim(ship.pos, predicted(s,target), target["velocity"], speed / s.physical_cell_size())
+			var direction := aim(ship.pos, predicted(s,target), observed(s,target)["velocity"], speed / s.physical_cell_size())
 			var shot := {"id": s.next_id(), "owner": s.civs.find(civ), "source": ship.id,
 					"weapon": ship.channel, "pos": ship.pos, "direction": direction,
 					"remaining": float(data["range"]), "distance": 0.0, "created": s.clock,
@@ -162,8 +175,24 @@ static func fire_ready(s: GameState) -> void:
 			s.events.append({"id": shot["id"], "t": s.clock, "kind": "fire", "source": ship.id, "target": target["id"], "weapon": ship.channel})
 
 
+## 收件方此刻能知道的目标状态：观测只在加速度、航向等变了时才重发（Signals._emit），
+## 中间按观测时的速度和加速度推算。只推算到「现在减去这条观测的传播时间」那一刻，
+## 也就是假如每次采样都重发、此刻最新能收到的那次观测；不替收件方预知更晚的变化。
+## 返回那一刻的位置、速度和时刻。
+static func observed(s: GameState,contact: Dictionary) -> Dictionary:
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	var t := maxf(0.0,s.clock-delay-t0)
+	var velocity: Vector3 = contact.get("velocity",Vector3.ZERO)
+	var acceleration: Vector3 = contact.get("acceleration",Vector3.ZERO)
+	return {"pos":contact["pos"]+velocity*t+0.5*acceleration*t*t,"velocity":velocity+acceleration*t,"t":t0+t}
+
+
+## 从 observed 那一刻起，按那时的速度直线推算现在的位置。凡是用别人位置的地方都要先推算，
+## 不能直接用观测那一刻的位置。
 static func predicted(s: GameState,contact: Dictionary) -> Vector3:
-	return contact["pos"]+contact["velocity"]*maxf(0.0,s.clock-contact.get("t_observed",s.clock))
+	var known := observed(s,contact)
+	return known["pos"]+known["velocity"]*maxf(0.0,s.clock-known["t"])
 
 
 static func projectile_motion(s: GameState, shot: Dictionary) -> Dictionary:

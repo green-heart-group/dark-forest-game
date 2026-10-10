@@ -1004,10 +1004,11 @@ func antimatter_targets(civ: Civ) -> Array[Ship]:
 		if contact.get("owner",-1)==civs.find(civ) or not Ship.NAMES.has(contact["kind"]) or contact["kind"]==Ship.GRAIN:
 			continue
 		var distance := INF
+		var pos := Combat.predicted(self,contact)
 		for origin in antimatter_origins(civ):
-			distance = minf(distance,origin["pos"].distance_to(contact["pos"])*physical_cell_size())
+			distance = minf(distance,origin["pos"].distance_to(pos)*physical_cell_size())
 		if distance <= Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
-			var seen := Ship.make(contact["kind"],contact["pos"],contact["id"])
+			var seen := Ship.make(contact["kind"],pos,contact["id"])
 			found.append([distance,seen])
 	found.sort_custom(func(a,b):return a[0]<b[0])
 	var result: Array[Ship] = []
@@ -1064,13 +1065,14 @@ func _fire_antimatter(civ: Civ, source: int, target: int) -> bool:
 	if not contacts.has(target):
 		return false
 	var contact: Dictionary = contacts[target]
-	if receiver["pos"].distance_to(contact["pos"])*physical_cell_size()>Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
+	var predicted := Combat.predicted(self,contact)
+	if receiver["pos"].distance_to(predicted)*physical_cell_size()>Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
 		return false
 	var speed := light_speed_at(receiver["pos"])
 	if speed <= 0.0:
 		return false
 	var shot := {"id":next_id(),"owner":civs.find(civ),"source":source,"weapon":"antimatter","pos":receiver["pos"],
-		"direction":Combat.aim(receiver["pos"],contact["pos"],contact["velocity"],speed/physical_cell_size()),
+		"direction":Combat.aim(receiver["pos"],predicted,Combat.observed(self,contact)["velocity"],speed/physical_cell_size()),
 		"remaining":Balance.ANTIMATTER_RANGE,"distance":0.0,"created":clock,"epoch":space_epoch,"dead":false}
 	projectiles.append(shot)
 	if receiver.has("ship"):

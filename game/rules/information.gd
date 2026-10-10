@@ -148,6 +148,10 @@ static func ray(s: GameState, origin: Vector3, target: Vector3, fields: Dictiona
 static func broadcast(s: GameState, civ: Civ, origin: Vector3, target: Vector3i, exposed: Vector3i) -> void:
 	var samples: Array[Dictionary] = []
 	for cell in s.cell_ids:
+		# 只有有人住的格子听得见。殖民要求有恒星（can_settle），所以只给有恒星或现在有人住的格子发光线；
+		# 空格子的光线到了也没人收，却会让整个世界多停一次。波传到哪里由下面的地图角光线负责。
+		if s.map.star_at(cell) == StarMap.Star.NONE and s.coord_owner(cell) == null:
+			continue
 		samples.append(ray(s,origin,Vector3(cell),{"cell_id":s.cell_ids[cell],"cell":cell}))
 	for i in s.hidden.size():
 		samples.append(ray(s,origin,Vector3(s.hidden[i]),{"hidden":i}))

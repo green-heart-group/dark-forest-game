@@ -67,10 +67,20 @@ static func plan(s: GameState) -> Dictionary:
 	return motions
 
 
+## 这几种消息到了就改动实体或执行命令，要在到达的那一刻处理。
+const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]
+
+
+## 只有命令类消息的到达要让整个世界停下来。其余的情报（传感、回报）照样按光速飞到、停在收件者那里，
+## 但等到下一个 0.05 年的传感刻度才拆开（固定节拍处理，见 receive_due），不再每到一条就切一个子步。
+static func exact(message: Dictionary) -> bool:
+	return message["kind"] in EXACT_KINDS
+
+
 static func next_arrival(s: GameState,prepared: Dictionary = {}) -> float:
 	var next := INF
 	for message in s.messages:
-		if not message["dead"]:
+		if not message["dead"] and exact(message):
 			var m: Dictionary=prepared[message["id"]] if prepared.has(message["id"]) else motion(s,message)
 			next = minf(next, m["arrival"])
 	return next
@@ -84,6 +94,9 @@ static func advance(s: GameState, duration: float,prepared: Dictionary = {}) -> 
 		var dt := minf(duration, m["arrival"])
 		message["pos"] += m["velocity"] * dt
 		message["distance"] += m["speed"] * dt
+		if m["arrival"] <= duration + Balance.TIME_EPSILON:
+			# 已经飞到；收件者在动时，之后每段都跟到它身边，等刻度到了再拆开。
+			message["arrived"] = true
 
 
 static func receive_due(s: GameState, depth := 0) -> void:
@@ -91,10 +104,16 @@ static func receive_due(s: GameState, depth := 0) -> void:
 	var arrived: Array[Dictionary] = []
 	var changed := false
 	var receivers: Dictionary={}
+	# 时钟落在 0.05 年的传感刻度上才拆开情报类消息。按时钟本身判断，不看 next_sensor_time：
+	# 这一刻采样后它已指向下一刻度，而采样当场发出、距离为零的本地回报也要在这一刻收到。
+	var ticks := s.clock / Balance.PHYSICS_MAX_DT
+	var on_tick := absf(ticks - roundf(ticks)) * Balance.PHYSICS_MAX_DT <= Balance.TIME_EPSILON
 	for message in s.messages:
 		if message["dead"]:
 			continue
 		if s.clock < message.get("not_before", -INF):
+			continue
+		if not on_tick and not exact(message):
 			continue
 		var key: Array=[message["owner"],message["recipient"]]
 		if not receivers.has(key):
@@ -108,7 +127,7 @@ static func receive_due(s: GameState, depth := 0) -> void:
 				if message["kind"] == "command":
 					s._receive_command(message, false)
 			continue
-		if message["pos"].distance_to(receiver["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON:
+		if message.get("arrived", false) or message["pos"].distance_to(receiver["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON:
 			message["dead"] = true
 			arrived.append(message)
 	for message in arrived:
@@ -375,12 +394,33 @@ static func in_view(s: GameState, observer: Dictionary, pos: Vector3) -> bool:
 	return forward >= 0.0 and forward <= radius and (d - observer["dir"] * forward).length() <= forward * tan(deg_to_rad(observer["angle"] * 0.5)) + Balance.COLLISION_EPSILON
 
 
+## 航位推算：观测里有位置和速度时，这两项不算进签名。目标照上次观测的速度和加速度走、
+## 走到了推算的位置和速度，就当没变，不重发；收件方用 Combat.observed 按同样的式子推算。
+## 加速度、种类、损伤等别的内容变了，或者实际位置、速度偏离推算，才立即重发。心跳照旧每年一次。
 static func _emit(s: GameState, owner: int, observer: Dictionary, origin: Vector3, key: String, body: Dictionary, heartbeat: bool) -> void:
-	var signature := hash([body["data"],body.get("contact",false)])
+	var data: Dictionary = body["data"]
+	var moving: bool = data.has("pos") and data.has("velocity")
+	var facts := data
+	if moving:
+		facts = data.duplicate()
+		facts.erase("pos")
+		facts.erase("velocity")
+	var signature := hash([facts,body.get("contact",false)])
 	var stamp: Dictionary = s.sensor_stamps.get(key, {})
-	if stamp.get("hash", -1) == signature and (not heartbeat or s.clock - stamp.get("time", -INF) < 1.0):
+	var same: bool = stamp.get("hash", -1) == signature
+	if same and moving:
+		var t: float = s.clock - stamp["time"]
+		var acceleration: Vector3 = data.get("acceleration", Vector3.ZERO)
+		var velocity: Vector3 = stamp.get("velocity", Vector3.INF)
+		var pos: Vector3 = stamp.get("pos", Vector3.INF) + velocity * t + 0.5 * acceleration * t * t
+		same = stamp.get("epoch", -1) == s.space_epoch \
+				and pos.distance_to(data["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON \
+				and (velocity + acceleration * t).distance_to(data["velocity"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON
+	if same and (not heartbeat or s.clock - stamp.get("time", -INF) < 1.0):
 		return
 	s.sensor_stamps[key] = {"hash": signature, "time": s.clock}
+	if moving:
+		s.sensor_stamps[key].merge({"pos": data["pos"], "velocity": data["velocity"], "epoch": s.space_epoch})
 	body["t_observed"] = s.clock
 	body["epoch"] = s.space_epoch
 	body["source_id"] = observer["id"]
@@ -393,7 +433,7 @@ static func sample(s: GameState, force := false) -> void:
 	Information.retry_archives(s)
 	# 在固定最大子步网格采样，不能因接收一个消息再无限加密采样而产生零时间事件洪泛。
 	s.next_sensor_time = (floorf(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON) + 1.0) * Balance.PHYSICS_MAX_DT
-	var entities := Combat.targets(s, true)
+	var entities := Combat.targets(s, true, true)
 	for civ in s.civs:
 		if not civ.alive:
 			continue
@@ -438,7 +478,7 @@ static func sample(s: GameState, force := false) -> void:
 				if target["owner"] == owner or not in_view(s, observer, target["pos"]):
 					continue
 				var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
-						"pos": target["pos"], "velocity": target["velocity"], "hp": target["hp"]}
+						"pos": target["pos"], "velocity": target["velocity"], "acceleration": target["acceleration"], "hp": target["hp"]}
 				_emit(s, owner, observer, target["pos"], "%d:entity:%d" % [observer["id"], target["id"]],
 					{"type":"entity","data":data,"contact":target["owner"]>=0 and Vector3i(observer["pos"].round())==Vector3i(target["pos"].round())},true)
 		for ship in civ.ships:
@@ -572,7 +612,7 @@ static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary]) 
 				continue
 			if observer["pos"].distance_to(target["pos"])*s.physical_cell_size()>radius:
 				continue
-			var data := {"id":target["id"],"kind":target["kind"],"pos":target["pos"],"velocity":target["velocity"]}
+			var data := {"id":target["id"],"kind":target["kind"],"pos":target["pos"],"velocity":target["velocity"],"acceleration":target["acceleration"]}
 			if target.has("payload"):
 				data["payload_kind"] = target["payload"]["kind"]
 			_emit(s,s.civs.find(civ),observer,target["pos"],"warning:%d:%d"%[asset["id"],target["id"]],{"type":"warning","data":data},true)

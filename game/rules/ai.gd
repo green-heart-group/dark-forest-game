@@ -471,7 +471,7 @@ static func _try_probe(s: GameState, ai: Civ) -> bool:
 	if not ai.hit_dirs.is_empty() and s.rng.randf() < 0.5:
 		dir = ai.hit_dirs[-1]["dir"]
 	elif not ai.sightings.is_empty() and s.rng.randf() < 0.5:
-		dir = ai.sightings[-1]["pos"] - docked.pos
+		dir = Combat.predicted(s, ai.sightings[-1]) - docked.pos
 	if not _worth_probing(s, ai, docked.pos, dir):
 		dir = _random_probe_direction(s, ai, docked.pos)
 		slow = true

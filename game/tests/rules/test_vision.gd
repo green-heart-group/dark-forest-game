@@ -63,6 +63,64 @@ func test_warning_reports_enemy_warship() -> void:
 	check(me.alerts.size()==1 and me.alerts[0]["id"]==near.id,"只报告预警范围内且已收到的实际敌舰")
 
 
+## 规则：预警系统，情报传回
+func test_steady_course_is_not_resent_every_sample() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	me.warnings[me.home]=0
+	var start:=Vector3(1.5,0,0)
+	var ship:=_ship(s,s.civs[1],Ship.WARSHIP,start,Vector3.UP)
+	ship.gravity=true
+	ship.speed=0.05
+	var v0:=ship.direction*ship.speed/s.physical_cell_size()
+	var a: Vector3=Kinematics.motion(s,s.civs[1],ship,0.0)["acceleration"]
+	check(a.length()>0.0,"夹具里的战舰在加速")
+	# 预警要飞 1.5 年才到，期间发出的每一条都还在路上，逐段数一遍就是发了多少条。
+	var sent:={}
+	var advance:=func(years: float):
+		for i in roundi(years/Balance.PHYSICS_MAX_DT):
+			WorldTime.advance(s,Balance.PHYSICS_MAX_DT)
+			for m in s.messages:
+				if m["body"].get("type")=="warning" and m["body"]["data"]["id"]==ship.id:
+					sent[m["id"]]=true
+	advance.call(2.9)
+	# 每 0.05 年采样一次；照旧每次都发的话，2.9 年要发 58 条。
+	check(sent.size()<=3,"加速度和航向不变时只有首发和每年的心跳，实际 %d 条" % sent.size())
+	var alert: Dictionary=me.alerts.filter(func(x):return x["id"]==ship.id)[0]
+	var known:=Combat.observed(s,alert)
+	var t: float=known["t"]
+	check(known["pos"].distance_to(start+v0*t+0.5*a*t*t)<1e-4,"收件方按速度和加速度推出那一刻的真实位置")
+	check(known["velocity"].distance_to(v0+a*t)<1e-6,"也推出那一刻的真实速度")
+	check(t<s.clock-1.4,"只推到「现在减去传播时间」，不提前知道")
+	var before:=sent.size()
+	ship.direction=Vector3.DOWN
+	advance.call(0.05)
+	check_eq(sent.size(),before+1,"航向一变就立即重发")
+
+
+## 规则：情报传回
+func test_reports_are_opened_on_sensor_ticks() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	for x in 4:
+		for y in 4:
+			_set_star(s,Vector3i(x,y,1),StarMap.Star.SINGLE)
+	s.ensure_cells()
+	# 几个探测器散在不同位置，看到的星系离它们远近各不相同，观测到达的时刻也各不相同。
+	for pos in [Vector3(0.3,0.7,0.2),Vector3(2.6,1.1,0.4),Vector3(1.2,3.3,0.9),Vector3(3.4,2.2,1.7)]:
+		_ship(s,me,Ship.PROBE,pos)
+	s.profiling=true
+	WorldTime.advance(s,2.0)
+	var steps: int=s.profile["连续/子步数"]
+	var ticks:=roundi(1.0/Balance.PHYSICS_MAX_DT)
+	# 这里没有别的事件，只该停在两年的采样刻度上；每到一条观测就停一次的话要切 59 段。
+	check(steps<=2*ticks+2,"两年切了 %d 段，不随到达的观测条数增加" % steps)
+	check(me.intel.size()>4,"观测照样送到")
+	for cell in me.intel:
+		var t: float=me.intel[cell]["t_received"]
+		check(absf(t/Balance.PHYSICS_MAX_DT-roundf(t/Balance.PHYSICS_MAX_DT))<1e-6,"在 0.05 年的采样刻度上拆开")
+
+
 ## 规则：情报传回
 func test_seeing_enemy_ship_counts_as_discovery() -> void:
 	var s:=_two_civs(Vector3i(8,8,8))

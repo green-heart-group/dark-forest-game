@@ -19,6 +19,8 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # 长局测试本地约 13 分钟；卡住时别一直占着机器（默认要等 6 小时）
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 

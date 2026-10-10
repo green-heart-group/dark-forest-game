@@ -34,9 +34,7 @@ func test_broadcast_reveals_owner_and_needs_source() -> void:
 	var me := s.human()
 	var ai := s.civs[1]
 	check(s.broadcast(ai, Vector3i.ZERO)["error"] != "", "没有恒星广播器不能广播")
-	_give(ai, ["gravity"])
-	check(s.broadcast(ai, Vector3i(0, 0, 0))["error"] == "", "有引力波广播，所有星系都能广播")
-	check(s.broadcast(ai, ai.home)["error"] != "", "不能广播自己的坐标")
+	# 第三方的恒星要在广播前就有：游戏里恒星只会被打掉，不会中途冒出来，广播只给有恒星的格子发光线。
 	var third := Civ.new("第三方", false, Vector3i(0, 3, 0))
 	third.broadcasters[third.home] = true
 	s.civs.append(third)
@@ -44,6 +42,9 @@ func test_broadcast_reveals_owner_and_needs_source() -> void:
 	third.energy=100
 	third.mineral=100
 	s.start_turn(third)
+	_give(ai, ["gravity"])
+	check(s.broadcast(ai, Vector3i(0, 0, 0))["error"] == "", "有引力波广播，所有星系都能广播")
+	check(s.broadcast(ai, ai.home)["error"] != "", "不能广播自己的坐标")
 	_turns(s, 5)
 	check(third.known.has(Vector3i.ZERO), "听到的人知道被广播的星系")
 

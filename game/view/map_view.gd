@@ -579,10 +579,11 @@ func _pickables() -> Array[Dictionary]:
 					if not s.dead and not s.docked:
 						add.call("s%d" % s.id, s.position(), 0.24, "%s的%s" % [civ.name, s.label()])
 	# 看到的别人的舰船、预警报告的东西
+	# 画在按观测速度推算的现在位置（观测只在航向、速度变了时才重发）
 	for sight in me.sightings:
-		add.call("v%s%d" % [sight["pos"], sight["turn"]], sight["pos"], 0.18, "第 %d 回合看到的舰船" % sight["turn"])
+		add.call("v%s%d" % [sight["pos"], sight["turn"]], Combat.predicted(state, sight), 0.18, "第 %d 回合看到的舰船" % sight["turn"])
 	for alert in me.alerts:
-		add.call("a%s" % alert["pos"], alert["pos"], 0.29, "预警")
+		add.call("a%s" % alert["pos"], Combat.predicted(state, alert), 0.29, "预警")
 	return list
 
 
@@ -1404,11 +1405,11 @@ func _draw_intel(me: Civ) -> void:
 	var sizes: Array[float] = []
 	for sight in me.sightings:
 		var age := state.turn - int(sight["turn"])
-		points.append(sight["pos"])
+		points.append(Combat.predicted(state, sight))
 		colors.append(Color(COLOR_SIGHTING, clampf(1.0 - float(age) / Balance.SIGHTING_KEEP, 0.15, 1.0)))
 		sizes.append(1.0)
 	for alert in me.alerts:
-		points.append(alert["pos"])
+		points.append(Combat.predicted(state, alert))
 		colors.append(COLOR_ALERT)
 		sizes.append(1.6)
 	var diamond := SphereMesh.new()
