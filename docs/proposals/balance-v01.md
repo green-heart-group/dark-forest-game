@@ -2,7 +2,7 @@
 
 状态：讨论中；2026-10-10 从群聊附件转换。本文保留原文段落、公式、表格内容及图片顺序，表格改为逐行字段便于阅读；只调整 Markdown 结构，未替作者决定规则。
 
-[原始 Word](https://github.com/user-attachments/files/33274208/balance-v01-source.docx)托管在[来源 Issue](https://github.com/green-heart-group/dark-forest-game/issues/10)。讨论背景和版本冲突见[来源记录](chat-direction-sources.md)，实现范围见[方向整理](chat-directions.md)，待答事项见[问题清单](../open-questions.md)。本文的价格、机制和文中测试说法属于附件当时的提议或报告，不代表当前原型。
+[原始 Word](https://github.com/user-attachments/files/33274208/balance-v01-source.docx)托管在[来源 Issue](https://github.com/green-heart-group/dark-forest-game/issues/10)。讨论背景和版本冲突见[来源记录](chat-direction-sources.md)，实现范围见[科技与数值补充](tech-tree-revision.md#整理补充科技与数值的实现范围)，待答事项见[问题清单](../open-questions.md)。本文的价格、机制和文中测试说法属于附件当时的提议或报告，不代表当前原型。
 
 原文件 SHA256：`5563627bed93e936f8f1ef1ed6e55b6ead029a5078d4e42b8d720187d3db3a3c`。
 
