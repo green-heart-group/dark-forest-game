@@ -78,6 +78,8 @@
 winget install --id GodotEngine.GodotEngine --exact --version 4.7.2
 ```
 
+运行测试和导出工具还需要 uv，安装方法见 [uv 官方安装指南](https://docs.astral.sh/uv/getting-started/installation/)。
+
 ### 运行
 
 在仓库根目录：
