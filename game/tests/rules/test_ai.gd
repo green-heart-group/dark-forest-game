@@ -1,406 +1,391 @@
 extends "res://tests/rules/rule_suite.gd"
-## AI 的行动。
+## AI 原优先表的回归；钱、工程、命令和已收情报使用与玩家相同入口。
 
 
-## AI 在 (8,8,8)，你在 (0,0,0)。AI 没有随机偏好、资源充足、有 6 个行动点；
-## 算作已经发现过别人，免得它先花能量升射电望远镜。
 func _ai_game() -> GameState:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	ai.taste = {}
-	ai.discovered = true
-	ai.energy = 1000
-	ai.mineral = 1000
-	ai.actions_left = 6
+	var s:=_two_civs(Vector3i(8,8,8))
+	var ai:=s.civs[1]
+	ai.taste={}
+	ai.discovered=true
+	ai.energy=1000
+	ai.mineral=1000
+	for id in Tech.ALL:
+		if Tech.ALL[id]["initial"]: ai.techs[id]=true
+	s.map.rocky[ai.home]=1
+	Knowledge.report_site(s,ai,ai.home)
+	Signals.receive_due(s)
 	return s
 
 
-## 这个文明造过的东西，按造的顺序。
-func _builds(s: GameState, civ: Civ) -> Array:
-	var civ_index := s.civs.find(civ)
-	return s.history.filter(func(h): return h["civ"] == civ_index and h["name"] == "build").map(func(h): return h["args"][0])
+func _builds(s: GameState,civ: Civ) -> Array:
+	return s.history.filter(func(h):return h["civ"]==s.civs.find(civ) and h["name"]=="build").map(func(h):return h["args"][0])
 
 
-## 这个文明停着和在飞的某种单位。
-func _ships_of(civ: Civ, kind: String) -> Array:
-	return civ.ships.filter(func(sh): return sh.kind == kind)
+func _research_choices(ai: Civ, choices: Array) -> void:
+	_open_tiers(ai,3)
+	for id in Tech.ALL:
+		if choices.has(id): ai.techs.erase(id)
+		else: ai.techs[id]=true
 
 
 ## 规则：AI 怎么行动
 func test_ai_research_picks_highest_score_and_keeps_reserve() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	_open_tiers(ai, 1)
-	var before := ai.techs.size()
-	# 分最高的是戴森球（6 分 + 1 颗恒星），升了以后剩不到 6E 就不升，也不退而求其次
-	ai.energy = Tech.cost("dyson")[0] + AI.RESERVE - 1
-	AI.take_turn(s, ai)
-	check_eq(ai.techs.size(), before, "最想升的升了会剩不到 6E 时，这回合不升科技")
-	ai.energy = Tech.cost("dyson")[0] + AI.RESERVE
-	AI._research(s, ai)
-	check(ai.has_tech("dyson") and ai.energy >= AI.RESERVE, "先升分最高的戴森球，至少留 6E")
-	ai.energy = 1000
-	before = ai.techs.size()
-	AI._research(s, ai)
-	check_eq(ai.techs.size() - before, 3, "一回合最多升 3 项")
-	check(ai.has_tech("warship"), "接着升分第二高的战舰（5 分）")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	_research_choices(ai,["dyson","warship"])
+	ai.energy=Tech.cost("dyson")[0]+AI.RESERVE-1
+	AI._research(s,ai)
+	check(ai.research_project.is_empty(),"最高分戴森研究不能留够6E时先储蓄")
+	ai.energy=Tech.cost("dyson")[0]+AI.RESERVE
+	AI._research(s,ai)
+	check_eq(ai.research_project.get("kind",""),"dyson","选择最高分合法科技并预付")
+	check(not ai.has_tech("dyson") and ai.energy==AI.RESERVE,"研究尚未完成，恰保留6E")
+	var history:=s.history.size()
+	AI._research(s,ai)
+	check_eq(s.history.size(),history,"同一研究队列不能一年连升3项")
+	_turns(s,5)
+	check(ai.has_tech("dyson"),"5W正式完工后才取得科技")
+	ai.energy=1000
+	AI._research(s,ai)
+	check_eq(ai.research_project.get("kind",""),"warship","之后才能提交下一优先项")
 
 
 ## 规则：AI 怎么行动
 func test_ai_research_favours_bunker_after_hit() -> void:
-	for hit in [0, 1]:
-		var s := _ai_game()
-		var ai := s.civs[1]
-		_open_tiers(ai, 1)
-		ai.techs["dyson"] = true
-		ai.times_hit = hit
-		# 只够升一项：战舰 5 分，掩体 3 分，被打过时掩体加 4 分
-		ai.energy = Tech.cost("warship")[0] + AI.RESERVE
-		AI._research(s, ai)
-		if hit == 0:
-			check(ai.has_tech("warship") and not ai.has_tech("bunker"), "没被打过时先升战舰")
-		else:
-			check(ai.has_tech("bunker") and not ai.has_tech("warship"), "被打过时掩体加分，先升掩体")
+	for hit in [0,1]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		_research_choices(ai,["warship","bunker"])
+		ai.times_hit=hit
+		AI._research(s,ai)
+		check_eq(ai.research_project.get("kind",""),"warship" if hit==0 else "bunker","遇袭反馈增加掩体优先分，仍为付费研究工程")
 
 
 ## 规则：AI 怎么行动
 func test_ai_builds_in_order_when_nobody_known() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	AI.take_turn(s, ai)
-	check_eq(_builds(s, ai), ["warning", "miner", "probe", "broadcaster"],
-			"不知道敌人时按顺序：预警系统、采矿船（每回合一艘）、探测器、恒星广播器")
-	var probe: Ship = _ships_of(ai, Ship.PROBE)[0]
-	check(not probe.docked, "造好的探测器马上派出去")
-	# 已经有两个探测器在飞、能量不多于 20E 时：只造采矿船
-	s = _ai_game()
-	ai = s.civs[1]
-	ai.has_warning = true
-	ai.energy = 20
-	for i in AI.PROBES_WANTED:
-		_ship(s, ai, Ship.PROBE, Vector3(ai.home), Vector3(0, 0, -1))
-	AI.take_turn(s, ai)
-	check_eq(_builds(s, ai), ["miner"], "探测器够了不再造；能量不多于 20E 不建恒星广播器")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	AI.take_turn(s,ai)
+	check_eq(_builds(s,ai),["miner","warning"],"先保障真实首矿，第二槽沿原优先顺序建预警")
+	check(ai.ships.is_empty(),"下单不瞬间生成并派出探测器")
+	_turns(s,2)
+	AI.take_turn(s,ai)
+	check_eq(_builds(s,ai),["miner","warning","miner","probe"],"两槽释放后沿原顺序补矿并探索")
+	var count:=ai.pending.size()
+	AI.take_turn(s,ai)
+	check_eq(ai.pending.size(),count,"未完工程不能重复下单")
 
 
-## 让 AI 派一个探测器，返回它的方向（没派出时为零向量）。每次先拿走它的探测器、补满行动点。
-func _probe_direction(s: GameState, ai: Civ) -> Vector3:
-	ai.ships.assign(ai.ships.filter(func(sh): return sh.kind != Ship.PROBE))
-	ai.actions_left = 6
-	AI._try_probe(s, ai)
-	for sh in ai.ships:
-		if sh.kind == Ship.PROBE and not sh.docked:
-			return sh.direction
-	return Vector3.ZERO
+func _probe_direction(s: GameState,ai: Civ) -> Vector3:
+	# 已注销的旧探测器与旧遥测一同移除；每次是独立待命舰夹具。
+	ai.ships.clear()
+	ai.telemetry.clear()
+	ai.command_pending.clear()
+	ai.actions_left=2
+	var probe:=_ship(s,ai,Ship.PROBE,Vector3(ai.home))
+	if not AI._try_probe(s,ai): return Vector3.ZERO
+	return probe.direction
 
 
-## 探测器出星图前能飞出母星系视野多远。
-func _probe_reach(s: GameState, ai: Civ, dir: Vector3) -> float:
-	return Geometry.distance_to_edge(Vector3(ai.home), dir, s.map.bounds()) - s.sphere_radius(ai, Balance.VISION_HOME)
+func _probe_reach(s: GameState,ai: Civ,dir: Vector3) -> float:
+	return Geometry.distance_to_edge(Vector3(ai.home),dir,s.map.bounds())-s.sphere_radius(ai,Balance.VISION_HOME)
 
 
-## E7F6 看到 AI 朝宇宙边缘探测：母星系在角上时，一半的随机方向飞出视野不远就出了星图。
 ## 规则：AI 怎么行动
 func test_probe_from_corner_heads_into_map() -> void:
-	var s := _ai_game()  # AI 在 (8,8,8)，星图的一个角
-	var ai := s.civs[1]
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	s.rng.seed=8129
 	for i in 20:
-		var dir := _probe_direction(s, ai)
-		check(dir != Vector3.ZERO, "派出了探测器")
-		check(_probe_reach(s, ai, dir) >= AI.PROBE_MIN_REACH,
-				"探测器朝星图里面飞，出星图前至少飞出视野 %.1f 格（方向 %s）" % [AI.PROBE_MIN_REACH, dir])
+		var dir:=_probe_direction(s,ai)
+		check(dir!=Vector3.ZERO,"正式派出待命探测器")
+		check(_probe_reach(s,ai,dir)>=AI.PROBE_MIN_REACH,"原随机方向算法保持向图内探索")
 
 
-## 被打的方向朝星图外（隐藏文明从星图外打来）时不往那边派；朝星图里面时照样会派。
 ## 规则：AI 怎么行动
 func test_probe_ignores_hit_direction_leading_off_map() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	var outward := Vector3(1, 1, 1).normalized()
-	ai.hit_dirs.append({"at": ai.home, "dir": outward, "turn": 0})
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	s.rng.seed=8129
+	var outward:=Vector3.ONE.normalized()
+	ai.hit_dirs.append({"at":ai.home,"dir":outward,"turn":0})
 	for i in 20:
-		check(_probe_direction(s, ai).dot(outward) < 0.99, "不朝星图外被打来的方向派探测器")
-	var inward := Vector3(-1, -1, -1).normalized()
-	ai.hit_dirs.append({"at": ai.home, "dir": inward, "turn": 0})
-	var used := false
-	for i in 20:
-		used = used or _probe_direction(s, ai).dot(inward) > 0.99
-	check(used, "被打的方向朝星图里面时，还是会朝那边派")
+		check(_probe_direction(s,ai).dot(outward)<0.99,"图外来袭方向不能令探测器立刻出界")
+	var inward:=-outward
+	ai.hit_dirs.append({"at":ai.home,"dir":inward,"turn":0})
+	var used:=false
+	for i in 20: used=_probe_direction(s,ai).dot(inward)>0.99 or used
+	check(used,"指向图内的已收到来袭方向仍被采用")
 
 
-## 被打过以后：有两个以上星系时母星系躲进黑域，有类木行星的星系建掩体，造一艘星舰。没被打过时都不做。
 ## 规则：AI 怎么行动
 func test_ai_protects_itself_after_hit() -> void:
-	for hit in [0, 1]:
-		var s := _ai_game()
-		var ai := s.civs[1]
-		_give(ai, ["domain", "bunker", "starship"])
-		var colony := Vector3i(8, 8, 6)
-		_set_star(s, colony, StarMap.Star.SINGLE)
+	for hit in [0,1]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		_give(ai,["domain","bunker","starship"])
+		var colony:=Vector3i(8,8,6)
+		_set_star(s,colony,StarMap.Star.SINGLE)
+		s.map.gas[colony]=1
 		ai.colonies.append(colony)
-		s.map.gas[colony] = 1
-		ai.times_hit = hit
-		ai.actions_left = 10
-		AI.take_turn(s, ai)
-		var builds := _builds(s, ai)
-		if hit == 0:
-			check(ai.pending_domains.is_empty() and not builds.has("bunker") and not builds.has("starship"),
-					"没被打过时不投黑域、不建掩体、不造星舰")
-		else:
-			check(not ai.pending_domains.is_empty(), "被打过、有两个星系时，在母星系投放黑域")
-			check(builds.has("bunker") and ai.pending.any(func(p): return p["kind"] == "bunker" and p["at"] == colony),
-					"被打过时在有类木行星的星系建掩体")
-			check(builds.has("starship"), "被打过时造一艘星舰")
+		Assets.ensure(s,ai)
+		Knowledge.report_site(s,ai,colony)
+		Signals.advance(s,2.0)
+		s.clock=2.0
+		Signals.receive_due(s)
+		ai.times_hit=hit
+		# take_turn中的防御分支单独调用，避免无关研究/首矿抢占固定2AP。
+		var domain:=AI._try_domain(s,ai)
+		var bunker:=AI._try_bunker(s,ai) if hit>0 else false
+		check(domain==(hit>0) and bunker==(hit>0),"有遇袭与已收殖民地遥测才走防御分支")
+		if hit>0:
+			check(s.payloads.size()==1 and s.payloads[0]["kind"]=="domain","黑域成为有限投送载荷")
+			check(ai.pending.any(func(p):return p["kind"]=="bunker" and p["at"]==colony),"远端掩体合法下单并等待命令")
+			s.start_turn(ai)
+			ai.pending.clear() # 本测试另摆空闲母星队列；不改变远端生产事实。
+			var done:={"miner":true,"probe":true,"colony":true,"dyson":true}
+			ai.warnings[ai.home]=0
+			Assets.ensure(s,ai)
+			AI._act(s,ai,done)
+			check(_builds(s,ai).has("starship"),"受袭后原星舰避险建造分支仍可受理")
 
 
 ## 规则：AI 怎么行动
 func test_ai_sends_warships_at_known_target() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	_give(ai, ["warship"])
-	ai.known[Vector3i.ZERO] = 1
-	AI.take_turn(s, ai)
-	var warships := _ships_of(ai, Ship.WARSHIP)
-	check_eq(warships.size(), 1, "知道敌人时造一艘战舰（一回合一艘）")
-	var toward := (Vector3.ZERO - Vector3(ai.home)).normalized()
-	check(not warships[0].docked and warships[0].direction.is_equal_approx(toward), "战舰朝已知的敌方星系派出")
-	for i in 3:
-		ai.actions_left = 6
-		AI.take_turn(s, ai)
-	check_eq(_ships_of(ai, Ship.WARSHIP).size(), 2, "在飞的战舰最多 2 艘")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	_give(ai,["warship","beam"])
+	ai.known[Vector3i.ZERO]=1
+	check(AI._try_warship(s,ai,Vector3i.ZERO),"已知目标触发选装战舰工程")
+	check(ai.ships.is_empty() and ai.pending.size()==1,"造船等待工时")
+	_turns(s,4)
+	check(AI._try_warship(s,ai,Vector3i.ZERO),"完工并收到舰船信息后派出")
+	var ship:Ship=ai.ships[0]
+	check(not ship.docked and ship.direction.is_equal_approx(-Vector3.ONE.normalized()),"派向已知敌人")
+	check(AI._try_warship(s,ai,Vector3i.ZERO),"允许第二艘订单")
+	_turns(s,4)
+	check(AI._try_warship(s,ai,Vector3i.ZERO),"第二艘完工派出")
+	s.start_turn(ai)
+	check(not AI._try_warship(s,ai,Vector3i.ZERO),"原AI偏好最多两艘在飞，待命令也计数")
 
 
 ## 规则：AI 怎么行动
 func test_ai_counterattacks_along_hit_direction() -> void:
-	for age in [0, 21]:
-		var s := _ai_game()
-		var ai := s.civs[1]
-		_give(ai, ["warship"])
-		s.turn = 30
-		ai.hit_dirs.append({"at": ai.home, "dir": Vector3(-1, 0, 0), "turn": s.turn - age})
-		AI.take_turn(s, ai)
-		var warships := _ships_of(ai, Ship.WARSHIP)
-		if age == 0:
-			check(warships.size() == 1 and warships[0].direction.is_equal_approx(Vector3(-1, 0, 0)),
-					"不知道敌人但刚被打过：朝打来的方向派战舰")
-		else:
-			check(warships.is_empty(), "被打是 20 回合以前的事，不再反击")
+	for age in [0,21]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		ai.techs["warship"]=true
+		s.turn=30
+		ai.hit_dirs.append({"at":ai.home,"dir":Vector3.LEFT,"turn":s.turn-age})
+		var ship:=_ship(s,ai,Ship.WARSHIP,Vector3(ai.home))
+		var acted:=AI._try_warship_hit_dir(s,ai)
+		check(acted==(age==0),"只使用20回合内的来袭历史")
+		check(ship.direction==(Vector3.LEFT if age==0 else Vector3.ZERO),"正式本地命令沿收到的来袭方向")
 
 
 ## 规则：AI 怎么行动
-func test_ai_turns_warship_toward_target() -> void:
-	var want := (Vector3.ZERO - Vector3(8, 8, 4)).normalized()
-	var side := want.cross(Vector3(0, 0, 1)).normalized()
-	for degrees in [90.0, 10.0]:
-		var s := _ai_game()
-		var ai := s.civs[1]
-		ai.known[Vector3i.ZERO] = 1
-		var dir := want.rotated(side, deg_to_rad(degrees))
-		var w := _ship(s, ai, Ship.WARSHIP, Vector3(8, 8, 4), dir)
-		AI.take_turn(s, ai)
-		if degrees > 25.0:
-			check(w.direction.is_equal_approx(want), "偏离已知敌人超过 25° 的战舰转向它")
-		else:
-			check(w.direction.is_equal_approx(dir), "只偏一点（10°）的不转")
+func test_ai_turns_warship_toward_received_target() -> void:
+	for degrees in [90.0,10.0]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		ai.known[Vector3i.ZERO]=1
+		var pos:=Vector3(6,6,4)
+		var want:=-pos.normalized()
+		var dir:=want.rotated(want.cross(Vector3.FORWARD).normalized(),deg_to_rad(degrees))
+		var ship:=_ship(s,ai,Ship.WARSHIP,pos,dir)
+		Signals.report_ship(s,ai,ship)
+		Signals.advance(s,5.0)
+		s.clock=5.0
+		Signals.receive_due(s)
+		var result:=AI._try_turn_warships(s,ai)
+		check(result==(degrees>25),"只针对已收遥测中偏离超过25度的方向下令")
+		check(ship.direction.is_equal_approx(dir),"远程转向不能在决策时改真实航向")
+		if result:
+			WorldTime.advance(s,5.5)
+			check(ship.direction.is_equal_approx(want),"命令传播后执行所发方向，不偷取新敌情")
 
 
 ## 规则：AI 怎么行动
 func test_ai_broadcasts_far_targets_once() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	ai.broadcasters[ai.home] = true
-	var near := Vector3i(8, 8, 5)
-	_set_star(s, near, StarMap.Star.SINGLE)
-	ai.known[Vector3i.ZERO] = 1
-	ai.known[near] = 1
-	AI.take_turn(s, ai)
-	check(ai.broadcasted.has(Vector3i.ZERO) and not ai.broadcasted.has(near), "只广播离自己 4 格以外的已知敌人")
-	check_eq(s.broadcasts.size(), 1, "广播了一次")
-	ai.actions_left = 6
-	AI.take_turn(s, ai)
-	check_eq(s.broadcasts.size(), 1, "同一个坐标只广播一次")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	ai.broadcasters[ai.home]=true
+	Assets.ensure(s,ai)
+	var near:=Vector3i(8,8,5)
+	ai.known[Vector3i.ZERO]=1
+	ai.known[near]=1
+	check(AI._try_broadcast(s,ai),"广播远方已知目标")
+	check(ai.broadcasted.has(Vector3i.ZERO) and not ai.broadcasted.has(near),"近于4ly的已知目标不广播")
+	check(not AI._try_broadcast(s,ai) and s.broadcasts.size()==1,"同坐标只发送一次")
 
 
 ## 规则：AI 怎么行动
 func test_ai_saves_up_then_reduces_then_launches_foil() -> void:
-	var s := _ai_game()
-	var ai := s.civs[1]
-	ai.times_hit = 2  # 最后据点反复被打，才满足降维武器的最后手段条件
-	ai.has_warning = true
-	ai.warning_level = Balance.WARNING_MAX  # 不把测试的临界能量花在预警升级上
-	_give(ai, ["dimension"])
-	ai.known[Vector3i.ZERO] = 1
-	var need := maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + Balance.COST_FOIL)
-	ai.energy = need - 1
-	AI.take_turn(s, ai)
-	check(ai.reduce_left == 0 and ai.foils.is_empty(), "能量不到 %dE 时先攒着，不降维" % need)
-	# 这回合下单的设施建好（建造中不能降维）；造了别的单位，降维要带的单位多了，再算一次
-	s._finish_pending(ai)
-	need = maxi(Balance.AI_FOIL_ENERGY, ai.reduce_cost() + Balance.COST_FOIL)
-	ai.energy = need
-	ai.actions_left = 6
-	AI.take_turn(s, ai)
-	check(ai.reduce_left > 0 and ai.foils.is_empty(), "能量够了先降维，还不发射")
-	ai.reduce_left = 0
-	ai.reduced = true
-	ai.energy = 1000
-	ai.actions_left = 6
-	AI.take_turn(s, ai)
-	check(ai.foils.size() == 1 and ai.foils[0].target == Vector3i.ZERO, "降维完成后朝最近的已知敌人发射二向箔")
-	ai.actions_left = 6
-	AI.take_turn(s, ai)
-	check_eq(ai.foils.size(), 1, "同时最多一片")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	ai.techs["dimension"]=true
+	ai.times_hit=2
+	ai.known[Vector3i.ZERO]=1
+	ai.energy=Balance.AI_FOIL_ENERGY-1
+	check(not AI._try_foil(s,ai) and ai.conversions.is_empty(),"危急但低于储备阈值时不先浪费迁维资源")
+	ai.energy=1000
+	check(AI._try_foil(s,ai) and not ai.pending.is_empty(),"资源充足先准备迁维")
+	check(ai.dimension_ammo==0 and s.payloads.is_empty(),"准备不凭空获得武器")
+	_turns(s,5)
+	check(AI._try_foil(s,ai) and ai.reduced,"收到ready回执后才执行")
+	s.start_turn(ai)
+	check(AI._try_foil(s,ai) and Knowledge.pending(ai,"dimension_weapon")==1,"下一步付费建维度弹药")
+	_turns(s,8)
+	check(AI._try_foil(s,ai) and s.payloads.size()==1,"弹药实际完工后发射")
+	check_eq(s.payloads[0]["target"],Vector3.ZERO,"目标是已收到的敌方坐标")
+	s.start_turn(ai)
+	check(not AI._try_foil(s,ai),"在途载荷不重复发射")
 
 
 ## 规则：AI 怎么行动
 func test_ai_sends_sophon_when_energy_allows() -> void:
-	var need: int = Balance.COST_SOPHON[0] + Balance.COST_SOPHON_LAUNCH + 4 * AI.RESERVE
-	for energy in [need - 1, need]:
-		var s := _ai_game()
-		var ai := s.civs[1]
-		_give(ai, ["sophon"])
-		ai.known[Vector3i.ZERO] = 1
-		ai.energy = energy
-		AI.take_turn(s, ai)
-		var sophons := _ships_of(ai, Ship.SOPHON)
-		if energy < need:
-			check(sophons.is_empty(), "能量不到 %dE 时不造智子" % need)
-		else:
-			check(sophons.size() == 1 and sophons[0].has_target and ai.sophon_tried.has(Vector3i.ZERO),
-					"能量够了造智子，派去已知的敌方星系")
-			ai.actions_left = 6
-			ai.energy = 1000
-			AI.take_turn(s, ai)
-			check_eq(_ships_of(ai, Ship.SOPHON).size(), 1, "派过的星系不再派")
+	var need:int=Balance.COST_SOPHON[0]+4+4*AI.RESERVE
+	for energy in [need-1,need]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		ai.techs["sophon"]=true
+		ai.known[Vector3i.ZERO]=1
+		ai.energy=energy
+		var acted:=AI._try_sophon(s,ai)
+		check(acted==(energy==need),"按舰体及4E派出费用和4份储备判断")
+		if acted:
+			check(ai.ships.is_empty(),"智子也需要建造工时")
+			_turns(s,4)
+			check(AI._try_sophon(s,ai) and ai.sophon_tried.has(Vector3i.ZERO),"完工后派出并记录目标")
+			s.start_turn(ai)
+			check(not AI._try_sophon(s,ai),"同一敌星系不重复派智子")
 
 
 ## 规则：AI 怎么行动
 func test_ai_researches_after_discovery() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	_open_tiers(ai, 1)
-	AI.take_turn(s, ai)
-	var tier1 := 0
-	for id in ai.techs:
-		if Tech.tier(id) == 1:
-			tier1 += 1
-	check(tier1 > 0, "发现别人以后会升 I 级科技")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	_research_choices(ai,["colony"])
+	ai.tier1_turn=-1
+	AI._research(s,ai)
+	check(ai.research_project.is_empty(),"未开放I级权限不能直接研究109")
+	_open_tiers(ai,1)
+	AI._research(s,ai)
+	check_eq(ai.research_project.get("kind",""),"colony","正式权限开放后选择扩张科技")
+	_turns(s,3)
+	check(ai.has_tech("colony"),"完成后才成为实际科技")
 
 
 ## 规则：AI 怎么行动
 func test_ai_launches_grain_at_known_target() -> void:
-	var s := _two_civs(Vector3i(5, 0, 0))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	_give(ai, ["grain"])
-	ai.grains[ai.home] = true
-	ai.known[Vector3i.ZERO] = 1
-	AI.take_turn(s, ai)
-	check(ai.count(Ship.GRAIN) == 1 and ai.aimed.has(Vector3i.ZERO), "朝已知目标发射光粒")
-	_turns(s, 8)
-	check(not s.human().alive, "光粒飞到，打中")
+	var s:=_two_civs(Vector3i(5,0,0))
+	var ai:=s.civs[1]
+	ai.techs["grain"]=true
+	ai.grains[ai.home]=true
+	ai.known[Vector3i.ZERO]=1
+	check(AI._try_grain(s,ai,Vector3i.ZERO),"通过同一正式入口使用已有弹药")
+	check(ai.count(Ship.GRAIN)==1 and ai.aimed.has(Vector3i.ZERO),"记录光粒与避免短期重复的时间戳")
+	_turns(s,5)
+	check(not s.human().alive,".99c光粒经过真实航程和.25ly碰撞后命中")
 
 
 ## 规则：AI 怎么行动
 func test_ai_colonizes() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	_give(ai, ["colony"])
-	_set_habitable(s, Vector3i(8, 8, 7), StarMap.Star.SINGLE)
-	_set_habitable(s, Vector3i(8, 0, 8), StarMap.Star.SINGLE)
-	ai.intel[Vector3i(8, 8, 7)] = s.snapshot(Vector3i(8, 8, 7))
-	AI.take_turn(s, ai)
-	check(not ai.colony_tried.has(Vector3i(8, 0, 8)), "AI 不去没看到过的宜居星系")
-	var sent := false
-	for sh in ai.ships:
-		sent = sent or (sh.kind == Ship.COLONY and sh.has_target)
-	check(sent, "造殖民船并派向宜居星系")
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	_give(ai,["interstellar_travel","colony"])
+	var at:=Vector3i(8,8,7)
+	_set_habitable(s,at,StarMap.Star.SINGLE)
+	_set_habitable(s,Vector3i(8,0,8),StarMap.Star.SINGLE)
+	ai.intel[at]=s.snapshot(at)
+	check(AI._try_colonize(s,ai),"只有已收到的宜居目标可触发订单")
+	_turns(s,3)
+	check(AI._try_colonize(s,ai),"正式完工后派出")
+	check(not ai.colony_tried.has(Vector3i(8,0,8)),"未知适宜星系不进入目标")
+	_turns(s,22)
+	check(AI._try_colonize(s,ai),"等待抵达遥测后提交109落地")
+	_turns(s,6)
+	check(ai.owns(at),"有限命令传播和4W后建立新锚点")
 
 
 ## 规则：AI 怎么行动
-func test_ai_uses_antimatter() -> void:
-	var s := _two_civs(Vector3i(5, 0, 0))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	ai.antimatter = 1
-	var w := _ship(s, s.human(), Ship.WARSHIP, Vector3(4.2, 0, 0), Vector3(1, 0, 0))
-	AI.take_turn(s, ai)
-	check(w.dead, "敌方战舰靠近时用反物质")
+func test_ai_uses_antimatter_after_observation() -> void:
+	var s:=_two_civs(Vector3i(5,0,0))
+	var ai:=s.civs[1]
+	ai.antimatter=1
+	var war:=_ship(s,s.human(),Ship.WARSHIP,Vector3(4.2,0,0))
+	AI._act(s,ai,{})
+	check(not war.dead and ai.antimatter==1,"未收到接近观测不因引擎看到敌舰而发射")
+	WorldTime.advance(s,0.9)
+	AI._act(s,ai,{})
+	check(ai.antimatter==0 and not war.dead,"观测到达才发射，仍有弹丸航程")
+	WorldTime.advance(s,0.9)
+	check(war.dead,"有限传播后真实命中")
 
 
 ## 规则：AI 怎么行动
-func test_ai_reduces_when_flattening_near() -> void:
-	var s := _two_civs(Vector3i(5, 0, 0))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	_give(ai, ["dimension"])
-	s.foil_zones.append({"center": Vector3i(3, 0, 0), "age": 0.0})
-	AI.take_turn(s, ai)
-	check(ai.reduce_left > 0, "压平快到时开始降维")
-	# 不是因为钱不够而降不了维（比如还有没建好的东西）时，这回合照常行动
-	s = _two_civs(Vector3i(5, 0, 0))
-	ai = s.civs[1]
-	ai.is_ai = true
-	_give(ai, ["dimension"])
-	s.foil_zones.append({"center": Vector3i(3, 0, 0), "age": 0.0})
-	ai.energy = 1000
-	ai.pending.append({"kind": "miner", "at": ai.home})
-	var ap := ai.actions_left
-	AI.take_turn(s, ai)
-	check(ai.reduce_left == 0 and ai.actions_left < ap, "降不了维也不白白空过一回合")
+func test_ai_reduces_when_received_front_near() -> void:
+	for busy in [false,true]:
+		var s:=_ai_game()
+		var ai:=s.civs[1]
+		ai.techs["dimension"]=true
+		# 此用例检查已发展文明的迁维优先级；真实完成首艘矿船，避免开局保障矿源抢占宿主。
+		check_eq(s.build(ai,"miner")["error"],"","先建立真实矿源")
+		WorldTime.advance(s,2.0)
+		s.start_turn(ai)
+		var near:=ai.home-Vector3i.RIGHT
+		ai.intel[near]={"cell_dim":2,"t_observed":s.clock}
+		if busy:
+			check_eq(s.build(ai,"miner")["error"],"","先占用同一宿主队列")
+			check_eq(s.build(ai,"probe")["error"],"","再占满母星第二槽")
+			ai.actions_left=2
+		var ap:=ai.actions_left
+		AI.take_turn(s,ai)
+		check(not ai.conversions.is_empty() if not busy else ai.conversions.is_empty(),"收到近处转换观测后按宿主可用性准备")
+		if busy: check(ai.actions_left<ap,"迁维宿主忙也可做其他合法操作")
 
 
 ## 规则：AI 怎么行动
 func test_long_ai_game_runs() -> void:
-	var s := GameState.new_game(3, Balance.AI_COUNT, true)
+	var s:=GameState.new_game(3,Balance.AI_COUNT,true)
 	for i in 200:
-		if s.is_over():
-			break
+		if s.is_over(): break
 		s.end_turn()
-	check(s.turn > 20, "整局 AI 对局能跑下去")
-	var techs := 0
-	for c in s.civs:
-		techs += c.techs.size()
-	check(techs > s.civs.size() * 6, "AI 升过科技")
+		trace_long(s,"ai200")
+	check(s.turn>20,"保留200回合AI集成回归，不替代六局400验收")
+	var techs:=0
+	for civ in s.civs: techs+=civ.techs.size()
+	check(techs>s.civs.size()*6,"AI在自然开局中确实完成付费科技")
 
 
-## AI 只用自己看到或听到的情报：看不到你时，不知道你在哪里，也不会朝你打。
 ## 规则：AI 怎么行动
 func test_ai_only_knows_what_it_saw() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var ai := s.civs[1]
-	ai.is_ai = true
-	_give(ai, ["warship", "grain", "dimension"])
-	_open_tiers(ai, 2)
-	ai.energy = 500
+	var s:=_ai_game()
+	var ai:=s.civs[1]
+	_give(ai,["warship","grain","dimension"])
 	for i in 5:
-		ai.actions_left = 5
-		AI.take_turn(s, ai)
-		s._observe(ai)
-	check(not ai.known.has(Vector3i.ZERO), "AI 看不到你，就不知道你的星系")
-	check(not ai.intel.has(Vector3i.ZERO), "AI 没有你星系的情报")
-	check(ai.foils.is_empty(), "AI 不知道目标时不发二向箔")
-	check(ai.ships.all(func(sh): return sh.kind != Ship.GRAIN), "AI 不知道目标时不发光粒")
-	# 听到广播以后才知道
-	s.civs[0].broadcasters[Vector3i.ZERO] = true
-	ai.broadcasters[Vector3i(8, 8, 8)] = true  # 有广播器才听得到
-	ai.heard.clear()
-	s.broadcasts.append({"from": Vector3(8, 8, 0), "target": Vector3i.ZERO, "sender": null, "exposed": GameState.NO_HIT,
-			"radius": 0.0, "heard": {}, "hidden_heard": {}})
-	for i in 12:
-		s._spread_broadcasts()
-	check(ai.known.has(Vector3i.ZERO), "听到广播以后，AI 才知道你的坐标")
+		ai.actions_left=2
+		AI.take_turn(s,ai)
+		WorldTime.advance(s,0.1)
+	check(not ai.known.has(Vector3i.ZERO) and not ai.intel.has(Vector3i.ZERO),"未观测的远方敌星系仍未知")
+	check(s.payloads.is_empty() and ai.ships.all(func(ship):return ship.kind!=Ship.GRAIN),"没有已知敌人坐标不发战略攻击")
+	ai.broadcasters[ai.home]=true
+	Assets.ensure(s,ai)
+	Information.broadcast(s,s.human(),Vector3(8,8,7),Vector3i.ZERO,GameState.NO_HIT)
+	WorldTime.advance(s,0.9)
+	check(not ai.known.has(Vector3i.ZERO),"广播前沿还未到AI的接收器")
+	WorldTime.advance(s,0.2)
+	check(ai.known.has(Vector3i.ZERO),"实际收到广播后才知道所广播的历史坐标")
 
 
 ## 规则：AI 怎么行动
 func test_ai_foil_is_last_resort() -> void:
-	var s := _collapse_match()
-	var ai := s.civs[1]
-	ai.known[s.human().home] = 1
-	check(not AI._try_foil(s, ai), "有资源和已知敌人不等于可以常规使用末日武器")
-	ai.times_hit = 2
-	check(AI._try_foil(s, ai) and ai.foils.size() == 1, "最后据点反复被打且没有常规武器时可发射")
-	check(not AI._try_foil(s, ai), "在途箔未结束时不重复发射")
+	var s:=_collapse_match()
+	var ai:=s.civs[1]
+	ai.dimension_ammo=1
+	ai.known[s.human().home]=1
+	check(not AI._try_foil(s,ai),"有资源与目标不等于常规使用末日武器")
+	ai.times_hit=2
+	check(AI._try_foil(s,ai) and s.payloads.size()==1,"仅在原策略的最后手段条件满足后发射")
+	s.start_turn(ai)
+	check(not AI._try_foil(s,ai),"在途武器阻止重复发射")

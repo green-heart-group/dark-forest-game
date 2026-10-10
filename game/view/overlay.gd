@@ -174,12 +174,11 @@ func show_toast(text: String) -> void:
 
 ## 刷新状态栏和日志。me：正在看的文明。
 func refresh(me: Civ) -> void:
-	var alive_ai := state.civs.filter(func(c): return c.is_ai and c.alive).size()
-	_status.text = "第 %d 回合　剩 %d 个 AI 文明" % [state.turn, alive_ai]
+	_status.text = "第 %d 回合　敌方存续状态待情报确认" % state.turn
 	if state.winner == "无":
 		_status.text = "所有文明都灭亡了（第 %d 回合）" % state.turn
 	elif state.winner == "平局":
-		_status.text = "🤝 平局：整张星图已压成一条直线（第 %d 回合）" % state.turn
+		_status.text = "🤝 平局：同刻结算后没有存续文明（第 %d 回合）" % state.turn
 	elif state.winner != "" and state.winner_by_name():
 		_status.text = "🏆 %s 胜利（第 %d 回合）" % [state.winner, state.turn]
 	elif state.winner == "你":
@@ -188,9 +187,9 @@ func refresh(me: Civ) -> void:
 		_status.text = "💀 你失败了（第 %d 回合）" % state.turn
 	if not state.is_over() and state.all_flat():
 		_status.text += ("　%d 格一维空间" % DimensionSpace.COUNT) if state.all_linear() else ("　%d×%d 二维空间 · 重新探索" % [DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE])
-	if not state.is_over() and state.collapse_pending():
+	if not state.is_over() and main.map.state.collapse_pending():
 		_status.text += "\n空间展开中 · 回合按当前坐标结算"
-	if state.is_over() and state.collapse_pending():
+	if state.is_over() and main.map.state.collapse_pending():
 		_status.text = "空间坍缩继续中…（战斗行动已停止）"
 	if not state.is_over() and not state.spectator and not state.human().alive:
 		_status.text += "　💀 你已灭亡"

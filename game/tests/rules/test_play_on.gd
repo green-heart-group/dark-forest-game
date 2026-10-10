@@ -1,84 +1,66 @@
 extends "res://tests/rules/rule_suite.gd"
-## 玩家灭亡后接着打，以及灭亡文明的善后。
-
-
-## 玩家什么都不做、一直结束回合，直到对局结束。play_on 为 true 时开局就打开「灭亡后接着打」。
-func _passive_game(seed_value: int, play_on: bool) -> GameState:
-	var s := GameState.new_game(seed_value)
-	if play_on:
-		s.set_play_on_after_death(true)
-	for i in 300:
-		if s.is_over():
-			break
-		s.end_turn()
-	return s
-
-
-## 找一个玩家灭亡时还剩不止一个 AI 的种子（找不到时返回 -1）。
-func _seed_where_player_dies() -> int:
-	for seed_value in 30:
-		var s := _passive_game(seed_value, false)
-		if s.winner == "AI" and s.civs.filter(func(c): return c.alive).size() >= 2:
-			return seed_value
-	return -1
+## 确定性终局夹具；长自然局由冻结后的400年实验单列，不在回归里搜索种子。
 
 
 ## 规则：灭亡和胜负
 func test_play_on_after_player_death() -> void:
-	var seed_value := _seed_where_player_dies()
-	check(seed_value >= 0, "找得到玩家先灭亡的对局")
-	if seed_value < 0:
-		return
-	var ended := _passive_game(seed_value, false)
-	check(ended.is_over() and not ended.human().alive, "平时玩家灭亡对局就结束")
-	var s := _passive_game(seed_value, true)
-	check(not s.human().alive, "开着「灭亡后接着打」，玩家同样会灭亡")
-	check(s.steps > ended.steps, "但对局没有在那一回合结束，其余文明接着打")
-	check(s.winner != "AI" and s.winner != "你", "最后的胜负写赢家的名字（或无、平局）")
-	var again := Replay.from_state(s).play_to(s.steps)
-	check(again.checksum() == s.checksum(), "这样的对局也能原样重算")
-
-
-## 调试面板里「继续往下看」的做法：重算灭亡的那一回合，先打开开关再结束回合。
-func test_continue_after_death_recomputes_last_turn() -> void:
-	var seed_value := _seed_where_player_dies()
-	if seed_value < 0:
-		check(false, "找得到玩家先灭亡的对局")
-		return
-	var ended := _passive_game(seed_value, false)
-	var r := Replay.from_state(ended)
-	var s := r.play_to(ended.steps - 1)
-	r.apply_pending(s)
-	s.set_play_on_after_death(true)
-	s.end_turn()
-	check(s.steps == ended.steps and not s.human().alive, "重算的那一回合玩家同样灭亡")
-	check(not s.is_over(), "这次对局没有结束")
-	for i in 300:
-		if s.is_over():
-			break
+	for flag in [false,true]:
+		var s:=_three_civs()
+		s.set_play_on_after_death(flag)
+		s._lose_system(s.human().home,s.human())
+		s._check_winner()
+		check(not s.human().alive and not s.is_over(),"玩家灭亡但两个AI锚点尚存，任何观战选项均不提前终局")
+		var prior:=s.steps
 		s.end_turn()
-	check(s.steps > ended.steps and s.winner != "AI", "接着推进对局，胜负不再由玩家死亡决定")
-	var again := Replay.from_state(s).play_to(s.steps)
-	check(again.checksum() == s.checksum(), "接着打的部分也能原样重算")
+		check_eq(s.steps,prior+1,"其余文明的时钟仍推进")
+		s._lose_system(s.civs[1].home,s.civs[1])
+		s._check_winner()
+		check(s.is_over(),"仅剩一个存续文明才终局")
+		check_eq(s.winner,"第三方" if flag else "AI","原普通/按名字观战显示约定保留")
 
 
-## 灭亡的文明不再收到新情报，但这一回合的预警和太旧的目击记录照样清掉。
-func test_dead_civ_intel_expires() -> void:
-	var s := _three_civs()
-	var me := s.human()
+## 规则：灭亡和胜负
+func test_continue_after_death_recomputes_last_turn() -> void:
+	var s:=_three_civs()
+	s._lose_system(s.human().home,s.human())
+	s._check_winner()
+	var packed:=StateCopy.pack(s)
+	var copied:=StateCopy.unpack(packed)
 	s.set_play_on_after_death(true)
-	me.alerts.append({"pos": Vector3(3, 3, 3)})
-	me.sightings.append({"pos": Vector3(4, 4, 4), "kind": Ship.WARSHIP, "turn": s.turn})
-	s._die(me)
-	_turns(s, Balance.SIGHTING_KEEP + 2)
-	check(me.alerts.is_empty() and me.sightings.is_empty(), "预警和旧的目击记录都清掉")
+	copied.set_play_on_after_death(true)
+	for year in 3:
+		s.end_turn()
+		copied.end_turn()
+	check_eq(copied.checksum(),s.checksum(),"死亡时刻缓存重建后继续的结果一致")
+	# 回放历史另用正式开局和记录入口，不能把手工灭亡夹具伪称可重放自然局。
+	var recorded:=GameState.new_game(8129,2,false)
+	for civ in recorded.civs: recorded.set_autoplay(civ,false)
+	recorded.set_play_on_after_death(true)
+	recorded.end_turn()
+	recorded.set_play_on_after_death(false)
+	recorded.end_turn()
+	var replay:=Replay.from_state(recorded)
+	var again:=replay.play_to(recorded.steps)
+	check_eq(again.checksum(),recorded.checksum(),"观战设置变更仍完整记录并可回放")
 
 
-## 观战局里 0 号文明也叫「你」：它赢了也不能写成玩家胜利。
+## 规则：情报传回
+func test_dead_civ_intel_expires() -> void:
+	var s:=_three_civs()
+	var me:=s.human()
+	me.alerts.append({"pos":Vector3(3,3,3),"t_received":0.0,"turn":s.turn})
+	me.sightings.append({"pos":Vector3(4,4,4),"kind":Ship.WARSHIP,"t_received":0.0,"turn":s.turn})
+	s._lose_system(me.home,me)
+	s._check_winner()
+	_turns(s,Balance.SIGHTING_KEEP+2)
+	check(me.alerts.is_empty() and me.sightings.is_empty(),"灭亡不阻止历史预警/目击按原期限过期")
+
+
 ## 规则：灭亡和胜负
 func test_spectator_winner_is_named() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	s.spectator = true
-	s._die(s.civs[1])
-	check(s.winner == "你" and s.winner_by_name(), "观战局的胜负写赢家的名字")
-	check(not s.log_lines.any(func(l): return l.contains("你胜利了")), "日志不说「你胜利了」")
+	var s:=_two_civs(Vector3i(8,8,8))
+	s.spectator=true
+	s._lose_system(s.civs[1].home,s.civs[1])
+	s._check_winner()
+	check(s.winner=="你" and s.winner_by_name(),"观战局使用文明名而非玩家身份")
+	check(not s.log_lines.any(func(line):return line.contains("你胜利了")),"日志不把同名文明当操作者")

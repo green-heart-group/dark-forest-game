@@ -49,9 +49,12 @@ const COLOR_HIT_DIR := Color(1.0, 0.25, 0.25)
 ## 自己的单位，按种类上色
 const SHIP_COLORS := {
 	Ship.PROBE: Color(0.2, 1.0, 1.0),
+	Ship.NUCLEAR_PROBE: Color(0.2, 1.0, 1.0),
 	Ship.WARSHIP: Color(1.0, 0.55, 0.1),
 	Ship.COLONY: Color(0.3, 1.0, 0.5),
 	Ship.STARSHIP: Color(0.3, 0.9, 1.0),
+	Ship.WANDERING_EARTH: Color(0.3, 0.9, 1.0),
+	Ship.DROPLET: Color(0.8, 0.9, 1.0),
 	Ship.DEVOURER: Color(0.8, 0.45, 1.0),
 	Ship.GRAIN: Color(1.0, 0.3, 1.0),
 	Ship.SOPHON: Color(1.0, 1.0, 0.6),
@@ -117,8 +120,20 @@ var detailed := false
 var _wave_nodes: Array[MeshInstance3D] = []
 
 var main: Node
+var _presentation: GameState
+var _presented_source: GameState
 var state: GameState:
-	get: return main.state
+	get:
+		if _reveal:
+			return main.state
+		if _presentation==null or _presented_source!=main.state:
+			_presentation=Knowledge.presentation(main.state,main.viewed())
+			_presented_source=main.state
+		return _presentation
+
+
+func _viewed() -> Civ:
+	return main.viewed() if _reveal else state.civs[main.state.civs.find(main.viewed())]
 
 var _pivot := Node3D.new()
 ## 星图的所有内容（网格、坐标轴、标记）都放在这个节点下，直接用规则里的坐标。
@@ -270,7 +285,7 @@ func reset_view(instant := false) -> void:
 ## 一维的视角：直线在画面上左右横着（x 往右变大），中心对准正在看的文明的第一个据点，
 ## 远近只看得到附近一段（整条线有 729 格，全放进画面就看不清了，要看远处就平移或缩小）。
 func _frame_line() -> void:
-	var me: Civ = main.viewed() if main != null else null
+	var me: Civ = _viewed() if main != null else null
 	var origins: Array[Vector3i] = me.origins() if me != null else []
 	var at := Vector3(origins[0]) if not origins.is_empty() else _visual_bounds().get_center()
 	# 用展开动画终点的位置：回合推得快、动画还没播完时，现在画的位置是旧的
@@ -352,7 +367,7 @@ func _process(delta: float) -> void:
 
 ## 按住不放的视角键（WASD、Q/E、R/F、Z/X）。在输入框里打字、按着 Ctrl 或 Alt、焦点在别的窗口时不管。
 func _poll_camera_keys(delta: float) -> void:
-	if main.tech_tree.visible:
+	if main.tech_tree.visible or main.migration_preview.visible:
 		return
 	if not get_window().has_focus() or get_viewport().gui_get_focus_owner() is LineEdit \
 			or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META):
@@ -375,13 +390,13 @@ func _poll_camera_keys(delta: float) -> void:
 
 ## 一次性的视角键：H 回到母星、V 重置、T 俯视、G 切换网格。在输入框里打字时不管。
 func _camera_key(key: InputEventKey) -> bool:
-	if main.tech_tree.visible:
+	if main.tech_tree.visible or main.migration_preview.visible:
 		return false
 	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed or get_viewport().gui_get_focus_owner() is LineEdit:
 		return false
 	match key.physical_keycode:
 		KEY_H:
-			var me: Civ = main.viewed()
+			var me: Civ = _viewed()
 			var origins := me.origins()
 			focus_on(Vector3(origins[0] if not origins.is_empty() else me.home))
 		KEY_V:
@@ -412,7 +427,7 @@ func _over_ui() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if main.tech_tree.visible:
+	if main.tech_tree.visible or main.migration_preview.visible:
 		return
 	if event is InputEventKey:
 		var key := event as InputEventKey
@@ -516,7 +531,7 @@ func _nearest_cell(pos: Vector2) -> Vector3i:
 ## 每项是 {"key": 认它的名字, "pos": 规则坐标, "r": 画出来的半径, "cell": 所在的格子, "text": 文字（空时写格子的情报）}。
 ## 半径和 _draw_own、_draw_intel 里画的大小一致，选中框才贴着它的轮廓。
 func _pickables() -> Array[Dictionary]:
-	var me: Civ = main.viewed()
+	var me: Civ = _viewed()
 	var list: Array[Dictionary] = []
 	var seen := {}
 	var add := func(key: String, pos: Vector3, r: float, text := "") -> void:
@@ -699,7 +714,7 @@ func _set_hover(obj: Dictionary) -> void:
 	_face_camera(_cursor_ring)
 	_cursor_label.text = _object_text(obj)
 	_cursor_label.position = Vector3(0, 0, r + 0.12)
-	var me: Civ = main.viewed()
+	var me: Civ = _viewed()
 	var fade := 0.0
 	if me.intel.has(c) and not me.owns(c):
 		fade = clampf((state.turn - int(me.intel[c]["turn"])) / INTEL_FADE_TURNS, 0.0, 1.0)
@@ -709,7 +724,7 @@ func _set_hover(obj: Dictionary) -> void:
 
 ## 鼠标停在格子上时显示的文字：坐标、是谁的，以及传回来的情报。
 func _cell_info(c: Vector3i) -> String:
-	var me: Civ = main.viewed()
+	var me: Civ = _viewed()
 	var head := "(%d, %d, %d)" % [c.x, c.y, c.z]
 	if me.owns(c):
 		head += "　你的母星系" if c == me.home else "　你的星系"
@@ -874,7 +889,7 @@ func _dot_mesh() -> MultiMesh:
 ## 点 p 在不在正在看的文明的视野里（按上次刷新时的视野，不管黑域挡不挡）。
 func _in_eyes(p: Vector3) -> bool:
 	for o in _grid_eyes:
-		if GameState.in_view(o, p):
+		if Signals.in_view(state,o,p):
 			return true
 	return false
 
@@ -1070,6 +1085,11 @@ func _draw_axes() -> void:
 ## 重画星图上会变的标记。me：正在看的文明；aim：行动页的瞄准（见 ActionPage.preview()）；
 ## show_vision：画自己的视野；reveal：上帝视角，画出所有星系和别人的舰船。
 func refresh(me: Civ, aim: Dictionary, show_vision: bool, reveal: bool) -> void:
+	_reveal=reveal
+	if not reveal:
+		_presentation=Knowledge.presentation(main.state,me)
+		_presented_source=main.state
+		me=_presentation.civs[main.state.civs.find(me)]
 	_wave_nodes.clear()
 	for child in _markers.get_children():
 		_markers.remove_child(child)
@@ -1081,7 +1101,7 @@ func refresh(me: Civ, aim: Dictionary, show_vision: bool, reveal: bool) -> void:
 	_animate_zero()
 	var eyes: Array[Dictionary] = []
 	if me.alive:
-		eyes = state.observers(me)
+		eyes = Signals.observers(state,me)
 	if eyes != _grid_eyes:
 		_grid_eyes = eyes
 		_rebuild_warped()
@@ -1176,16 +1196,44 @@ func _draw_foil_preview(from: Vector3, target: Vector3i, line_mode: bool) -> voi
 
 ## 自己的视野：星系和星舰是球，在飞的舰船是小球，探测器是圆锥。预警系统的范围是橙色的球。
 func _draw_vision(me: Civ) -> void:
-	for o in state.observers(me):
-		var r: float = o["r"]
+	for o in Signals.observers(state,me):
+		var r: float = o["radius"]/state.physical_cell_size()
 		var pos: Vector3 = o["pos"]
 		var dir: Vector3 = o["dir"]
 		if dir == Vector3.ZERO:
 			_markers.add_child(_bubble(pos, r, COLOR_VISION))
 			continue
+		if state.dimension==1:
+			var line:=BoxMesh.new()
+			line.size=Vector3(r*(1.0+o["backward"]),0.06,0.03)
+			var bar:=MeshInstance3D.new()
+			bar.mesh=line
+			bar.material_override=_flat_material(COLOR_PROBE_VISION)
+			bar.position=_warp_point(pos+dir*r*(1.0-o["backward"])*0.5)
+			bar.set_meta("vision_observer",o["id"])
+			_markers.add_child(bar)
+			continue
+		var width: float=r*tan(deg_to_rad(o["angle"]*0.5))+Balance.COLLISION_EPSILON/state.physical_cell_size()
+		if state.dimension==2:
+			var mesh:=ImmediateMesh.new()
+			var side:=Vector3(-dir.y,dir.x,0.0).normalized()
+			var tip:=Balance.COLLISION_EPSILON/state.physical_cell_size()
+			var corners: Array[Vector3]=[pos+side*tip,pos-side*tip,pos+dir*r-side*width,pos+dir*r+side*width]
+			mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+			for index in [0,1,2,0,2,3]:
+				mesh.surface_add_vertex(_warp_point(corners[index]))
+			mesh.surface_end()
+			var triangle:=MeshInstance3D.new()
+			triangle.mesh=mesh
+			var material:=_flat_material(COLOR_PROBE_VISION)
+			material.cull_mode=BaseMaterial3D.CULL_DISABLED
+			triangle.material_override=material
+			triangle.set_meta("vision_observer",o["id"])
+			_markers.add_child(triangle)
+			continue
 		var cone := CylinderMesh.new()
-		cone.top_radius = 0.0
-		cone.bottom_radius = r * tan(deg_to_rad(o["angle"] / 2.0)) + Geometry.CELL_HALF
+		cone.top_radius = Balance.COLLISION_EPSILON/state.physical_cell_size()
+		cone.bottom_radius = width
 		cone.height = r
 		var node := MeshInstance3D.new()
 		node.mesh = cone
@@ -1193,6 +1241,7 @@ func _draw_vision(me: Civ) -> void:
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		node.material_override = mat
 		node.position = _warp_point(pos + dir * r / 2.0)
+		node.set_meta("vision_observer",o["id"])
 		# 圆锥的尖朝 +y；尖要在探测器那头，所以 +y 朝反方向
 		_orient(node, -dir)
 		_markers.add_child(node)
@@ -1201,7 +1250,7 @@ func _draw_vision(me: Civ) -> void:
 			_markers.add_child(_bubble(Vector3(c), me.warning_range(), Color(COLOR_ALERT, 0.03)))
 
 
-## 星图上大家都看得到的东西：压平的空间、黑域。
+## 已收到观测的空间变化；正常视角的state是Knowledge只读投影。
 func _draw_space() -> void:
 	# 黑域（G14）：光速低到光粒没有杀伤力的格子画成半透明的方块，光速越低越不透明；中心还保持光速为 0 的再加一圈边框
 	var slow_cells: Array[Vector3i] = []
@@ -1211,12 +1260,12 @@ func _draw_space() -> void:
 			if state.in_black_domain(c):
 				slow_cells.append(c)
 				slow_colors.append(Color(COLOR_DOMAIN, COLOR_DOMAIN.a * (1.0 - state.light_at(c))))
+				if state.light_at(c)<=0.0:
+					_markers.add_child(_domain_box(c,Color(COLOR_DOMAIN,0.0)))
 	if not slow_cells.is_empty():
 		var cube := BoxMesh.new()
 		cube.size = Vector3.ONE
 		_markers.add_child(_instances(cube, slow_cells, slow_colors, _fill_f(slow_cells.size(), 1.0)))
-	for d in state.black_domains:
-		_markers.add_child(_domain_box(d["center"], Color(COLOR_DOMAIN, 0.0)))
 
 
 ## 自己的东西：舰船、设施、降维箔、准备中的黑域、自己发出的广播。
@@ -1224,7 +1273,8 @@ func _draw_own(me: Civ) -> void:
 	for s in me.ships:
 		if s.dead:
 			continue
-		if not s.docked and (detailed or _selected_key() == "s%d" % s.id or _aim.get("unit") == s):
+		var aimed: Ship=_aim.get("unit")
+		if not s.docked and (detailed or _selected_key() == "s%d" % s.id or (aimed!=null and aimed.id==s.id)):
 			_draw_path(s, COLOR_MINE)
 		if s.kind == Ship.STARSHIP:
 			var gem := SphereMesh.new()
@@ -1308,6 +1358,8 @@ func _draw_own(me: Civ) -> void:
 
 
 func active_broadcasts(me: Civ) -> Array[Dictionary]:
+	if not _reveal:
+		me=_viewed()
 	var result: Array[Dictionary] = []
 	for b in state.broadcasts:
 		if b["sender"] == me and b["radius"] < _farthest_corner(b["from"]):

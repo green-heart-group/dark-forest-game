@@ -9,86 +9,69 @@ func _fill_light(s: GameState, c: float) -> void:
 	s._light_moving = false
 
 
-## G14：只能投放在看得到的地方；生效后那一格光速为 0，保持一段时间，同时向周围扩散，之后慢慢恢复。
-## 规则：黑域，G14
-func test_black_domain_holds_then_spreads() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var me := s.human()
-	var center := Vector3i(2, 0, 0)
-	check(s.launch_black_domain(me, center)["error"] != "", "要先有黑域投放科技")
-	_give(me, ["domain"])
-	check(s.launch_black_domain(me, Vector3i(5, 0, 0))["error"].contains("看得到"), "只能投放在自己现在看得到的地方")
-	check(s.launch_black_domain(me, center)["error"] == "", "投放黑域")
-	s.end_turn()
-	check(s.black_domains.is_empty() and s.light_at(center) == 1.0, "还在准备")
-	s.end_turn()
-	check(s.light_at(center) == 0.0 and s.black_domains.size() == 1, "生效后那一格的光速变成 0")
-	s.end_turn()
-	var next := s.light_at(Vector3i(3, 0, 0))
-	check(s.light_at(center) == 0.0 and next > 0.0 and next < 1.0, "每回合向周围扩散一格，中心保持 0")
-	check(s.light_at(Vector3i(5, 0, 0)) == 1.0, "一回合只扩散一格")
-	_turns(s, Balance.BLACK_DOMAIN_TURNS)
-	check(s.black_domains.is_empty() and s.light_at(center) > 0.0, "保持 %d 回合后，中心慢慢恢复" % Balance.BLACK_DOMAIN_TURNS)
-	check(s.light_at(Vector3i(5, 0, 0)) < 1.0, "扩散到更远的地方")
-	_turns(s, 60)
-	check(s.light_at(center) > Balance.GRAIN_MIN_LIGHT, "很久以后中心也恢复得差不多")
-	check(s.light_at(Vector3i(8, 8, 8)) < 1.0, "宇宙背景的光速降低了一点")
+## 规则：黑域
+func test_black_domain_payload_activation_radius_and_expiry() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	var center:=Vector3i(2,0,0)
+	check(s.launch_black_domain(me,center)["error"]!="","未解锁不可投放")
+	me.techs["domain"]=true
+	check(s.launch_black_domain(me,Vector3i(5,0,0))["error"]!="","没有已收情报与覆盖的目标拒绝")
+	check_eq(s.launch_black_domain(me,center)["error"],"","公开入口投放")
+	check_eq([me.energy,me.mineral,me.actions_left],[52.0,88.0,1],"48E12M及1AP预付")
+	check(s.launch_black_domain(me,center)["error"]!="","20年冷却生效")
+	WorldTime.advance(s,4.2)
+	check(s.black_domains.is_empty(),"2ly/.9c飞行后还需2年激活")
+	WorldTime.advance(s,0.1)
+	check(s.black_domains.size()==1 and s.relative_light(Vector3(center))==0,"真实激活后核心零光速")
+	WorldTime.advance(s,2.0)
+	check(absf(s.relative_light(Vector3(2.5,0,0))-1.0/3.0)<0.00001,"半径1ly内按权重衰减")
+	check_eq(s.relative_light(Vector3(3.01,0,0)),1.0,"有界场不扩散到半径之外")
+	WorldTime.advance(s,18.1)
+	check(s.black_domains.is_empty() and s.relative_light(Vector3(center))==1.0,"激活20年到期后恢复，无全图残场")
 
 
-## G14：舰船的速度乘以光速；光速低于 0.95 的地方光粒没有杀伤力；舰船慢到几乎不动就停下，停 5 回合消失。
-## 规则：黑域，G14
-func test_light_slows_ships_and_disarms_grains() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var me := s.human()
-	_fill_light(s, 0.5)
-	var w := _ship(s, me, Ship.WARSHIP, Vector3(0, 1, 0), Vector3(1, 0, 0))
-	w.speed = Balance.WARSHIP_MOVE[0]
-	s.end_turn()
-	check(is_equal_approx(w.pos.x, Balance.WARSHIP_MOVE[0] * 0.5), "光速一半的地方，战舰只飞一半远")
-	_fill_light(s, 0.9)
-	var g := _ship(s, me, Ship.GRAIN, Vector3(0, 2, 0), Vector3(1, 0, 0))
-	s.end_turn()
-	check(g.dead or not me.ships.has(g), "光速低于 0.95 的地方光粒失去杀伤力，消失")
-	me.grains[Vector3i.ZERO] = true
-	check(s.grain_error(me, Vector3(1, 0, 0)).contains("黑域"), "在黑域里不能发射光粒")
-	_fill_light(s, 0.005)
-	s.set_light_at(Vector3i.ZERO, 1.0)  # 两边的母星系都不在里面，不然直接算输
-	s.set_light_at(Vector3i(8, 8, 8), 1.0)
-	var p := _ship(s, me, Ship.PROBE, Vector3(0, 3, 0), Vector3(1, 0, 0))
-	_turns(s, Balance.SHIP_STUCK_TURNS - 1)
-	check(me.ships.has(p) and p.pos == Vector3(0, 3, 0) and p.stuck == Balance.SHIP_STUCK_TURNS - 1, "慢到几乎不动就停在原地")
-	s.end_turn()
-	check(not me.ships.has(p), "停 %d 回合后消失" % Balance.SHIP_STUCK_TURNS)
-	_give(me, ["warship"])
-	var docked := _ship(s, me, Ship.WARSHIP, Vector3(0, 4, 0))
-	check(s.dispatch_error(me, docked.id, Vector3(1, 0, 0)) == GameState.STUCK_ERROR, "光速几乎为 0 的地方派不出去")
+## 规则：黑域
+func test_light_caps_ships_and_disarms_grains() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	Hazards.activate(s,Vector3(3,0,0))
+	s.clock=2.0
+	Hazards.refresh(s)
+	var war:=_ship(s,me,Ship.WARSHIP,Vector3(3.5,0,0),Vector3.RIGHT)
+	war.warp=true
+	war.speed=1.0
+	var motion:=Kinematics.motion(s,me,war,0.05)
+	check(absf(motion["speed"]-1.0/3.0)<0.00001,"已达光速的曲率舰被当地有效光速限速")
+	var grain:=_ship(s,me,Ship.GRAIN,Vector3(3.5,0,0),Vector3.RIGHT)
+	var probe:=_ship(s,me,Ship.PROBE,Vector3(3,0,0),Vector3.RIGHT)
+	WorldTime.advance(s,0.1)
+	check(grain.dead,"低于.95相对光速的光粒失效")
+	check(probe.dead,"进入低于.01相对光速核心的舰船直接毁灭，不使用旧5年计时")
+	check(not war.dead and war.pos.x>3.5 and war.pos.x<3.55,"非核心中的舰船继续有限移动")
+	me.grains[me.home]=true
+	Hazards.activate(s,Vector3(me.home))
+	check(s.grain_error(me,Vector3.RIGHT)!="","核心内的发射源不能投送光粒")
 
 
-## G14：光速几乎为 0 的格子挡住光和视野；光速低的地方，情报传回得慢。
-## 规则：黑域，G14
+## 规则：黑域
 func test_black_domain_blocks_vision_and_slows_reports() -> void:
-	var s := _two_civs(Vector3i(4, 0, 0))
-	var me := s.human()
-	me.telescope = 3
-	s._ensure_light()
-	s.set_light_at(Vector3i(2, 0, 3), 0.0)
-	check(not s.blocked(Vector3.ZERO, Vector3(4, 0, 0)), "光速为 0 的格子不在路线上，不挡")
-	s.set_light_at(Vector3i(2, 0, 3), 1.0)
-	s.set_light_at(Vector3i(2, 0, 0), 0.0)
-	check(s.blocked(Vector3.ZERO, Vector3(4, 0, 0)), "路线穿过光速为 0 的格子，挡住")
-	s._observe(me)
-	check(me.known.is_empty(), "看不到后面")
-	var g := _ship(s, me, Ship.GRAIN, Vector3.ZERO, Vector3(1, 0, 0))
-	g.speed = 1.0
-	_turns(s, 4)
-	check(s.civs[1].alive, "光粒穿不过黑域")
-	_fill_light(s, 0.5)
-	var probe := _ship(s, me, Ship.PROBE, Vector3(0, 6, 0), Vector3(0, 0, 1))
-	probe.speed = 0.0
-	me.reports.clear()
-	s._observe(me)
-	var report: Dictionary = me.reports[-1]
-	check(report["home_at"] == s.turn + 12, "光速一半，情报传回要两倍的时间")
+	var s:=_two_civs(Vector3i(4,0,0))
+	var me:=s.human()
+	me.telescope=3
+	Hazards.activate(s,Vector3(2,0,0))
+	s.clock=2.0
+	Hazards.refresh(s)
+	var message:=Signals.send(s,0,Vector3(4,0,0),Signals.controller(me),"report",{
+		"type":"own","data":{"id":9001},"source_id":9001,"t_observed":s.clock,"epoch":0})
+	WorldTime.advance(s,8.0)
+	check(not me.telemetry.has(9001) and message["pos"].x>2.0,"实际消息沿途减速并停在核心外，不瞬间回报")
+	var held:Vector3=message["pos"]
+	WorldTime.advance(s,0.5)
+	check(message["pos"].is_equal_approx(held),"源仍存在时消息停留，不从源头重发")
+	check(not me.known.has(s.civs[1].home),"有效视距也不能让核心后的观测即时穿越")
+	WorldTime.advance(s,14.0)
+	check(me.telemetry.has(9001),"场到期后从原进度继续传播，最终报告到达")
 
 
 ## 只为提速的捷径（回合末看之前先算好的数据、只扫线段附近的格子），和直接一格一格算的结果一样。
@@ -148,38 +131,28 @@ func test_speedups_match_plain_checks() -> void:
 	check(cells_same, "飞一步扫过的格子：只扫线段附近，结果不变")
 
 
-## G14、B4：被困在黑域里的星系产出只有 1/10（向上取整），母星系在里面不能升级；全部困在光速为 0 的地方就算输。
-## 规则：黑域，每回合的收入，G14
-func test_hiding_in_domain_cuts_income_and_all_in_loses() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var me := s.human()
-	s.map.rocky[Vector3i.ZERO] = 4
-	_set_star(s, Vector3i(5, 5, 5), StarMap.Star.SINGLE)
-	me.colonies.append(Vector3i(5, 5, 5))
-	_open_tiers(me, 1)
-	var full := s.energy_income(me)
-	me.colonies.erase(Vector3i(5, 5, 5))
-	var home := s.energy_income(me)
-	me.colonies.append(Vector3i(5, 5, 5))
-	s._ensure_light()
-	s.set_light_at(Vector3i.ZERO, 0.5)
-	check(s.energy_income(me) == ceili(home * Balance.DOMAIN_INCOME) + full - home, "被困在黑域里的星系产出只有 1/10，向上取整")
-	check(s.research(me, "dyson")["error"] != "", "母星系在黑域里不能升级科技")
-	me.colonies.erase(Vector3i(5, 5, 5))
-	s._check_hiding()
-	check(me.alive, "光速没降到 0，还算没困住")
-	s.set_light_at(Vector3i.ZERO, 0.0)
-	s._check_hiding()
-	check(not me.alive, "所有星系都困在光速为 0 的黑域里，算输")
+## 规则：黑域，每回合的收入
+func test_domain_does_not_invent_anchor_elimination_or_output_multiplier() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	me.techs["fission"]=true
+	s.map.rocky[me.home]=4
+	var full:=s.energy_income(me)
+	Hazards.activate(s,Vector3(me.home))
+	WorldTime.advance(s,1.0)
+	check_eq(s.energy_income(me),full,"产能依实体Q和维护，不再套旧黑域十分之一倍率")
+	check(me.alive and not s.is_over(),"永久星系锚点仍存续，不因通信中断宣告灭亡")
+	check_eq(s.emergency_work(me,"M")["error"],"","原地锚点保留应急作业")
 
 
 ## 规则：黑域
-func test_light_diffusion_in_new_dimensions() -> void:
-	var s := _two_dimensional_match()
-	s._ensure_light()
-	var center := Vector3i(13, 13, s.flat_plane)
-	s.set_light_at(center, 0.0)
-	s._light_moving = true
-	s._spread_light()
-	check(is_equal_approx(s.light_at(center), 8.0 / 9.0), "二维光速按邻近 3×3 格扩散")
-	check(s.light.size() == 729 and s.light_at(Vector3i(13, 13, s.flat_plane + 1)) == 1.0, "光速数组保留 729 格且图外读取安全")
+func test_bounded_domain_uses_physical_radius_in_new_dimensions() -> void:
+	var s:=_two_dimensional_match()
+	var center:=Vector3(13,13,s.flat_plane)
+	Hazards.activate(s,center)
+	s.clock+=4.0
+	Hazards.refresh(s)
+	check_eq(s.light_speed_at(center),0.0,"二维黑域核心为零")
+	check(absf(s.light_speed_at(center+Vector3.RIGHT)-0.2)<0.00001,"二维1逻辑格=.5ly，.6背景光速乘1/3场系数")
+	check_eq(s.light_speed_at(center+Vector3(3,0,0)),0.6,"超过1ly后恢复二维背景光速")
+	check_eq(s.cell_ids.size(),729,"物理场不丢失永久格身份")

@@ -56,6 +56,8 @@ func begin(name: String) -> void:
 	tests += 1
 	_checks_before = checks
 	_started_at = Time.get_ticks_msec()
+	if OS.get_cmdline_user_args().has("progress") or OS.get_environment("FOREST_TEST_PROGRESS")=="1":
+		print("开始："+name)
 
 
 func end() -> void:
@@ -63,6 +65,8 @@ func end() -> void:
 	# 测试代码出错时，GDScript 不停下来，只是这个函数后面的都不跑了，所以一次检查都没做到也算失败
 	if checks == _checks_before:
 		fail("没有跑到任何检查（可能是代码出错）")
+	if OS.get_cmdline_user_args().has("progress") or OS.get_environment("FOREST_TEST_PROGRESS")=="1":
+		print("完成：%s，%d毫秒，%d次检查"%[_name,_times[_name],checks-_checks_before])
 	_name = ""
 
 

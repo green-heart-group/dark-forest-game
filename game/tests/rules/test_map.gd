@@ -55,7 +55,7 @@ func test_new_game_places_civs() -> void:
 	for civ in s.civs:
 		check(s.map.star_at(civ.home) != StarMap.Star.NONE, "%s 的母星必须有星系" % civ.name)
 		check(civ.actions_left == civ.action_points(s.map), "%s 开局行动点已发放" % civ.name)
-		check(civ.has_tech("probe") and civ.has_tech("colony") and not civ.has_tech("starship"), "开局只有 0 级科技（殖民船在 0 级）")
+		check(civ.has_tech("probe") and civ.has_tech("warning") and not civ.has_tech("colony") and not civ.has_tech("starship"), "开局只有五项初始科技，运输和殖民要付费研究")
 		homes[civ.home] = true
 	check(homes.size() == s.civs.size(), "母星不能重叠")
 	check(s.hidden.size() == Balance.HIDDEN_COUNT, "有 %d 个隐藏文明" % Balance.HIDDEN_COUNT)
@@ -64,7 +64,7 @@ func test_new_game_places_civs() -> void:
 	check(again.human().home == s.human().home, "同一个种子，母星位置相同")
 
 
-## 规则：星图和星系生成，F3.1
+## 规则：星图和星系生成
 func test_homes_far_apart() -> void:
 	var close := 0
 	for seed_value in 50:

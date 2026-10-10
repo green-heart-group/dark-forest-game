@@ -1260,6 +1260,28 @@ static func describe(civ: Civ, h: Dictionary) -> String:
 			return "🌀 从 %s 朝 %s 发射单向著" % [_cell(a[1]), _cell(a[0])]
 		"start_reduce":
 			return "⬇️ 开始自身降维"
+		"cancel_order":
+			return "撤销工程 #%d，等待执行回报" % a[0]
+		"emergency_work":
+			return "应急作业：%s" % a[0]
+		"refit_ship":
+			return "改装%s：%s" % [_ship(civ,a[0]),"、".join(a[1])]
+		"refit_miner":
+			return "在 %s 改装采矿船" % _cell(a[0])
+		"start_landing":
+			return "运输船 #%d 开始付费落地工程" % a[0]
+		"prepare_conversion":
+			return "准备%s迁维：冻结 %d 个实体" % ["应急" if a[2] else "完整",a[0].size()]
+		"execute_conversion":
+			return "执行迁维方案 #%d" % a[0]
+		"active_scan":
+			return "发出主动扫描，方向 %s" % _dir(a[0])
+		"start_earth":
+			return "开始流浪地球改造"
+		"set_weapon_policy":
+			return "设置%s的武器优先级：%s" % [_ship(civ,a[0]),a[1]]
+		"set_maintenance":
+			return "设置维护优先级与暂停项目"
 		"launch_singularity":
 			return "⚫ 发射奇异点"
 		"launch_black_domain":

@@ -3,15 +3,18 @@ extends "res://tests/rules/rule_suite.gd"
 
 
 ## 规则：每回合的收入
-func test_action_points_follow_home_stars_and_colonies() -> void:
+func test_action_points_are_fixed_across_stars_and_colonies() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))
 	var me := s.human()
-	check(me.action_points(s.map) == 5, "单星母星系 6 − 1 = 5 个行动点")
+	check_eq(me.action_points(s.map),3,"单星母星每年3行动点")
 	_set_star(s, Vector3i.ZERO, StarMap.Star.TRIPLE)
-	check(me.action_points(s.map) == 3, "三星母星系 3 个行动点")
+	check_eq(me.action_points(s.map),3,"三星母星仍为3行动点")
 	_set_star(s, Vector3i(1, 0, 0), StarMap.Star.TRIPLE)
 	me.colonies.append(Vector3i(1, 0, 0))
-	check(me.action_points(s.map) == 4, "每多一个殖民地 +1，殖民地的恒星数不影响")
+	check_eq(me.action_points(s.map),3,"殖民数不增加行动点")
+	me.actions_left=1
+	s.start_turn(me)
+	check_eq(me.actions_left,3,"剩余行动点不跨年累积")
 
 
 ## 规则：每回合的收入
@@ -22,12 +25,12 @@ func test_income_from_fission_dysons_and_miners() -> void:
 	var base := Balance.ENERGY_PER_SYSTEM + Balance.ENERGY_PER_STAR
 	check(s.energy_income(me) == base + 3 * Balance.FISSION_ENERGY, "每颗类地行星给裂变能")
 	me.dysons[Vector3i.ZERO] = 1
-	check(s.energy_income(me) == base + 3 * Balance.FISSION_ENERGY + Balance.DYSON_ENERGY, "戴森球 +6E")
+	check(s.energy_income(me) == base + 3 * Balance.FISSION_ENERGY + Balance.DYSON_ENERGY, "戴森产出来自恒星")
 	s.map.stars[Vector3i.ZERO] = StarMap.Star.NONE
 	check(s.energy_income(me) == Balance.ENERGY_PER_SYSTEM + 3 * Balance.FISSION_ENERGY, "没有恒星的星系没有戴森球和恒星的产能")
-	check(s.mineral_income(me) == Balance.MINERAL_PER_COLONY, "每个星系的矿石")
+	check_eq(s.mineral_income(me),-Construction.upkeep("dyson")[1],"未关闭的戴森维护仍扣固定矿石，不凭空给星系产矿")
 	me.miners[Vector3i.ZERO] = 3
-	check(s.mineral_income(me) == Balance.MINERAL_PER_COLONY + 3 * Balance.MINER_MINERAL, "每艘采矿船多产矿石")
+	check_eq(s.mineral_income(me),3*Balance.MINER_MINERAL-Construction.upkeep("dyson")[1],"矿船毛产出扣固定维护")
 
 
 ## 规则：每回合的收入，一个回合里发生什么

@@ -57,6 +57,9 @@ func fixture() -> GameState:
 		s.system_cells.append(pos)
 		s.civs.append(civ)
 		s.start_turn(civ)
+	s.ensure_cells()
+	for civ in s.civs:
+		Assets.ensure(s,civ)
 	return s
 
 
@@ -99,8 +102,15 @@ func run_tests() -> void:
 	await capture("start")
 	await run(test_research)
 	await run(test_tech_tree)
+	await run(test_v01_tree_and_numeric_state)
+	await run(test_v01_shared_information_view)
+	await run(test_v01_ui_resource_preview)
+	await run(test_v01_ui_pointer_build_feedback)
+	await run(test_v01_speed_descriptions_follow_replay_parameters)
+	await run(test_v01_local_parallel_progress_display)
 	await run(test_map_clarity)
 	await run(test_build_and_dispatch)
+	await run(test_v01_completed_build_selection_waits_for_receipt)
 	await run(test_colony)
 	await run(test_hover_intel)
 	await run(test_hover_stored_grain)
@@ -112,6 +122,9 @@ func run_tests() -> void:
 	await run(test_black_domain_drawn)
 	await run(test_intel_on_starless_system)
 	await run(test_reduction_controls)
+	await run(test_v01_navigation_preview_and_ready_display)
+	await run(test_v01_probe_vision_matches_received_rules)
+	await run(test_v01_probe_vision_physical_scale_in_lower_dimensions)
 	await run(test_flat_and_line)
 	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
@@ -220,7 +233,9 @@ func test_game_shortcuts_and_compact_layout() -> void:
 	check_eq(map._camera.h_offset, 0.0, "收起面板后镜头居中")
 	view._on_key(key, root)
 	check(panel.visible and view.panel_width() > 0.0, "再次按键展开面板")
-	view.state.build(view.state.human(), "probe")
+	panel._build_tiles["probe"].pressed.emit()
+	for i in int(ceilf(Construction.work("probe"))):
+		panel._end.pressed.emit()
 	view.refresh()
 	key.keycode = KEY_ENTER
 	view._on_key(key, root)
@@ -262,43 +277,47 @@ func test_game_shortcuts_and_compact_layout() -> void:
 
 
 func test_save_across_dimensions() -> void:
-	var defaults := Balance.values()
 	var s := GameState.new_game(1, 1)
 	s.set_autoplay(s.civs[1], false)
 	for c in s.civs:
 		s.dev_set(c, "energy", 10000)
+		s.dev_set(c, "mineral", 10000)
 		s.dev_tech(c, "dimension", true)
-		s.start_reduce(c)
-	for i in Balance.REDUCE_TURNS:
+		s.dev_set(c, "dimension_ammo", 3)
+		check_eq(s.start_reduce(c)["error"],"","可回放操作冻结第一阶段迁维名册")
+	for i in 6:
 		s.end_turn()
-	s.dev_balance("FOIL_SPEED", 10.0)
-	check_eq(s.launch_foil(s.human(), Vector3i(4, 4, 4))["error"], "", "通过记录里的正式行动展开")
+	var near:=s.human().home+Vector3i(1 if s.human().home.x<8 else -1,0,0)
+	var fired:=s.launch_foil(s.human(),near)
+	check_eq(fired["error"],"","通过记录里的正式行动发射载荷")
+	if fired["error"]!="":
+		return
+	for i in 7:
+		s.end_turn()
 	for dim in [3, 2, 1]:
-		if dim == 3:
-			for i in Balance.FOIL_PREPARE_TURNS + 2:
-				s.end_turn()
-		else:
-			for i in 90:
-				if s.dimension == dim:
+		if dim != 3:
+			for i in 100:
+				if s.dimension==dim or s.is_over():
 					break
 				s.end_turn()
-		check_eq(s.dimension, dim, "保存各阶段局面")
+		check_eq(s.dimension,dim,"保存展开中、二维、一维的实际局面")
+		check(not s.is_over(),"各文明提前收到自动迁维准备，可存续到下一阶段")
 		show_state(s)
-		var expected := s.checksum()
-		var path := "user://_test_dimension_save.forest"
-		check_eq(view.saves.save_file(path), OK, "降维中或完成后可以保存")
+		var expected:=s.checksum()
+		var path:="user://_test_dimension_save.forest"
+		check_eq(view.saves.save_file(path),OK,"降维中或完成后可以保存")
 		await view.saves.load_file(path)
-		check_eq(view.state.checksum(), expected, "降维存档回放与保存状态一致")
-		check_eq(view.state.foil_zones, s.foil_zones, "多回合半格半径完整恢复")
+		check_eq(view.state.checksum(),expected,"有限传播、准备收据和换图全部可回放")
+		check_eq(view.state.foil_zones,s.foil_zones,"前沿历史和半格半径完整恢复")
 		DirAccess.remove_absolute(path)
-		s = view.state
-		if dim == 2:
+		s=view.state
+		if dim==2:
 			for c in s.civs:
-				s.start_reduce(c)
-			for i in Balance.REDUCE_TURNS:
+				check_eq(s.start_reduce(c)["error"],"","二维冻结下一阶段迁维名册")
+			for i in 6:
 				s.end_turn()
-			check_eq(s.launch_line_foil(s.human(), Vector3i(13, 13, s.flat_plane))["error"], "", "二维发射单向著")
-	Balance.apply(defaults)
+			near=s.human().home+Vector3i(1 if s.human().home.x<26 else -1,0,0)
+			check_eq(s.launch_line_foil(s.human(),near)["error"],"","二维正式发射单向著")
 
 
 func test_panel_layout() -> void:
@@ -372,20 +391,25 @@ func test_research() -> void:
 	var s := fixture()
 	var me := s.human()
 	show_state(s)
-	view.tech_tree.select_tech("warship")
+	view.tech_tree.select_tech("gravity_scan")
 	view.tech_tree._research.pressed.emit()
-	check(not me.has_tech("warship"), "I 级没开放时按钮不起作用")
-	me.tier1_turn = s.turn
-	view.refresh()
-	check(not view.tech_tree._research.disabled, "发现别人后可以升 I 级")
+	check(not me.has_tech("gravity_scan"), "I 级权限没开放时按钮不起作用")
+	view.tech_tree.select_tech("warship")
+	check(not view.tech_tree._research.disabled, "005属于0级，从开局就能付费研究")
 	var energy := me.energy
 	var ap := me.actions_left
 	view.tech_tree.select_tech("warship")
 	view.tech_tree._research.pressed.emit()
-	check(me.has_tech("warship") and me.energy == energy - Tech.cost("warship")[0], "按钮升级科技并扣资源")
+	check(not me.has_tech("warship") and me.energy == energy - Tech.cost("warship")[0], "按钮提交研究并全额托管资源，不能立即获科技")
+	check_eq(me.actions_left, ap-1, "研究消耗1行动点")
+	view.tech_tree.select_tech("fusion")
+	check(view.tech_tree._research.disabled,"全局只有一条研究队列")
+	for i in int(ceilf(Tech.work("warship"))):
+		panel._end.pressed.emit()
+	view.tech_tree.select_tech("warship")
+	check(me.has_tech("warship"),"工作量完成且回报收到后取得科技")
 	check(view.tech_tree._research.disabled and view.tech_tree.tiles["warship"].text.contains("已有"),
 			"升级后显示已有")
-	check_eq(me.actions_left, ap, "科技树研究不花行动点")
 	view.tech_tree.select_tech("beam")
 	check(not view.tech_tree._research.disabled, "研究战舰后同级武器解除前置锁定")
 	me.is_ai = true
@@ -395,7 +419,10 @@ func test_research() -> void:
 	view.refresh()
 	var actions := me.actions_left
 	panel._upgrade_tiles["telescope"].pressed.emit()
-	check(me.telescope == 1 and me.actions_left == actions, "升级射电望远镜不花行动点")
+	check(me.telescope == 0 and me.actions_left == actions-1, "望远镜升级消耗1行动点并等待工程完成")
+	for i in int(ceilf(Balance.TELESCOPE_UPGRADE_WORK[0])):
+		panel._end.pressed.emit()
+	check_eq(me.telescope,1,"望远镜完成回报到达后增加一级")
 
 
 func test_build_and_dispatch() -> void:
@@ -403,7 +430,10 @@ func test_build_and_dispatch() -> void:
 	var me := s.human()
 	show_state(s)
 	panel._build_tiles["probe"].pressed.emit()
-	check(me.count(Ship.PROBE) == 1, "建造按钮造出探测器")
+	check(me.count(Ship.PROBE) == 0 and me.pending.size()==1, "建造按钮提交有工时的探测器订单")
+	for i in int(Construction.work("probe")):
+		panel._end.pressed.emit()
+	check(me.count(Ship.PROBE) == 1, "完成工程并收到回报后出现探测器")
 	check(actions._action == actions.Action.DISPATCH and actions._unit_pick.item_count == 1, "造好后行动页选中这个单位")
 	var probe: Ship = me.ships[0]
 	check(actions._selected_unit() == probe and actions._slow.visible, "停着的探测器可以选慢速出发")
@@ -416,10 +446,47 @@ func test_build_and_dispatch() -> void:
 	check(map._markers.get_child_count() > 0, "星图上画了标记")
 
 
+func test_v01_completed_build_selection_waits_for_receipt() -> void:
+	var s:=fixture()
+	var me:=s.human()
+	var at:=Vector3i(4,0,0)
+	me.colonies.append(at)
+	s.map.stars[at]=StarMap.Star.SINGLE
+	s.system_cells.append(at)
+	Assets.ensure(s,me)
+	Knowledge.report_site(s,me,at)
+	Signals.advance(s,4.0)
+	s.clock=4.0
+	Signals.receive_due(s)
+	show_state(s)
+	var existing:=Ship.make(Ship.COLONY,Vector3(me.home),s.next_id())
+	me.ships.append(existing)
+	actions.select_unit(existing)
+	view.refresh()
+	panel._origin_pick.select(1)
+	panel._build_tiles["probe"].pressed.emit()
+	Signals.advance(s,4.0)
+	s.clock=8.0
+	Signals.receive_due(s)
+	WorkOrder.advance(me.pending[0],100.0)
+	s._finish_pending(me,0.0)
+	view.refresh()
+	check(panel._build_tiles["probe"].disabled,"远端真实完工未回报前，建造按钮仍等待确认")
+	check(actions._selected_unit()!=null and actions._selected_unit().id==existing.id,"远端真实完工未回报时保留现有选择")
+	Signals.advance(s,4.0)
+	s.clock=12.0
+	Signals.receive_due(s)
+	view.refresh()
+	check(not panel._build_tiles["probe"].disabled,"收到远端完工报告后建造按钮恢复")
+	check(actions._selected_unit()!=null and actions._selected_unit().id==me.ships[-1].id,"完工及单位遥测到达后保留原交互的自动选中新单位")
+	check_eq(actions._action,actions.Action.DISPATCH,"收到新探测器后自动选中派出操作")
+
+
 func test_colony() -> void:
 	var s := fixture()
 	var me := s.human()
 	me.techs["colony"] = true
+	me.techs["interstellar_travel"] = true
 	var c := Vector3i(3, 0, 0)
 	s.map.stars[c] = StarMap.Star.SINGLE
 	s.map.rocky[c] = 1
@@ -432,6 +499,8 @@ func test_colony() -> void:
 	me.intel[c] = s.snapshot(c)
 	show_state(s)
 	panel._build_tiles["colony"].pressed.emit()
+	for i in int(ceilf(Construction.work("colony"))):
+		panel._end.pressed.emit()
 	check(actions._action == actions.Action.COLONY and actions._target_box.visible, "造好殖民船后切到殖民，要选目标")
 	check(map._colony_targets(me).has(c), "看到过的宜居星系列为殖民目标")
 	check(not map._colony_targets(me).has(unseen), "没看到过的宜居星系不画（F4.4）")
@@ -443,20 +512,36 @@ func test_colony() -> void:
 	actions._go.pressed.emit()
 	var ship := me.ships[0]
 	check(ship.has_target and Vector3i(ship.target) == c, "殖民船出发去目的地")
-	for i in 30:
-		if me.owns(c):
+	for i in 80:
+		var reported:=Signals.reported_ship(s,me,ship.id)
+		if reported!=null and reported.cell()==c and reported.waiting():
 			break
 		panel._end.pressed.emit()
-	check(me.owns(c), "殖民船到达后建立星系")
+	check(ship.cell()==c and ship.waiting() and not me.owns(c), "运输船到达后待命，尚未付费落地")
+	actions._action_tiles[actions.Action.LANDING].pressed.emit()
+	check(not actions._go.disabled,"收到待命遥测后可通过原行动页付费落地")
+	var resources:=[me.energy,me.mineral]
+	actions._go.pressed.emit()
+	check_eq([me.energy,me.mineral],[resources[0]-3,resources[1]-4],"落地按钮按109工程报价托管3E和4M")
+	for i in 14:
+		if Knowledge.colonies(s,me).has(c):
+			break
+		panel._end.pressed.emit()
+	check(me.owns(c) and me.ship_by_id(ship.id)==null, "落地工程完工消耗运输船并建立锚点")
 	check(panel._origin_pick.item_count == 2, "新星系出现在发射源列表里")
 	# 别人悄悄占了的宜居星系：规则允许当目的地，画面也不能拦，免得提示泄露谁占了哪里
 	var other: Civ = s.civs[1]
 	s.map.habitable[other.home] = true
+	panel._origin_pick.select(0)
 	panel._build_tiles["colony"].pressed.emit()
+	for i in int(ceilf(Construction.work("colony"))):
+		panel._end.pressed.emit()
 	actions.aim_at(other.home)
 	check(actions._target_cell() == other.home and not actions._go.disabled, "别人悄悄占了的宜居星系也能选，画面不泄露")
 	me.techs["starship"] = true
 	panel._build_tiles["starship"].pressed.emit()
+	for i in int(ceilf(Construction.work("starship"))):
+		panel._end.pressed.emit()
 	actions._action_tiles[actions.Action.STARSHIP].pressed.emit()
 	actions.aim_at(other.home)
 	check(actions._target_cell() == other.home and not actions._go.disabled, "星舰的目的地也不泄露别人悄悄占着哪里")
@@ -586,6 +671,8 @@ func test_ship_paths() -> void:
 	var me := s.human()
 	show_state(s)
 	panel._build_tiles["probe"].pressed.emit()
+	for i in int(ceilf(Construction.work("probe"))):
+		panel._end.pressed.emit()
 	var probe: Ship = me.ships[-1]
 	s.dispatch(me, probe.id, Vector3(1, 0, 0))
 	view.refresh()
@@ -598,7 +685,9 @@ func test_ship_paths() -> void:
 	check(tubes >= map.PATH_TURNS, "航线画成粗线")
 	panel._end.pressed.emit()
 	panel._end.pressed.emit()
-	check(map._trails[probe.id].size() == 3, "记下身后的轨迹")
+	check_eq(map._trails[probe.id].size(),2,"两年后只能收到第一年位置，第二年遥测尚在回程")
+	check_eq(map._trails[probe.id][-1],Signals.reported_ship(s,me,probe.id).pos,"轨迹末端来自已收遥测")
+	check((map._trails[probe.id][-1] as Vector3).distance_to(probe.pos)>Balance.COLLISION_EPSILON,"地图没有提前追上远端真实位置")
 	check(map._tube_parts.size() > tubes, "身后的轨迹也画出来")
 
 
@@ -628,7 +717,7 @@ func test_hover_intel() -> void:
 	check(map._cursor_label.text.contains("10 回合前") and map._cursor_label.modulate.a < 1.0, "旧情报写明多久以前，字变淡")
 
 
-## 规则：V3，光粒
+## 规则：界面和操作，光粒
 ## 光粒库存按有无记录，不能像戴森球、采矿船一样直接和整数比较。
 func test_hover_stored_grain() -> void:
 	var s := fixture()
@@ -664,8 +753,9 @@ func test_sightings_drawn() -> void:
 	var before: int = map._markers.get_child_count()
 	me.sightings.append({"pos": Vector3(4, 4, 4), "kind": Ship.WARSHIP, "turn": s.turn})
 	me.hit_dirs.append({"at": Vector3i.ZERO, "dir": Vector3(1, 0, 0), "turn": s.turn})
-	s.wakes.append({"a": Vector3(5, 5, 5), "b": Vector3(6, 5, 5), "turn": s.turn, "gone": false})
-	me.wakes_seen[0] = true
+	me.wake_reports[1234]={
+		0:{"data":{"pos":Vector3(5,5,5),"turn":s.turn}},
+		1:{"data":{"pos":Vector3(6,5,5),"turn":s.turn}}}
 	me.heard[Vector3i(8, 8, 8)] = s.turn
 	view.refresh()
 	await process_frame
@@ -682,7 +772,9 @@ func test_black_domain_drawn() -> void:
 	for c in [Vector3i(2, 0, 0), Vector3i(3, 0, 0), Vector3i.ZERO]:
 		s.set_light_at(c, 0.5)
 	s.set_light_at(Vector3i(2, 0, 0), 0.0)
-	s.black_domains.append({"center": Vector3i(2, 0, 0), "left": 3})
+	# 使用已收环境快照；隐藏的真实场不能直接进入普通地图。
+	for c in [Vector3i(2,0,0),Vector3i(3,0,0)]:
+		s.human().intel[c]=s.snapshot(c)
 	view.refresh()
 	await process_frame
 	check(map._markers.get_child_count() == before + 2, "黑域的格子和中心的边框都画出来")
@@ -713,61 +805,175 @@ func test_intel_on_starless_system() -> void:
 
 
 func test_reduction_controls() -> void:
-	var s := fixture()
-	var me := s.human()
-	me.techs["dimension"] = true
+	var s:=fixture()
+	var me:=s.human()
+	me.techs["dimension"]=true
+	s.map.rocky[me.home]=1
+	s.ensure_cells()
+	for civ in s.civs:
+		Assets.ensure(s,civ)
 	show_state(s)
-	var cost: int = Balance.COST_REDUCE_BASE + Balance.COST_REDUCE_PER_UNIT
-	check(panel._reduce_info.text.contains("1 个单位") and panel._reduce_info.text.contains("%dE" % cost), "初始携带数与费用可见")
+	check(panel._reduce_info.text.contains("携带 1 项") and panel._reduce_info.text.contains("15E / 10M"),"初始锚点名册和双资源报价可见")
 	panel._build_tiles["miner"].pressed.emit()
-	check(panel._build_tiles["reduce"].disabled, "有建造中的设施时不能降维")
-	check(panel._reduce_info.text.contains("请先等建造完成"), "说明为什么要等")
-	panel._end.pressed.emit()
-	check(not panel._build_tiles["reduce"].disabled, "建造完成后可以降维")
-	cost += Balance.COST_REDUCE_PER_UNIT
-	check(panel._reduce_info.text.contains("2 个单位") and panel._reduce_info.text.contains("%dE" % cost), "费用随新采矿船更新")
-	check(panel._build_tiles["reduce"].tooltip_text.contains("采矿船 1"), "悬停提供按种类计费明细")
-	var energy := me.energy
-	panel._build_tiles["reduce"].pressed.emit()
-	check(me.energy == energy - cost and me.reduce_left == Balance.REDUCE_TURNS, "按钮按展示费用扣款并开始准备")
-	for kind in panel.BUILD_ORDER:
-		check(panel._build_tiles[kind].disabled, "降维期间不能建造：" + kind)
-	check(panel._reduce_info.text.contains("费用已支付") and panel._reduce_info.text.contains("还剩 %d 回合" % Balance.REDUCE_TURNS),
-			"显示已付费用和倒计时")
-	actions._action_tiles[actions.Action.FOIL].pressed.emit()
-	check(actions._go.disabled and actions._go_hint.text.contains("降维期间"), "准备中不能发射二向箔")
-	for i in Balance.REDUCE_TURNS:
+	check(not panel._build_tiles["reduce"].disabled,"母星首槽忙时第二槽仍可进行迁维准备")
+	for i in int(ceilf(Construction.work("miner"))):
 		panel._end.pressed.emit()
-	check(me.reduced and not panel._build_tiles["probe"].disabled, "完成后建造按钮恢复")
-	check(panel._reduce_info.text.contains("二维生存准备已完成"), "显示完成状态")
+	check(not panel._build_tiles["reduce"].disabled,"矿船完成后可开迁维工程")
+	check(panel._reduce_info.text.contains("携带 2 项") and panel._reduce_info.text.contains("18E / 12M"),"已知新矿船纳入可选名册，报价同步")
+	var quote: Dictionary=panel.advanced.quote()
+	var roster: Array=panel.advanced.roster().duplicate()
+	var stock:=[me.energy,me.mineral]
+	var ap:=me.actions_left
+	panel._build_tiles["reduce"].pressed.emit()
+	check_eq([me.energy,me.mineral],[stock[0]-quote["cost"][0],stock[1]-quote["cost"][1]],"按展示报价全额托管准备费")
+	check_eq(me.actions_left,ap-1,"准备消耗1AP")
+	var id: int=me.conversions.keys()[0]
+	check_eq(me.conversions[id]["roster"],roster,"计划冻结当时名册")
+	check(panel.advanced._execute.disabled and not panel._build_tiles["probe"].disabled,"准备回执尚未收到时不能执行，母星另一个槽仍可建造")
+	for i in int(ceilf(quote["work"])):
+		panel._end.pressed.emit()
+	check_eq(me.conversions[id]["ready_at"].size(),2,"当地锚点和矿船均收到准备，回执已回传")
+	check_eq(Assets.dimension(me,"anchor",me.home),3,"准备完成没有擅自执行实体转换")
+	check(not panel.advanced._execute.disabled,"收到回执后原建造页可点击执行")
+	stock=[me.energy,me.mineral]
+	panel.advanced._execute.pressed.emit()
+	check_eq(Assets.dimension(me,"anchor",me.home),2,"执行按钮转换已准备锚点")
+	check_eq(Assets.dimension(me,"miner",me.home),2,"同一冻结名册中的矿船分别转换")
+	check_eq([me.energy_millis,me.mineral_millis],[floori(WorkOrder.units(stock[0])*0.75),floori(WorkOrder.units(stock[1])*0.75)],"首次实际转换只扣一次库存损耗")
+	check_eq(s.dimension,3,"实体适配与世界换图是两件事")
+	check(not panel._build_tiles["probe"].disabled,"完成后宿主建造队列恢复")
 	await process_frame
 
 
-## 规则：二维、单向著和奇异点，F5.2
+## 规则：二维、单向著和奇异点
+## 正式稿第24–25页：原目的地选择接入对照预览，实体ready显示不读实际舰上状态。
+func test_v01_navigation_preview_and_ready_display() -> void:
+	if view.get("migration_preview")==null or panel.advanced.get("_preview_go")==null:
+		check(false,"迁维地图预览入口尚未实现")
+		return
+	var s:=fixture()
+	var me:=s.human()
+	var ship:=Ship.make(Ship.STARSHIP,Vector3(me.home),s.next_id())
+	me.ships.append(ship)
+	show_state(s)
+	actions.select_unit(ship)
+	view.refresh()
+	actions.aim_at(Vector3i(8,8,8))
+	actions._target_info.pressed.emit()
+	await process_frame
+	var preview=view.migration_preview
+	check(preview.visible,"点击原目的地位置打开对照预览")
+	check(preview._current.text.contains("格距") and preview._current.text.contains("ETA"),"预览明确显示物理格距与目的地ETA")
+	check(preview._current.text.contains("1 ly/格") and preview._next.text.contains("0.5 ly/格"),"当前和下一维并排显示")
+	check(preview._ranges.text.contains("0.1 ly") and preview._anchors.text.contains("#"),"预览列出武器射程与已知锚点")
+	await capture("migration-preview-3d")
+	preview.close_preview()
+	check(not preview.visible,"返回关闭预览，恢复原星图操作")
+	me.techs["dimension"]=true
+	var local_id:=Signals.controller(me)
+	me.conversions[100]={"id":100,"roster":[local_id,ship.id],"host":local_id,"from_dim":3,"ready_at":{local_id:7.0},"status":"preparing","ready_reports":{local_id:{"t_observed":7.0,"t_received":7.0,"epoch":0}}}
+	ship.ready["3>2"]={"at":8.0,"plan":100}
+	view.refresh()
+	var ready_text: String=panel.advanced._ready.text
+	check(ready_text.contains("7 年") and ready_text.contains("待确认"),"每项分别显示已确认ready时间或待确认")
+	me.conversions[100]["status"]="destroyed"
+	view.refresh()
+	check_eq(panel.advanced._ready.text,ready_text,"未收到的准备状态变化不改变界面")
+
+
+## 正式稿第10–12页：图示、网格和观测使用同一个完整张角，按物理格距换算。
+func test_v01_probe_vision_matches_received_rules() -> void:
+	var s:=fixture()
+	var me:=s.human()
+	var probe:=Ship.make(Ship.PROBE,Vector3(5,4,4),s.next_id())
+	probe.docked=false
+	probe.direction=Vector3.RIGHT
+	me.ships.append(probe)
+	me.telemetry[probe.id]={"data":Signals.ship_status(probe),"t_observed":0.0,"t_received":5.0,"epoch":0}
+	show_state(s)
+	await process_frame
+	map.refresh(me,{},true,false)
+	var cone: MeshInstance3D
+	for child in map._markers.get_children():
+		if child is MeshInstance3D and child.mesh is CylinderMesh and child.mesh.top_radius<=0.001:
+			cone=child
+			break
+	check(cone!=null,"绘制探测器圆锥")
+	if cone!=null:
+		check(absf(cone.mesh.bottom_radius-(tan(deg_to_rad(7.5))+Balance.COLLISION_EPSILON))<1e-6,"显示15度全张角，不额外膨胀半格")
+	check(not map._in_eyes(Vector3(6,4.3,4)),"锥外格点不因旧公式变为可观测")
+	check(map._in_eyes(Vector3(6,4.1,4)),"锥内格点按实际规则高亮")
+	probe.pos=Vector3(7,7,7)
+	map.refresh(me,{},true,false)
+	var eyes: Array=map._grid_eyes.filter(func(o):return o.get("id",-1)==probe.id)
+	check_eq(eyes.size(),1,"图示使用有永久ID的实际观测器定义")
+	if eyes.size()==1:
+		check_eq(eyes[0]["pos"],Vector3(5,4,4),"图示位置只使用收到的遥测")
+	for kind in [Ship.NUCLEAR_PROBE,Ship.DROPLET]:
+		me.telemetry[probe.id]["data"]["kind"]=kind
+		map.refresh(me,{},true,false)
+		var cones:=0
+		for child in map._markers.get_children():
+			if child is MeshInstance3D and child.get_meta("vision_observer",-1)==probe.id and child.mesh is CylinderMesh:
+				cones+=1
+		check_eq(cones,1,"新增%s应有方向圆锥，不能显示成球体"%Ship.NAMES[kind])
+	await process_frame
+	await capture("probe-vision-15-degrees")
+
+
+## 正式稿第12、24页：低维图示把ly转换为格，一维望远镜升级保留后向视野。
+func test_v01_probe_vision_physical_scale_in_lower_dimensions() -> void:
+	var s:=fixture()
+	var me:=s.human()
+	me.telescope=2
+	var probe:=Ship.make(Ship.NUCLEAR_PROBE,Vector3(5,4,4),s.next_id())
+	probe.docked=false
+	probe.direction=Vector3.RIGHT
+	me.ships.append(probe)
+	me.telemetry[probe.id]={"data":Signals.ship_status(probe),"t_observed":0.0,"t_received":5.0,"epoch":0}
+	s.fold_anchor=Vector3i.ZERO
+	DimensionSpace.commit(s,false)
+	show_state(s)
+	map.refresh(me,{},true,false)
+	var shapes: Array=map._markers.get_children().filter(func(child):return child.get_meta("vision_observer",-1)==probe.id)
+	check_eq(shapes.size(),1,"二维有一份探测图示")
+	if shapes.size()==1:
+		check(shapes[0].mesh is ImmediateMesh,"二维绘制平面方向范围")
+	var eyes: Array=map._grid_eyes.filter(func(o):return o["id"]==probe.id)
+	check_eq([eyes[0]["radius"],eyes[0]["angle"]],[2.0,45.0],"两级望远镜使用2ly及45度全角")
+	s.line_anchor=Vector3i.ZERO
+	DimensionSpace.commit(s,true)
+	show_state(s)
+	map.refresh(me,{},true,false)
+	shapes=map._markers.get_children().filter(func(child):return child.get_meta("vision_observer",-1)==probe.id)
+	check_eq(shapes.size(),1,"一维有一份前后方向图示")
+	if shapes.size()==1:
+		check_eq(shapes[0].mesh.size.x,96.0,"2ly前向+1ly后向，按1/32ly格距绘制96格")
+	var observer: Dictionary=map._grid_eyes.filter(func(o):return o["id"]==probe.id)[0]
+	check(Signals.in_view(map.state,observer,observer["pos"]-observer["dir"]*32.0),"两级一维望远镜后向1ly有效")
+	check(not Signals.in_view(map.state,observer,observer["pos"]-observer["dir"]*33.0),"后向范围外不能高亮")
+
+
 func test_flat_and_line() -> void:
 	var s := fixture()
 	for civ in s.civs:
 		civ.techs["dimension"] = true
-		civ.reduced = true
+		civ.dimension_ammo=3
+		for asset in civ.assets:
+			asset["entity_dim"]=2
 	show_state(s)
 	check(actions._action_tiles[actions.Action.FOIL].visible and not actions._action_tiles[actions.Action.LINE_FOIL].visible, "3D 只显示二向箔")
 	actions._action_tiles[actions.Action.FOIL].pressed.emit()
 	actions.aim_at(Vector3i(2, 2, 2))
-	check(not actions._go.disabled, "二向箔执行按钮可用")
+	check(not actions._go.disabled, "有预制弹药后二向箔执行按钮可用")
 	actions._go.pressed.emit()
-	check(s.human().foils.size() == 1, "通过执行按钮发射二向箔")
-	s.launch_foil(s.civs[1], Vector3i(7, 7, 7))
+	check(s.human().foils.size()==1 and s.human().dimension_ammo==2,"执行按钮扣除一枚弹药并发射载荷")
+	# 传播、相交和729格提交由规则测试覆盖；这里直接摆出前沿完成的画面夹具。
+	s.payloads.clear()
+	s.human().foils.clear()
 	map._set_hover(_pickable_at(s.human().home))
-	var plane_captured := false
-	for i in 180:
-		if s.all_flat():
-			break
-		panel._end.pressed.emit()
-		await process_frame
-		if not plane_captured and s.flattened.size() > 150:
-			await settled_frame()
-			await capture("collapsing-to-plane")
-			plane_captured = true
+	_finish_view_front(s,Vector3i(4,4,4))
+	view.refresh()
 	await settled_frame()
 	check(s.all_flat() and not s.is_over(), "3D 结束后进入可玩的 2D")
 	check(not panel._end.disabled, "二维可以继续结束回合")
@@ -790,38 +996,25 @@ func test_flat_and_line() -> void:
 	_check_flat_helpers(s, "二维", 48, func(p: Vector3, at: Vector3) -> bool: return absf(p.z - at.z) < 1e-4)
 	await capture("two-dimensional")
 
-	panel._build_tiles["reduce"].pressed.emit()
-	s.start_reduce(s.civs[1])
-	check(s.human().reduce_left == Balance.REDUCE_TURNS and panel._build_tiles["reduce"].disabled, "再次降维按钮启动准备并禁止重复操作")
-	for i in Balance.REDUCE_TURNS:
-		panel._end.pressed.emit()
-	check(s.human().line_reduced and s.civs[1].line_reduced, "双方完成一维准备")
-	actions.aim_at(Vector3i(2, 2, s.flat_plane))
-	check(not actions._go.disabled, "单向著执行按钮可用")
+	for civ in s.civs:
+		for asset in civ.assets:
+			asset["entity_dim"]=1
+		civ.actions_left=2
+	view.refresh()
+	actions._action_tiles[actions.Action.LINE_FOIL].pressed.emit()
+	actions.aim_at(Vector3i(2,2,s.flat_plane))
+	check(not actions._go.disabled,"下一阶段的单向著执行按钮可用")
 	actions._go.pressed.emit()
-	check(s.human().foils.size() == 1 and s.human().foils[0].to_line, "按钮发出单向著")
-	s.launch_line_foil(s.civs[1], Vector3i(7, 7, s.flat_plane))
-	var captured := false
-	for i in 180:
-		if s.all_linear():
-			break
-		panel._end.pressed.emit()
-		await settled_frame()
-		if not captured and not s.linearized.is_empty():
-			await capture("collapsing-to-line")
-			captured = true
+	check(s.human().foils.size()==1 and s.human().foils[0].to_line,"按钮发出有限传播单向著")
+	s.payloads.clear()
+	s.human().foils.clear()
+	_finish_view_front(s,Vector3i(13,13,s.flat_plane))
+	view.refresh()
 	await settled_frame()
 	check(s.all_linear(), "整张星图压成直线")
 	_check_flat_helpers(s, "一维", 3, func(p: Vector3, at: Vector3) -> bool:
 		return absf(p.z - at.z) < 1e-4 and absf(p.y - at.y) <= 0.6 + 1e-4)
 	await _check_line_camera_and_controls(s)
-	actions._action_tiles[actions.Action.SINGULARITY].pressed.emit()
-	check(not actions._go.disabled, "一维里可以发射奇异点")
-	actions._go.pressed.emit()
-	check(s.human().singularity_left == Balance.SINGULARITY_TURNS, "按钮发射奇异点")
-	for i in Balance.SINGULARITY_TURNS:
-		panel._end.pressed.emit()
-	check(s.winner == "你" and panel._end.text.contains("再来一局") and overlay._status.text.contains("胜利"), "先降到零维的赢")
 	segments = map._grid_segments()
 	check(segments.size() == 728, "最终有 728 条相邻线段，连接 729 个格子")
 	for segment in segments.values():
@@ -831,24 +1024,36 @@ func test_flat_and_line() -> void:
 		var point: Vector3 = map._warp_point(Vector3(c)) - s.visual_offset
 		check(point.y == s.line_y and point.z == s.flat_plane, "729 个格子全部位于同一条直线")
 	check(actions._coord_boxes[0].max_value == 728 and actions._coord_boxes[1].min_value == s.line_y, "坐标输入支持一维的新范围")
-	# F5.2：降到零维时，直线缩成一个亮点
-	check(map.animating() and map._zero_dot.visible, "降到零维时放动画")
-	map.advance_animation(map.ZERO_ANIM_SECONDS * 0.5)
-	check(map._markers.scale.x < 1.0 and map._markers.visible, "动画中星图缩向一点")
-	map.advance_animation(map.ZERO_ANIM_SECONDS)
-	check(not map.animating() and not map._markers.visible and not map._grid.visible and map._zero_dot.visible, "最后只剩一个亮点")
-	map.redraw_grid()
-	check(not map.animating() and map._zero_dot.visible and not map._grid.visible, "换局面时直接画成零维，不放动画")
-	await capture("zero-dimensional")
+	s.human().actions_left=2
+	view.refresh()
+	actions._action_tiles[actions.Action.SINGULARITY].pressed.emit()
+	check(not actions._go.disabled,"一维有弹药时可以发射奇异点")
+	actions._go.pressed.emit()
+	check(s.payloads.size()==1 and not s.is_over(),"奇异点先发出载荷，不提供倒计时胜利")
+	for i in 3:
+		if s.is_over():
+			break
+		panel._end.pressed.emit()
+	check(s.winner=="AI" and not s.human().alive,"本地零维终止摧毁自己唯一锚点，另一文明存续获胜")
+	check(panel._end.text.contains("再来一局") and overlay._status.text.contains("失败"),"合法败局显示结算和重开入口")
+	await capture("singularity-terminal")
 
 
-## 二维、一维里自己发出的广播和视野不伸出平面或直线：广播画成 rings 根粗线，每根的两头都满足
-## in_space(端点, 广播者画在哪)；视野不再画成球。
+## 只摆画面用的完成前沿：保留729格实际换图，不用旧文明布尔标记代替实体维度。
+func _finish_view_front(s: GameState,center: Vector3i) -> void:
+	SpaceEvents.unfold(s,center)
+	for cell in s.map.cells():
+		SpaceEvents.convert_cell(s,cell)
+	SpaceEvents.resolve(s)
+
+
+## 二维和一维中的已收广播、视野保持在当前空间内。
+
 func _check_flat_helpers(s: GameState, label: String, rings: int, in_space: Callable) -> void:
 	var me := s.human()
 	var from := Vector3(me.home)
-	s.broadcasts.append({"from": from, "target": me.home, "sender": me, "exposed": false, "radius": 3.0,
-			"heard": {}, "hidden_heard": {}})
+	me.broadcast_reports[9999]={"id":9999,"from":from,"target":me.home,"exposed":false,
+		"sent":s.clock-3.0*s.physical_cell_size()/s.background_light()}
 	view.overlay.show_vision.button_pressed = true
 	view.refresh()
 	var at: Vector3 = map._warp_point(from)
@@ -861,7 +1066,7 @@ func _check_flat_helpers(s: GameState, label: String, rings: int, in_space: Call
 		if node is MeshInstance3D and node.mesh is SphereMesh:
 			balls += 1
 	check(balls == 0, "%s的视野不画成球" % label)
-	s.broadcasts.pop_back()
+	me.broadcast_reports.erase(9999)
 	view.refresh()
 
 
@@ -909,47 +1114,46 @@ func _check_line_camera_and_controls(s: GameState) -> void:
 
 ## 回合推得很快、展开动画还没播完就进入一维时，镜头仍对准自己据点最后的位置。
 func test_fast_line_collapse_frames_home() -> void:
-	var s := fixture()
+	var s:=fixture()
 	for civ in s.civs:
-		civ.reduced = true
-		civ.line_reduced = true
-	s._unfold_foil(Vector3i(4, 4, 4))
-	for i in 40:
-		if s.all_flat():
-			break
-		s._spread_flat()
-	check(s.all_flat(), "测试准备：进入二维")
+		for asset in civ.assets:
+			asset["entity_dim"]=1
 	show_state(s)
-	await settled_frame()
-	s._unfold_line_foil(Vector3i(0, 13, s.flat_plane))
 	view.set_process(false)
 	map.set_process(false)
-	for i in 80:
-		if s.all_linear():
-			break
-		panel._end.pressed.emit()  # 不等动画，马上推下一回合
-	check(s.all_linear(), "测试准备：进入一维")
+	_finish_view_front(s,Vector3i(4,4,4))
+	view.refresh()
+	check(s.all_flat(),"测试准备：进入二维")
+	# 不等待第一段动画，立刻再换一次图。
+	_finish_view_front(s,Vector3i(0,13,s.flat_plane))
+	view.refresh()
+	check(s.all_linear(),"测试准备：进入一维")
 	view.set_process(true)
 	map.set_process(true)
 	await settled_frame()
-	var home: Vector3 = map._warp_point(Vector3(s.human().home))
-	check(map._goal_focus.distance_to(home) < 1e-3, "动画追上以后镜头对准母星（差 %.1f 格）" % map._goal_focus.distance_to(home))
+	var home: Vector3=map._warp_point(Vector3(s.human().home))
+	check(map._goal_focus.distance_to(home)<1e-3,"两段动画追上以后镜头对准母星")
 	map._snap_camera()
-	var screen: Vector2 = map._camera.unproject_position(map._world.to_global(home))
-	check(map._pick_object(screen).get("cell") == s.human().home, "近看能点中母星")
-	map._pan(-300.0, 0.0)
+	var screen: Vector2=map._camera.unproject_position(map._world.to_global(home))
+	check(map._pick_object(screen).get("cell")==s.human().home,"近看能点中母星")
+	map._pan(-300.0,0.0)
 	await settled_frame()
-	check(map._goal_focus.distance_to(home) > 1.0, "之后手动平移不会被拉回去")
+	check(map._goal_focus.distance_to(home)>1.0,"之后手动平移不会被拉回去")
 
 
-## 胜负分出以后不再按按钮，画面每帧自己把还没压完的空间压完。
+## 胜负结束后仅环境动画继续，不增加回合和收入。
+
+
 func test_post_victory_collapse() -> void:
 	# 扩散得慢时，有的步一个格子也没多压没（边界面还是变了），这样才测得到这种步
 	var old_spread := Balance.FOIL_SPREAD
 	Balance.FOIL_SPREAD = 0.3
 	var s := fixture()
-	s.civs[0].reduced = true
+	for asset in s.civs[0].assets:
+		asset["entity_dim"]=2
 	s._unfold_foil(s.civs[1].home)
+	# 已收到的前沿历史驱动画面；这里不测试完整远端回传。
+	s.human().front_reports[9999]={"front_type":"foil","epoch":s.space_epoch,"t_observed":s.clock,"data":s.foil_zones[0].duplicate(true)}
 	show_state(s)
 	check(s.is_over() and s.collapse_pending(), "提前胜负测试确实还有空间待压缩")
 	var turn := s.turn
@@ -1013,7 +1217,7 @@ func test_debug_view_other_civ() -> void:
 	var ai: Civ = s.civs[2]
 	view.debug.set_view(2)
 	check(view.viewed() == ai, "换成 AI-2 的视角")
-	check(panel._res_values["energy"].text.begins_with(str(ai.energy)), "资源栏显示 AI-2 的能量")
+	check(panel._res_values["energy"].text.get_slice("  ",0) == panel.Widgets.number(ai.energy), "资源栏显示 AI-2 的能量")
 	check(overlay._status.text.contains(ai.name), "状态栏写着正在看谁的视角")
 	check(actions._go.disabled and actions._go_hint.text.contains("AI"), "AI 控制的文明只能看不能操作")
 	var probes := ai.count(Ship.PROBE)
@@ -1034,7 +1238,10 @@ func test_debug_take_over_ai() -> void:
 	ai.mineral = 100
 	view.refresh()
 	panel._build_tiles["probe"].pressed.emit()
-	check(ai.count(Ship.PROBE) == 1, "接管后可以替它建造")
+	check(ai.pending.size() == 1 and ai.count(Ship.PROBE)==0, "接管后可以替它提交建造工程")
+	for i in int(ceilf(Construction.work("probe"))):
+		panel._end.pressed.emit()
+	check_eq(ai.count(Ship.PROBE),1,"接管文明的工程同样要完成工作量")
 	check(s.history.any(func(h): return h["civ"] == 1 and h["name"] == "build" and not h["ai"]), "这次建造算玩家的操作")
 	view.debug._autoplay.toggled.emit(true)
 	check(ai.is_ai, "再勾上就交还给 AI")
@@ -1186,32 +1393,24 @@ func test_debug_presets() -> void:
 
 ## 自己玩的局里你灭亡了：面板出现「继续往下看」，按了以后其余文明接着打，可以一直播放。
 func test_debug_after_death() -> void:
-	var found := false
-	for seed_value in 30:
-		var s := _debug_game(seed_value, false)
-		while not view.state.is_over() and view.debug.step_forward(true, false):
-			pass
-		if view.debug.can_continue_after_death():
-			found = true
-			break
-	check(found, "找得到你先灭亡、还剩几个 AI 的对局")
-	if not found:
-		return
+	var s:=_debug_game(30,false)
+	for cell in s.human().colonies.duplicate():
+		s._lose_system(cell,s.human(),"界面测试夹具")
+	s._check_winner()
+	check(not s.human().alive and not s.is_over(),"V0.1玩家失去锚点后，多AI对局自动继续")
 	view.refresh()
-	check(view.debug._after_death.visible, "你灭亡后面板上有「继续往下看」")
-	check(not view.debug.step_forward(false), "这时对局已经结束，不能往前走")
-	var steps: int = view.state.steps
-	view.debug._after_death.pressed.emit()
-	check(not view.state.is_over() and not view.state.human().alive, "按了以后对局继续，你还是灭亡的")
-	check(view.state.steps == steps and not view.debug._after_death.visible, "重算的是你灭亡的那一回合")
-	check(overlay._status.text.contains("你已灭亡"), "状态栏写着你已灭亡")
-	check(view.debug.step_forward(false), "可以接着自动播放（没有要等的玩家）")
+	check(not view.debug._after_death.visible,"无需旧版二次确认继续按钮")
+	check(overlay._status.text.contains("你已灭亡"),"状态栏说明玩家已灭亡")
+	check(not panel._end.disabled,"可继续观察其余文明")
+	var steps:=s.steps
+	check(view.debug.step_forward(false),"玩家无需再输入操作，调试播放可继续")
+	check_eq(s.steps,steps+1,"继续操作实际推进一个回合")
 	view.debug.set_view(1)
-	check(view.viewed() == view.state.civs[1], "可以换成活着的 AI 的视角接着看")
+	check(view.viewed()==s.civs[1],"可切换存续AI的视角")
 	view.debug.set_view(0)
 
 
-## 规则：V1
+## 规则：界面和操作
 ## 全屏依赖树：实际前置始终从左到右，查看锁定节点不扣资源，模态界面不触发星图快捷键。
 func test_tech_tree() -> void:
 	var s := fixture()
@@ -1267,24 +1466,255 @@ func test_tech_tree() -> void:
 	view.show_panel(2)
 
 
-## 规则：V2，V3
+## 规则：科技树，每回合的收入，界面和操作
+func test_v01_tree_and_numeric_state() -> void:
+	var s := fixture()
+	var me := s.human()
+	me.energy = 0.375
+	show_state(s)
+	check(panel._res_values["energy"].text.contains("0.375"), "现有资源栏显示.001精度，不能把可用余额截成0")
+	var tree = view.tech_tree
+	tree.open_tree()
+	await process_frame
+	check_eq(tree.tiles.size(), 34, "原全屏组件承载34个节点")
+	check_eq(tree.edges.size(), 21, "仅使用21条正式依赖")
+	var ids: Array = tree.tiles.keys()
+	for i in ids.size():
+		check(not panel._tech_desc(ids[i]).is_empty(), "每项科技保留鼠标悬停说明：" + ids[i])
+		for j in range(i+1, ids.size()):
+			check(not tree.tiles[ids[i]].get_rect().intersects(tree.tiles[ids[j]].get_rect()), "节点不重叠：%s/%s" % [ids[i], ids[j]])
+	me.energy = 1000
+	tree.select_tech("warship")
+	tree._research.pressed.emit()
+	check(not me.has_tech("warship") and not me.research_project.is_empty(), "原研究按钮提交有工期的研究")
+	check(tree.tiles["warship"].text.contains("研究中"), "研究中的节点在原位置显示进度状态")
+	check(tree._research.disabled, "在制研究不能重复提交")
+	view.window_settings.apply_ui_scale(1.0)
+	root.size = Vector2i(1280, 800)
+	await process_frame
+	await capture("v01-tech-tree")
+	tree.close_tree()
+	check(not tree.visible, "返回星图操作保留")
+
+
+## 规则：情报传回，界面和操作
+func test_v01_shared_information_view() -> void:
+	var a:=fixture()
+	a.ensure_cells()
+	var me:=a.human()
+	var remote:=Vector3i(4,0,0)
+	a.map.stars[remote]=StarMap.Star.SINGLE
+	a.map.rocky[remote]=1
+	a.system_cells.append(remote)
+	me.colonies.append(remote)
+	me.miners[remote]=1
+	me.warnings[remote]=1
+	for civ in a.civs:
+		Assets.ensure(a,civ)
+	var ship:=Ship.make(Ship.WARSHIP,Vector3(5,0,0),a.next_id())
+	ship.docked=false
+	ship.direction=Vector3.RIGHT
+	me.ships.append(ship)
+	Knowledge.report_site(a,me,remote)
+	Signals.report_ship(a,me,ship)
+	Signals.advance(a,5.0)
+	a.clock=5.0
+	Signals.receive_due(a)
+	var b:=StateCopy.copy(a)
+	b._destroy(b.human(),b.human().ships[0],"未收到的损毁")
+	b._lose_system(remote,b.human(),"未收到的失守")
+	Hazards.activate(b,Vector3(6,6,6))
+	SpaceEvents.unfold(b,Vector3i(7,7,7))
+	view.reveal.button_pressed=false
+	show_state(a)
+	await settled_frame()
+	var displayed:=[map._pickables(),DimensionSpace.frame(map.state),panel._stats(me),overlay._status.text]
+	var host_ids: Array=[]
+	for i in panel.advanced._hosts.item_count:
+		host_ids.append(panel.advanced._hosts.get_item_metadata(i))
+	await capture("v01-information-before")
+	check(panel.get_global_rect().end.x<=root.get_visible_rect().size.x+1.0,"资源栏和新增控件不把原右侧面板撑出屏幕")
+	show_state(b)
+	await settled_frame()
+	check_eq([map._pickables(),DimensionSpace.frame(map.state),panel._stats(b.human()),overlay._status.text],displayed,"隐藏失守、舰毁、黑域与前沿不改变正常画面信息")
+	var after_ids: Array=[]
+	for i in panel.advanced._hosts.item_count:
+		after_ids.append(panel.advanced._hosts.get_item_metadata(i))
+	check_eq(after_ids,host_ids,"未收到回报前不删除操作宿主")
+	check(map.state!=b and map.state.black_domains.is_empty(),"正常星图绑定历史投影")
+	await capture("v01-information-hidden-change")
+	view.reveal.button_pressed=true
+	view.refresh()
+	check(map.state==b and not map.state.black_domains.is_empty(),"独立debug全视野仍可显示真实世界")
+	view.reveal.button_pressed=false
+	view.refresh()
+
+
+## 规则：每回合的收入，情报传回，界面和操作
+func test_v01_ui_resource_preview() -> void:
+	var s := fixture()
+	var me := s.human()
+	s.map.rocky[me.home] = 3
+	me.miners[me.home] = 1
+	Assets.ensure(s,me)
+	show_state(s)
+	check(panel._res_values["energy"].text.contains("+3"),"资源栏恢复下一回合预计能量增长")
+	check(panel._res_values["mineral"].text.contains("+2"),"资源栏恢复下一回合预计矿石增长")
+	var tip: String = panel._res_values["energy"].get_parent().get_parent().tooltip_text
+	check(tip.contains("总收入") and tip.contains("维护") and tip.contains("预计净变化"),"悬停分别解释收入、维护和净变化")
+	check(not (panel._upgrade_tiles["warning"].get_meta("cost") as Label).text.contains("-1/"),"未建预警系统不能显示内部的负一级")
+	panel._on_build("probe")
+	tip = panel._res_values["mineral"].get_parent().get_parent().tooltip_text
+	check(tip.contains("已预付") and tip.contains("已从余额扣除"),"工程资源不重复计入可用余额，并明确解释预付")
+	var remote := Vector3i(4,0,0)
+	me.colonies.append(remote)
+	s.map.rocky[remote] = 2
+	s.map.stars[remote] = StarMap.Star.SINGLE
+	s.system_cells.append(remote)
+	me.miners[remote] = 1
+	Assets.ensure(s,me)
+	Knowledge.report_site(s,me,remote)
+	Signals.advance(s,4.0)
+	s.clock = 4.0
+	Signals.receive_due(s)
+	show_state(s)
+	var before: Array = [panel._res_values["energy"].text,panel._res_values["mineral"].text,panel._res_values["energy"].get_parent().get_parent().tooltip_text]
+	var hidden := StateCopy.copy(s)
+	hidden.map.rocky[remote] = 0
+	hidden.human().miners[remote] = 0
+	Assets.ensure(hidden,hidden.human())
+	show_state(hidden)
+	check_eq([panel._res_values["energy"].text,panel._res_values["mineral"].text,panel._res_values["energy"].get_parent().get_parent().tooltip_text],before,"未回传的远端产出变化不能泄露到预计收入")
+	await capture("v01-resource-preview")
+
+
+## 通过 Viewport 的真实 GUI 分发点按，不直接调用按钮回调。
+func pointer_click(control: Control) -> void:
+	await process_frame
+	var point := control.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	root.push_input(motion,true)
+	for pressed in [true,false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.position = point
+		event.pressed = pressed
+		root.push_input(event,true)
+	await process_frame
+
+
+## 规则：建造，界面和操作
+func test_v01_ui_pointer_build_feedback() -> void:
+	var s := fixture()
+	var me := s.human()
+	s.map.rocky[me.home] = 3
+	show_state(s)
+	view.tech_tree.close_tree()
+	view.window_settings.apply_ui_scale(1.0)
+	root.size = Vector2i(1280,800)
+	view.show_panel(1)
+	await process_frame
+	await process_frame
+	await pointer_click(panel._build_tiles["probe"])
+	check_eq(me.pending.size(),1,"实际鼠标点按能提交合法建造，无覆盖控件拦截")
+	check(panel._feedback.text.contains("已开始") or panel._feedback.text.contains("已发送"),"成功下单有可见反馈")
+	check(not panel._build_tiles["warning"].disabled,"首单下完母星仍有第二槽可用")
+	await pointer_click(panel._build_tiles["probe"])
+	check_eq(me.pending.size(),2,"第二次真实点击受理另一独立订单")
+	check(panel._build_tiles["warning"].disabled,"两槽都占用时按钮等待")
+	check(panel._build_hint.text.contains("2 / 2"),"既有建造页显示两槽占用")
+	check(panel._res_values["actions"].text.contains("1 / 3"),"资源条显示第三AP仍可用")
+	var paid := [me.energy,me.mineral,me.actions_left]
+	await pointer_click(panel._build_tiles["warning"])
+	check(panel._feedback.visible and panel._feedback.text.contains("施工"),"点击不可用建造说明当地工程占用，不只是灰掉")
+	check_eq([me.energy,me.mineral,me.actions_left],paid,"受限第三单不会扣费")
+	await pointer_click(panel._end)
+	check_eq(me.count(Ship.PROBE),2,"鼠标结束回合同时完成两个探测器工程")
+	check(not panel._build_tiles["warning"].disabled,"当地工程完成后按钮恢复")
+	me.mineral = 0
+	view.refresh()
+	await pointer_click(panel._build_tiles["probe"])
+	check(panel._feedback.visible and panel._feedback.text.contains("矿石不足"),"资源不足的真实点击给出具体原因")
+	check_eq(me.count(Ship.PROBE),2,"失败点击不建造也不扣费")
+	await capture("v01-build-feedback")
+
+
+## 规则：界面和操作
 ## 密集局面：停泊聚合、航线按需、广播有上限，同时保留全部可见舰船和敌情。
+func test_v01_speed_descriptions_follow_replay_parameters() -> void:
+	show_state(fixture())
+	var specs := [[Ship.PROBE,"probe","30%","立即匀速"],[Ship.NUCLEAR_PROBE,"interstellar_probe","50%","2 年"],
+			[Ship.COLONY,"interstellar_travel","40%","5 年"],[Ship.DEVOURER,"devourer","30%","5 年"]]
+	for spec in specs:
+		var build_tip: String = panel._build_desc(spec[0])
+		check(build_tip.contains(spec[2]) and build_tip.contains(spec[3]),"四类建造悬停说明使用当前速度分档")
+		check(build_tip.contains("同步降低"),"速度说明解释降维与黑域缩放")
+		var tech_tip: String = panel._tech_desc(spec[1])
+		check(tech_tip.contains(spec[2]) and tech_tip.contains(spec[3]),"关联科技说明与建造航速一致")
+	var values := Balance.values().duplicate(true)
+	var old := Replay.new()
+	old.balance = values.duplicate(true)
+	old.balance.erase("SHIP_SPEED_RELATIVE")
+	old.balance["PROBE_MOVE"] = [0.01,0.0]
+	old.balance["IPROBE_MOVE"] = [0.1,0.01]
+	old.apply_balance()
+	check(panel._tech_desc("probe").contains("0.01 光年/年"),"读入旧记录后说明保留旧化学航速")
+	check(panel._tech_desc("interstellar_probe").contains("10 年"),"读入旧记录后说明保留旧核脉冲加速时间")
+	Balance.apply(values)
+	check(panel._tech_desc("probe").contains("30%"),"恢复新参数后说明同步更新")
+	view.refresh()
+	await capture("tiered-speed-description")
+
+
+## 规则：建造，情报传回，界面和操作
+func test_v01_local_parallel_progress_display() -> void:
+	var s := fixture()
+	var me := s.human()
+	s.map.rocky[me.home] = 3
+	Assets.ensure(s,me)
+	Signals.sample(s)
+	var a := s.build(me,"miner")
+	var b := s.build(me,"miner")
+	check_eq([a["error"],b["error"]],["",""],"双槽工程均合法下单")
+	s.end_turn()
+	show_state(s)
+	view.show_panel(1)
+	check_eq(panel._build_progress.text.count("进度 1 / 2"),2,"年末两个本地工程均显示已收的1/2进度")
+	check_eq(panel._build_progress.text.count("观测 1 年 · 收到 1 年"),2,"工程显示已收报告的观测和接收时刻")
+	for id in [a["order"],b["order"]]:
+		check_eq(me.order_reports[id]["done"],1000,"显示依据的已收报告为1W")
+	var rows := ""
+	for i in panel.advanced._orders.item_count:
+		rows += panel.advanced._orders.get_item_text(i)+"\n"
+	check_eq(rows.count("1/2"),2,"工程菜单进度与建造页一致")
+	check(panel._res_values["mineral"].text.contains("+0"),"尚未完工的矿船不提前计入收入")
+	me.order_reports[a["order"]]["done"] = 50
+	me.order_reports[a["order"]]["t_observed"] = 0.05
+	me.order_reports[a["order"]]["t_received"] = 0.05
+	view.refresh()
+	check(panel._build_progress.text.contains("进度 0.05 / 2；观测 0.05 年 · 收到 0.05 年"),"历史报告明确标注时间，不拿未采样的施工真值补数")
+	await capture("local-parallel-progress-current")
+
+
 func test_map_clarity() -> void:
 	var s := fixture()
 	var me := s.human()
 	s.turn = 25
+	s.clock = 24.0
 	for i in 36:
-		var ship := Ship.make(Ship.PROBE if i % 2 == 0 else Ship.WARSHIP, Vector3.ZERO, i + 1)
+		var ship := Ship.make(Ship.PROBE if i % 2 == 0 else Ship.WARSHIP, Vector3.ZERO, s.next_id())
 		if i >= 12:
 			ship.pos = Vector3(1 + i % 6, 1 + (i / 6) % 4, 2 + i % 3)
 			ship.docked = false
 			ship.direction = Vector3.RIGHT
 		me.ships.append(ship)
+		me.telemetry[ship.id]={"data":Signals.ship_status(ship),"t_observed":s.clock,"t_received":s.clock,"epoch":0}
 	me.dysons[me.home] = 3
 	me.miners[me.home] = 4
 	me.broadcasters[me.home] = true
 	for i in 8:
-		s.broadcasts.append({"from": Vector3(me.home), "target": Vector3i(8, 8, 8), "sender": me, "radius": 1.0 + i * 0.5})
+		me.broadcast_reports[i]={"id":i,"from":Vector3(me.home),"target":Vector3i(8,8,8),"sent":s.clock-(1.0+i*0.5),"exposed":me.home}
 	me.sightings.append({"pos": Vector3(5, 4, 4), "kind": Ship.WARSHIP, "turn": s.turn})
 	me.alerts.append({"pos": Vector3(2, 2, 2)})
 	me.known[Vector3i(8, 8, 8)] = s.turn
@@ -1320,7 +1750,7 @@ func test_map_clarity() -> void:
 	await capture("midgame-detail")
 	overlay.show_details.button_pressed = false
 	for obj in map._pickables():
-		if obj["key"] == "s13":
+		if obj["key"] == "s%d"%me.ships[12].id:
 			map.select_object(obj)
 	check(map._tube_parts.size() > overview, "点击单位立即显示其航线")
 	check(map._tube_parts.size() < overview + 24, "选中单位不会展开整支舰队的航线")

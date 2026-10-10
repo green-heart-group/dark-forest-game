@@ -99,6 +99,9 @@ func _open_question_ids() -> Array[String]:
 ## 编号查得到出处：游戏设计、原型现在的规则和决定记录里写到的每个编号，要么在决定记录「编号从哪里来」登记的范围里（已经定了），
 ## 要么是要确定的问题里还开着的问题。新的一批决定用了新字母、忘了登记来源时，这里会失败。
 func test_every_decision_id_has_a_source() -> void:
+	var ids:=RegEx.create_from_string(RULE_ID)
+	check(ids.search("V0.1")==null,"设计版本号不是规则决定编号")
+	check(ids.search("V1")!=null and ids.search("F3.5")!=null and ids.search("W2")!=null,"现有规则编号仍须追溯来源")
 	var sources := _id_sources()
 	check(not sources.is_empty(), "找得到决定记录「编号从哪里来」的表")
 	var open := _open_question_ids()
@@ -179,4 +182,3 @@ func _check_index(rel: String, bad: Array[String]) -> void:
 		if not readme.contains("](%s/" % d):
 			bad.append("docs/" + rel.path_join(d).trim_prefix("/") + "/")
 		_check_index(rel.path_join(d).trim_prefix("/"), bad)
-

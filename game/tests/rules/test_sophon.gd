@@ -1,60 +1,64 @@
 extends "res://tests/rules/rule_suite.gd"
-## 智子（D5）。
+## 智子保留建造、指定目的地、停留与改派入口；V0.1 取消科研封锁和全境透视。
 
 
-## 你在 (0,0,0)，AI 在 (3,0,0)。你派智子过去，等到锁住为止。
-func _lock_ai_with_sophon(s: GameState) -> Ship:
-	var me := s.human()
-	_give(me, ["sophon"])
-	var sophon: Ship = s.build(me, "sophon")["ship"]
-	check(s.send_sophon(me, sophon.id, Vector3i(3, 0, 0))["error"] == "", "能派智子去任意格子")
-	for i in 6:
-		if sophon.lock >= 0:
-			break
-		s.end_turn()
-	return sophon
+func build_sophon(s: GameState,civ: Civ) -> Ship:
+	_give(civ,["sophon"])
+	var result:=s.build(civ,"sophon",civ.home)
+	check_eq(result["error"],"","正式提交4W智子工程")
+	if result["error"]!="": return null
+	var id: int=civ.pending[-1]["id"]
+	_turns(s,4)
+	check_eq(civ.order_reports.get(id,{}).get("status",""),"completed","工程完工且回执已收到")
+	return civ.ship_by_id(civ.order_reports.get(id,{}).get("result_ship",-1))
 
 
-## 规则：智子（D5）
-func test_sophon_locks_enemy_home() -> void:
-	var s := _two_civs(Vector3i(3, 0, 0))
-	var me := s.human()
-	var ai := s.civs[1]
-	_open_tiers(ai, 1)
-	var sophon := _lock_ai_with_sophon(s)
-	check(sophon.lock == 1 and s.watched_by(ai) == [me], "智子到了 AI 的母星系，锁住它")
-	check(s.research(ai, "dyson")["error"].contains("智子"), "被锁住时不能升级科技")
-	var probe := _ship(s, ai, Ship.PROBE, Vector3(8, 8, 8), Vector3(1, 0, 0))
-	s._engage(ai, me)
-	check(ai.tier2_turn < 0, "被锁住时达到的科技等级条件不算")
-	s._observe(me)
-	check(me.known.has(Vector3i(3, 0, 0)), "锁住的文明的星系都知道")
-	check(me.sightings.any(func(x): return x["pos"] == probe.pos), "它在飞的单位当回合就看到，多远都一样")
-	_turns(s, Balance.SOPHON_RESEARCH_TURNS)
-	check(s.research(ai, "dyson")["error"] == "", "%d 回合后又能升级科技" % Balance.SOPHON_RESEARCH_TURNS)
-	check(s.sophon_tier_left(ai) > 0, "科技等级条件还要更久才算")
+## 规则：智子，情报传回
+func test_sophon_observes_enemy_home_without_lock() -> void:
+	var s:=_two_civs(Vector3i(3,0,0))
+	var me:=s.human()
+	var ai:=s.civs[1]
+	var sophon:=build_sophon(s,me)
+	if sophon==null: return
+	check_eq(s.send_sophon(me,sophon.id,ai.home)["error"],"","按旧目的地操作派出智子")
+	_turns(s,5)
+	check(sophon.pos.distance_to(Vector3(ai.home))<0.0001 and not sophon.moving(),"按 .5 加速/.95c 上限抵达并停留")
+	check(sophon.lock<0 and s.watched_by(ai).is_empty(),"不赋予科研封锁")
+	_give(ai,["warship"])
+	check_eq(s.research(ai,"beam")["error"],"","智子在场不妨碍合法研究")
+	var far:=_ship(s,ai,Ship.PROBE,Vector3(8,8,8),Vector3.LEFT)
+	_turns(s,4)
+	check(me.known.has(ai.home),"本地星系观察按物理传播回到控制锚点")
+	check(not me.sightings.any(func(record):return record["id"]==far.id),"不提供敌文明远端单位的全境透视")
+	check(ai.has_tech("beam"),"研究确实通过正式工作时钟完成")
 
 
-## 规则：智子（D5）
-func test_building_own_sophon_frees_civ() -> void:
-	var s := _two_civs(Vector3i(3, 0, 0))
-	var ai := s.civs[1]
-	var sophon := _lock_ai_with_sophon(s)
-	check(sophon.lock == 1, "先锁住")
-	_give(ai, ["sophon"])
-	check(s.build(ai, "sophon", Vector3i(3, 0, 0))["error"] == "", "被锁住的文明能造智子")
-	check(s.sophons_on(ai).is_empty() and s.sophon_research_left(ai) == 0 and s.sophon_tier_left(ai) == 0,
-			"造出自己的智子，锁住它的智子全部失效")
+## 规则：智子
+func test_own_sophon_does_not_disable_enemy_sensor() -> void:
+	var s:=_two_civs(Vector3i(3,0,0))
+	var mine:=build_sophon(s,s.human())
+	if mine==null: return
+	s.send_sophon(s.human(),mine.id,s.civs[1].home)
+	_turns(s,5)
+	var theirs:=build_sophon(s,s.civs[1])
+	check(theirs!=null,"对方仍能建造自己的智子")
+	check(not mine.dead and not mine.moving(),"建造自己的智子不会无故移除已停留的敌方传感器")
+	check_eq([s.sophon_research_left(s.civs[1]),s.sophon_tier_left(s.civs[1])],[0,0],"不存在旧科研/分级锁定倒计时")
 
 
-## 规则：智子（D5）
+## 规则：智子，调度（派出和行动）
 func test_sophon_waits_when_not_a_home() -> void:
-	var s := _two_civs(Vector3i(8, 8, 8))
-	var me := s.human()
-	_give(me, ["sophon"])
-	var sophon: Ship = s.build(me, "sophon")["ship"]
-	s.send_sophon(me, sophon.id, Vector3i(2, 0, 0))
-	_turns(s, 4)
-	check(sophon.lock < 0 and sophon.direction == Vector3.ZERO and sophon.pos == Vector3(2, 0, 0), "不是别人的母星系，原地待命")
-	check(s.sophon_error(me, sophon.id, Vector3i(8, 8, 8)) == "", "可以再派")
-	check(s.civs[1].known.is_empty() and s.civs[1].sightings.is_empty(), "别人看不到智子")
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	var sophon:=build_sophon(s,me)
+	if sophon==null: return
+	check_eq(s.send_sophon(me,sophon.id,Vector3i(2,0,0))["error"],"","空格也可作为目的地")
+	_turns(s,7) # 等待周期性遥测的发出及2ly回传，不能只看真实到达。
+	check(sophon.pos==Vector3(2,0,0) and not sophon.moving() and sophon.lock<0,"到空目的地原地待命")
+	check_eq(s.send_sophon(me,sophon.id,Vector3i(3,0,0))["error"],"","遥测收到后可改派")
+	check(not sophon.moving(),"远端改派命令不瞬间执行")
+	WorldTime.advance(s,1.9)
+	check(not sophon.moving(),"两光年命令尚未抵达")
+	WorldTime.advance(s,0.2)
+	check(sophon.moving(),"命令实际抵达后才再出发")
+	check(s.civs[1].known.is_empty(),"远方文明不能凭真实位置知道此地活动")

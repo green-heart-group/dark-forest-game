@@ -1,5 +1,8 @@
 class_name Civ
 extends RefCounted
+
+## 最后一次锚点损失的物理原因，供同刻批次结束后的淘汰记录使用。
+var last_anchor_loss_cause := ""
 ## 一个文明：拥有的星系、单位、科技，以及它知道的别人的事。
 ## 据点是母星系、殖民星系和星舰，三样都没有了就灭亡（游戏设计 §1）。
 
@@ -10,9 +13,58 @@ var home: Vector3i
 var colonies: Array[Vector3i] = []
 var alive := true
 
-var energy := Balance.START_ENERGY
-var mineral := Balance.START_MINERAL
+var energy_millis := WorkOrder.units(Balance.START_ENERGY)
+var mineral_millis := WorkOrder.units(Balance.START_MINERAL)
+## 画面/既有操作继续使用E/M金额；内部一律以.001固定点保存。
+var energy: float:
+	get: return WorkOrder.amount(energy_millis)
+	set(value): energy_millis = WorkOrder.units(value)
+var mineral: float:
+	get: return WorkOrder.amount(mineral_millis)
+	set(value): mineral_millis = WorkOrder.units(value)
 var actions_left := 0
+## 事件权限永久保存，与达到产能门槛的先后顺序无关。
+var contacted := false
+var conquered := false
+## 当地毁灭战报及同一历史时点的侦察证据；不把文明灭亡等同于星系清空。
+var battle_reports: Dictionary = {}
+var battle_surveys: Dictionary = {}
+var battle_queries: Dictionary = {}
+var conquest_confirmation: Dictionary = {}
+## 唯一研究队列；工程成本和宿主使用WorkOrder的值记录。
+var research_project: Dictionary = {}
+var advanced_miners: Dictionary[Vector3i, int] = {}
+var warnings: Dictionary[Vector3i, int] = {}
+var colonial: Dictionary[Vector3i, bool] = {}
+var dormant_colonies: Dictionary[Vector3i, bool] = {}
+var dormant_dysons: Dictionary[Vector3i, int] = {}
+var maintenance_priority: Array[String] = []
+var stopped_packages: Array[String] = []
+var starship_ever_built := false
+var dimension_ammo := 0
+var emergency_turn := -1
+var assets: Array[Dictionary] = []
+## 连续积分不足.001的尾数，不可用于支付，跨步累计后才入账。
+var flow_remainder: Array[float] = [0.0, 0.0]
+var ledger: Array[Dictionary] = []
+var conversion_receipts: Dictionary = {}
+var conversions: Dictionary = {}
+var domain_ready_at := 0.0
+var scan_ready_at := 0.0
+var telemetry: Dictionary = {}
+## 只由发送和返回收据修改，不能通过真正在途队列的消失泄露远端状态。
+var command_pending: Dictionary = {}
+var command_results: Array[Dictionary] = []
+var ai_receipt_cursor := 0
+var coverage: Dictionary = {}
+var local_contacts_by_source: Dictionary = {}
+var order_reports: Dictionary = {}
+var payload_reports: Dictionary = {}
+var site_reports: Dictionary[Vector3i, Dictionary] = {}
+var front_reports: Dictionary = {}
+var broadcast_reports: Dictionary = {}
+var original_home := Vector3i.ZERO
+var original_anchor_id := -1
 
 # ---------- 科技 ----------
 ## 已经有的科技（键是 Tech.ALL 里的名字）
@@ -23,6 +75,8 @@ var discovered := false
 var tier1_turn := -1
 var tier2_turn := -1
 var tier3_turn := -1
+## 物理端冻结的产能证明；各来源回报全部抵达后才公开阶段权限。
+var pending_permissions: Dictionary = {}
 ## 射电望远镜升级了几次
 var telescope := 0
 
@@ -70,6 +124,8 @@ var reports: Array[Dictionary] = []
 var sightings: Array[Dictionary] = []
 ## 看到过的航迹（GameState.wakes 的下标）
 var wakes_seen: Dictionary[int, bool] = {}
+## 航迹端点分别经传感器回传；只有两端都已收到才画出历史线段。
+var wake_reports: Dictionary = {}
 ## 听到的广播：被广播的坐标 -> 第几回合听到
 var heard: Dictionary[Vector3i, int] = {}
 ## 被打时知道的打击方向：每项是 {"at": 被打的星系, "dir": 打击从哪个方向来, "turn"}
@@ -99,6 +155,7 @@ func _init(p_name: String, p_is_ai: bool, p_home: Vector3i) -> void:
 	name = p_name
 	is_ai = p_is_ai
 	home = p_home
+	original_home = p_home
 	colonies.append(p_home)
 	for id in Tech.starting():
 		techs[id] = true
@@ -124,7 +181,7 @@ func set_tier_turn(tier: int, at: int) -> void:
 ## 星舰（没有时为 null）。
 func starship() -> Ship:
 	for s in ships:
-		if s.kind == Ship.STARSHIP and not s.dead:
+		if s.kind in [Ship.STARSHIP, Ship.WANDERING_EARTH] and not s.dead:
 			return s
 	return null
 
@@ -193,6 +250,8 @@ func miner_count() -> int:
 	var total := 0
 	for c in miners:
 		total += miners[c]
+	for c in advanced_miners:
+		total += advanced_miners[c]
 	return total
 
 
@@ -213,12 +272,9 @@ func warning_range() -> float:
 	return Balance.WARNING_RANGE + warning_level
 
 
-## 行动点 = 基数 − 母星系的恒星数（最少 ACTION_MIN），每多一个殖民地 +1（E2）。只剩星舰时最少。
-func action_points(map: StarMap) -> int:
-	if colonies.is_empty():
-		return Balance.ACTION_MIN
-	var stars := StarMap.star_count(map.star_at(home))
-	return maxi(Balance.ACTION_MIN, Balance.ACTION_BASE - stars) + colonies.size() - 1
+## 每文明每年的固定额度，所有维度一致；殖民地、恒星与锚点数不增加AP。
+func action_points(_map: StarMap) -> int:
+	return Balance.ACTION_BASE
 
 
 ## 自身降维带上的单位个数，用来算费用。
@@ -245,6 +301,15 @@ func reduce_cost() -> int:
 	return Balance.COST_REDUCE_BASE + Balance.COST_REDUCE_PER_UNIT * reduce_units()
 
 
-## 产能倍数：每次自身降维后减半。
+## 实体当前维度。全球几何阶段不改变尚未迁维实体的产出。
+func entity_dimension() -> int:
+	return 1 if line_reduced else (2 if reduced else 3)
+
+
+func work_factor() -> float:
+	return Balance.DIMENSION_WORK[str(entity_dimension())]
+
+
+## 产能Q、光速c和工作倍率分别读取，不能互相代用。
 func output_factor() -> float:
-	return 0.25 if line_reduced else (0.5 if reduced else 1.0)
+	return Balance.DIMENSION_OUTPUT[str(entity_dimension())]

@@ -1,7 +1,7 @@
 class_name Ship
 extends RefCounted
 ## 一个会动的单位：探测器、战舰、殖民船、星舰、吞噬者、智子，或者飞行中的光粒。
-## 位置用小数记。每回合先加速（速度 + 加速度，不超过最高速度），再按新速度沿方向直线移动（G1）。
+## 位置用小数记。连续时钟按实际加速段积分，在限速、格界和到达时刻切段。
 ## 造好后先停在星系里（docked），派出以后才开始飞。
 
 const PROBE := "probe"
@@ -11,13 +11,16 @@ const STARSHIP := "starship"
 const DEVOURER := "devourer"
 const GRAIN := "grain"
 const SOPHON := "sophon"
+const NUCLEAR_PROBE := "nuclear_probe"
+const DROPLET := "droplet"
+const WANDERING_EARTH := "wandering_earth"
 ## 朝一个方向派出去的（别的要选目的地）
-const AIMED := [PROBE, WARSHIP, DEVOURER]
+const AIMED := [PROBE, NUCLEAR_PROBE, WARSHIP, DEVOURER, DROPLET]
 ## 在飞的时候能转向的
-const TURNABLE := [WARSHIP, DEVOURER]
+const TURNABLE := [WARSHIP, DEVOURER, DROPLET]
 
 const NAMES := {PROBE: "探测器", WARSHIP: "战舰", COLONY: "殖民船", STARSHIP: "星舰", DEVOURER: "吞噬者",
-		GRAIN: "光粒", SOPHON: "智子"}
+		GRAIN: "光粒", SOPHON: "智子", NUCLEAR_PROBE: "核脉冲探测器", DROPLET: "水滴", WANDERING_EARTH: "流浪地球"}
 
 ## 每个单位一个编号，整局不重复，画面的下拉菜单用它来选单位
 var id := 0
@@ -58,16 +61,44 @@ var eat_wait := 0
 var stuck := 0
 ## 已经毁掉（这一回合结算完再从列表里拿掉）
 var dead := false
+## 安装模块与维护状态。研究只解锁选装，不自动改动已造舰体。
+var modules: Array[String] = []
+var dormant := false
+var entity_dim := 3
+var salvage_claimed := false
+var conversion_receipts: Dictionary = {}
+var work_locked := false
+var pause_until := 0.0
+var last_hit := -1000000.0
+var next_repair := 0.0
+var fired_turn := -1
+var contact_ids: Array[int] = []
+var ready: Dictionary = {}
+var command: Dictionary = {}
+var local_contacts: Dictionary = {}
+var weapon_policy := "lethal"
+var target_id := -1
+var channel := ""
+var ammo_reserved: Array[int] = [0, 0]
+var suppression: Dictionary = {}
+var origin_cell_id := -1
+var last_devour_turn := -1
+var leg_origin := Vector3.ZERO
+var leg_distance := 0.0
+var distance_flown := 0.0
+var carried_rocky := 0
 
 
 static func make(p_kind: String, p_pos: Vector3, p_id: int) -> Ship:
 	var s := Ship.new()
 	s.kind = p_kind
 	s.pos = p_pos
+	s.leg_origin = p_pos
 	s.id = p_id
 	var move: Array = {PROBE: Balance.PROBE_MOVE, WARSHIP: Balance.WARSHIP_MOVE, COLONY: Balance.COLONY_MOVE,
 			STARSHIP: Balance.STARSHIP_MOVE, DEVOURER: Balance.DEVOURER_MOVE, GRAIN: Balance.GRAIN_MOVE,
-			SOPHON: Balance.SOPHON_MOVE}[p_kind]
+			SOPHON: Balance.SOPHON_MOVE, NUCLEAR_PROBE: Balance.IPROBE_MOVE,
+			DROPLET: Balance.DROPLET_MOVE, WANDERING_EARTH: Balance.WANDERING_EARTH_MOVE}[p_kind]
 	s.max_speed = move[0]
 	s.accel = move[1]
 	return s
@@ -109,3 +140,17 @@ func label() -> String:
 	if kind == PROBE and interstellar:
 		name = "星际探测器"
 	return "%s #%d" % [name, id]
+
+
+func max_hp() -> int:
+	var hp: int = Balance.HULL_HP.get(kind, 1)
+	if kind == WARSHIP:
+		if modules.has("alloy"):
+			hp = maxi(hp, Balance.ALLOY_HP)
+		if modules.has("shield"):
+			hp = maxi(hp, Balance.SHIELD_HP)
+	return hp
+
+
+func armed() -> bool:
+	return kind == WARSHIP and not weapons.is_empty() and not dead and not dormant

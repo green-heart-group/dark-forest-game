@@ -49,6 +49,19 @@ def balance() -> dict:
     return {name: ast.literal_eval(value) for name, value in read_cfg() if name != "---"}
 
 
+def ship_speed_table() -> str:
+    """W7普通航速分档；最高速度、加速度和从静止到上限的年数取配置。"""
+    values = balance()
+    rows = ["| 船型 | 最高速度 / 当地光速 | 加速度 / 当地光速（每年） | 从静止达到普通上限 |",
+            "| --- | --- | --- | --- |"]
+    for title, key in [("化学探测器", "PROBE_MOVE"), ("核脉冲探测器", "IPROBE_MOVE"),
+                       ("运输船", "COLONY_MOVE"), ("吞食者", "DEVOURER_MOVE")]:
+        top, accel = values[key]
+        ramp = f"{top/accel:g} 年" if accel else "派出即匀速"
+        rows.append(f"| {title} | {top:g} | {accel:g} | {ramp} |")
+    return "\n".join(rows) + "\n"
+
+
 def techs() -> dict:
     """科技树：名字 → {code, name, tier, needs}，按 tech.gd 里的顺序。"""
     return _gd_dict(GAME / "rules" / "tech.gd", "ALL")
@@ -73,12 +86,47 @@ def tech_table(conditions: list[str]) -> str:
             if t["tier"] != tier:
                 continue
             text = f"{t['code']} {t['name']}"
-            if tier > 0:
-                text += " " + price(costs[tid])
+            if not t.get("initial", tier == 0):
+                text += " " + price(costs[tid]) + f" / {values['TECH_WORK'][tid]:g}W"
                 if t["needs"]:
                     text += "（要 " + "、".join(all_techs[n]["code"] for n in t["needs"]) + "）"
             items.append(text)
         rows.append(f"| {name} | {condition.format(**values)} | {'、'.join(items)} |")
+    return "\n".join(rows) + "\n"
+
+
+def construction_table() -> str:
+    values = balance()
+    names = _gd_dict(GAME / "rules" / "construction.gd", "NAMES")
+    rows = ["| 工程 | 预付 E + M | 工作量 | 固定年维护 E + M |", "| --- | --- | --- | --- |"]
+    for key, name in names.items():
+        rows.append(f"| {name} | {price(values['COST_' + key.upper()])} | {values['BUILD_WORK'][key]:g}W | {price(values['BUILD_UPKEEP'][key])} |")
+    return "\n".join(rows) + "\n"
+
+
+def module_table() -> str:
+    values = balance()
+    all_techs = techs()
+    rows = ["| 可选模块 | 额外 E + M | 额外工作量 |", "| --- | --- | --- |"]
+    for key, cost in values["MODULE_COST"].items():
+        rows.append(f"| {all_techs[key]['code']} {all_techs[key]['name']} | {price(cost)} | {values['MODULE_WORK'][key]:g}W |")
+    return "\n".join(rows) + "\n"
+
+
+def dimension_table() -> str:
+    values = balance()
+    rows = ["| 维度 | 每格 ly | 背景光速 ly/年 | 实体产出 Q | 工作 W/年 |", "| --- | --- | --- | --- | --- |"]
+    for dim in ["3", "2", "1"]:
+        rows.append(f"| {dim}D | {values['DIMENSION_CELL_SIZE'][dim]:g} | {values['DIMENSION_LIGHT'][dim]:g} | {values['DIMENSION_OUTPUT'][dim]:g} | {values['DIMENSION_WORK'][dim]:g} |")
+    return "\n".join(rows) + "\n"
+
+
+def weapon_table() -> str:
+    values = balance()
+    names = techs()
+    rows = ["| 武器 | 射程 ly | 速度（当地光速倍数） | 单次伤害 | 开火 E + M |", "| --- | --- | --- | --- | --- |"]
+    for key, data in values["WEAPON_DATA"].items():
+        rows.append(f"| {names[key]['name']} | {data['range']:g} | {data['speed']:g} | {data['damage']} | {price(data['cost'])} |")
     return "\n".join(rows) + "\n"
 
 

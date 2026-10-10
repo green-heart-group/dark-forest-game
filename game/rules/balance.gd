@@ -27,6 +27,9 @@ static var ENERGY_PER_STAR: int
 static var MINERAL_PER_COLONY: int
 static var ACTION_BASE: int
 static var ACTION_MIN: int
+static var BUILD_SLOTS: int
+static var HOME_BUILD_SLOTS: int
+static var LOCAL_ORDER_REPORT_CURRENT: int
 static var STARSHIP_ENERGY: int
 static var STARSHIP_MINERAL: int
 
@@ -55,6 +58,7 @@ static var SIGHTING_KEEP: int
 
 # ---------- 移动（游戏设计 §3）：[最高速度, 加速度] ----------
 static var GRAIN_MOVE: Array
+static var SHIP_SPEED_RELATIVE: int
 static var PROBE_MOVE: Array
 static var IPROBE_MOVE: Array
 static var WARSHIP_MOVE: Array
@@ -160,6 +164,97 @@ static var HIDDEN_FOIL_SPEED: float
 
 # ---------- 暗能量采集（科技 301） ----------
 static var DARK_ENERGY_CELLS: int
+
+# ---------- V0.1 工期、维护和独立维度参数 ----------
+static var COST_ADVANCED_MINER: Array
+static var COST_NUCLEAR_PROBE: Array
+static var COST_LANDING: Array
+static var COST_DROPLET: Array
+static var COST_DIMENSION_WEAPON: Array
+static var COST_WANDERING_EARTH: Array
+static var TECH_WORK: Dictionary
+static var BUILD_WORK: Dictionary
+static var BUILD_UPKEEP: Dictionary
+static var DIMENSION_LIGHT: Dictionary
+static var DIMENSION_OUTPUT: Dictionary
+static var DIMENSION_WORK: Dictionary
+static var DIMENSION_CELL_SIZE: Dictionary
+static var ADVANCED_MINER_MINERAL: int
+static var BASE_MINER_LIMIT: int
+static var FUSION_ENERGY: int
+static var COVERED_ENERGY: int
+static var VACUUM_ENERGY: int
+static var TIER_NET_INCOME: Dictionary
+static var TELESCOPE_UPGRADE_COST: Array
+static var TELESCOPE_UPGRADE_WORK: Array
+static var WARNING_UPGRADE_COST: Array
+static var WARNING_UPGRADE_WORK: int
+static var MINER_REFIT_COST: Array
+static var MINER_REFIT_WORK: int
+static var RESCUE_WORK_FACTOR: float
+static var EMERGENCY_YIELD: float
+static var MODULE_COST: Dictionary
+static var MODULE_WORK: Dictionary
+
+# ---------- V0.1 连续时间与物理运动 ----------
+static var DROPLET_MOVE: Array
+static var WANDERING_EARTH_MOVE: Array
+static var PHYSICS_MAX_DT: float
+static var TIME_EPSILON: float
+static var COLLISION_EPSILON: float
+static var SOPHON_VISION: float
+static var LINE_BACKWARD_PER_LEVEL: float
+static var FLEET_DISPATCH_COST: int
+static var FUSION_DISCOUNT: int
+static var COLLECTION_DISCOUNT: int
+static var DEVOURER_ENERGY: int
+static var SCAN_COST: Array
+static var SCAN_COOLDOWN: float
+static var SCAN_LENGTH: float
+static var SCAN_RADIUS: float
+static var WEAPON_DATA: Dictionary
+static var HULL_HP: Dictionary
+static var ALLOY_HP: int
+static var SHIELD_HP: int
+static var ALLOY_REDUCTION: int
+static var ALLOY_CHANCE: float
+static var SHIELD_CHANCE: float
+static var SHIELD_REPAIR_INTERVAL: float
+static var STARSHIP_REPAIR_INTERVAL: float
+static var SUICIDE_RANGE: float
+static var DROPLET_RANGE: float
+static var DROPLET_DAMAGE: int
+static var DROPLET_PAUSE: float
+static var ANTIMATTER_DAMAGE: int
+static var SUPPRESSION_RANGE: float
+static var SUPPRESSION_DEFENDER_RANGE: float
+static var SUPPRESSION_DURATION: float
+static var SUPPRESSION_UPKEEP: Array
+static var SALVAGE_RATE: float
+static var DOMAIN_COST: Array
+static var DOMAIN_COOLDOWN: float
+static var DOMAIN_PAYLOAD_SPEED: float
+static var DOMAIN_ACTIVATION: float
+static var DOMAIN_RADIUS: float
+static var DOMAIN_CORE: float
+static var DOMAIN_WEIGHT: float
+static var DOMAIN_SPREAD: float
+static var DOMAIN_LIFETIME: float
+static var DOMAIN_IMMUNITY: float
+static var DEADLINE_RADIUS: float
+static var DEADLINE_FACTOR: float
+static var DEADLINE_LIFETIME: float
+static var DIMENSION_PAYLOAD_SPEED: float
+static var DIMENSION_ACTIVATION: float
+static var CONVERSION_BASE_COST: Array
+static var CONVERSION_ENTITY_COST: Array
+static var CONVERSION_BASE_WORK: float
+static var CONVERSION_BATCH_SIZE: int
+static var CONVERSION_RETENTION: float
+static var EMERGENCY_CONVERSION_COST: Array
+static var EMERGENCY_CONVERSION_WORK: float
+static var EMERGENCY_CONVERSION_RETENTION: float
+static var EMERGENCY_CONVERSION_MINERS: int
 # <<< 生成的到这里为止
 
 
@@ -219,6 +314,12 @@ static func values() -> Dictionary:
 		var v = script.get(name)
 		found[name] = v.duplicate(true) if v is Array or v is Dictionary else v
 	return found
+
+
+## 动态类别只读取一个数值，不为一次报价复制整份配置。
+static func value(name: String) -> Variant:
+	var current = (Balance as GDScript).get(name)
+	return current.duplicate(true) if current is Array or current is Dictionary else current
 
 
 ## balance.cfg 里写的值（不管这次运行里改过没有）。数组的类型和 Balance 里的一样（Array[int] 等）。

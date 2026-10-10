@@ -5,7 +5,7 @@ extends RefCounted
 ## AI 的操作不用记，重算时 AI 会做出同样的决定。
 ## 每结束一回合还存一个校验值，重算时对比，发现不一样（比如改了规则或数值）就记下是第几回合。
 
-const VERSION := 2
+const VERSION := 3
 const DIR := "user://replays"
 
 var seed_value := 0
@@ -168,7 +168,8 @@ static func valid_data(d: Variant) -> bool:
 	var allowed := ["research", "upgrade", "build", "dispatch", "turn_ship", "send_colony", "move_starship",
 			"settle_starship", "launch_grain", "use_antimatter", "send_sophon", "broadcast", "launch_foil",
 			"launch_line_foil", "start_reduce", "launch_singularity", "launch_black_domain", "set_autoplay",
-			"set_play_on_after_death", "dev_balance", "dev_set", "dev_tech"]
+			"set_play_on_after_death", "dev_balance", "dev_set", "dev_tech", "cancel_order", "emergency_work",
+			"refit_ship", "start_landing", "refit_miner", "prepare_conversion", "execute_conversion", "active_scan", "start_earth", "set_weapon_policy", "set_maintenance"]
 	var signatures := {}
 	for method in GameState.new().get_method_list():
 		if method["name"] in allowed:
@@ -207,3 +208,13 @@ func balance_diff() -> Dictionary:
 ## 把数值改成记录时的（只在这次运行里有效）。现在已经没有的数值跳过。
 func apply_balance() -> void:
 	Balance.apply(balance)
+	if not balance.is_empty() and not balance.has("BUILD_SLOTS"):
+		Balance.set_value("BUILD_SLOTS",Balance.file_values()["BUILD_SLOTS"])
+	# 既有V0.1记录没有母星容量键，必须按原单槽重放，不能用新默认容量改变AI历史。
+	if not balance.is_empty() and not balance.has("HOME_BUILD_SLOTS"):
+		Balance.set_value("HOME_BUILD_SLOTS",Balance.BUILD_SLOTS)
+	# W7之前的V0.1记录用绝对速度与加速度；缺键不能套用新局的当地光速分档。
+	if not balance.is_empty() and not balance.has("SHIP_SPEED_RELATIVE"):
+		Balance.set_value("SHIP_SPEED_RELATIVE",0)
+	if not balance.is_empty() and not balance.has("LOCAL_ORDER_REPORT_CURRENT"):
+		Balance.set_value("LOCAL_ORDER_REPORT_CURRENT",0)

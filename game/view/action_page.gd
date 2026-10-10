@@ -7,7 +7,7 @@ const MapView := preload("res://view/map_view.gd")
 const AngleDial := preload("res://view/angle_dial.gd")
 
 ## 行动页里的行动。DISPATCH 是派出停着的单位，或让在飞的战舰、吞噬者转向。
-enum Action { DISPATCH, COLONY, STARSHIP, SETTLE, GRAIN, ANTIMATTER, SOPHON, BROADCAST, FOIL, LINE_FOIL, DOMAIN, SINGULARITY }
+enum Action { DISPATCH, COLONY, STARSHIP, SETTLE, GRAIN, ANTIMATTER, SOPHON, BROADCAST, FOIL, LINE_FOIL, DOMAIN, SINGULARITY, SCAN, LANDING }
 ## 行动要玩家给什么：不用给、一个方向、一个目标格子
 enum Aim { NONE, DIRECTION, TARGET }
 ## 每个行动对应的规则函数名（GameState.action_cost 用这个名字查价格）
@@ -17,6 +17,7 @@ const RULE_NAMES := {
 	Action.SOPHON: "send_sophon",
 	Action.BROADCAST: "broadcast", Action.FOIL: "launch_foil", Action.LINE_FOIL: "launch_line_foil",
 	Action.DOMAIN: "launch_black_domain", Action.SINGULARITY: "launch_singularity",
+	Action.SCAN:"active_scan",Action.LANDING:"start_landing",
 }
 
 var main: Node
@@ -59,7 +60,7 @@ var _line_right := Button.new()
 var _dist := HSlider.new()
 var _dist_label := Label.new()
 ## 算出来的目标格子（写在距离后面）
-var _target_info := Label.new()
+var _target_info := Button.new()
 var _known_pick := OptionButton.new()
 var _go := Button.new()
 ## 执行按钮下面的小字：为什么现在不能执行
@@ -95,7 +96,7 @@ func setup(p_main: Node) -> void:
 	_unit_pick.item_selected.connect(func(_i): main.refresh())
 	_unit_box.add_child(_unit_pick)
 	detail.add_child(_unit_box)
-	_slow.text = "先慢速飞出自己的视野（藏住航迹起点）"
+	_slow.text = "先慢速飞出自己的视野"
 	_slow.add_theme_font_size_override("font_size", 13)
 	detail.add_child(_slow)
 	detail.add_child(_dir_box)
@@ -146,8 +147,11 @@ func setup(p_main: Node) -> void:
 	_dist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dist_row.add_child(_dist_label)
 	_target_info.custom_minimum_size.x = 92
+	_target_info.flat=true
+	_target_info.pressed.connect(func():main.migration_preview.open_preview())
+	_target_info.tooltip_text="查看当前/下一维的物理距离、预计航时、射程与已知威胁。"
 	_target_info.add_theme_font_size_override("font_size", 13)
-	_target_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_target_info.alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dist_row.add_child(_target_info)
 	_target_box.add_child(dist_row)
 	_go.custom_minimum_size.y = 36
@@ -248,7 +252,7 @@ func refresh(me: Civ) -> void:
 		var reason := _block(me, a)
 		tile.button_pressed = a == _action
 		tile.modulate.a = 1.0 if reason == "" else 0.5
-		Widgets.set_tile_cost(tile, Widgets.cost_text(Vector2i(_cost(me, a), 0)))
+		Widgets.set_tile_cost(tile, _price_text(me,a))
 		tile.tooltip_text = "%s %s（1 行动点）\n%s%s" % [specs[a][0], specs[a][1], specs[a][2],
 				"\n\n现在不能用：" + reason if reason != "" else ""]
 	var spec: Array = specs[_action]
@@ -257,9 +261,13 @@ func refresh(me: Civ) -> void:
 	var block := _block(me, _action)
 	var verb: String = spec[1]
 	var unit := _selected_unit()
+	if unit != null:
+		var speed := Widgets.ship_speed_tip(unit.kind)
+		if speed != "":
+			_go.tooltip_text += "\n"+speed
 	if _action == Action.DISPATCH and unit != null:
 		verb = ("派出" if unit.docked else "转向") + unit.label()
-	_go.text = "▶ %s　%s" % [verb, Widgets.cost_text(Vector2i(_cost(me, _action), 0))]
+	_go.text = "▶ %s　%s" % [verb, _price_text(me,_action)]
 	var locked: String = main.locked_reason()
 	if locked != "":
 		block = locked
@@ -274,9 +282,9 @@ func _refresh_aim_inputs() -> void:
 	_dir_box.visible = aim != Aim.NONE
 	_target_box.visible = aim == Aim.TARGET
 	_known_pick.visible = aim == Aim.TARGET
-	_unit_box.visible = _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON]
+	_unit_box.visible = _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON, Action.LANDING]
 	var s := _selected_unit()
-	_slow.visible = _action == Action.DISPATCH and s != null and s.kind == Ship.PROBE and s.docked
+	_slow.visible = _action == Action.DISPATCH and s != null and s.kind in [Ship.PROBE,Ship.NUCLEAR_PROBE] and s.docked
 	var from := "选中的单位" if _unit_box.visible else ("星舰" if _action == Action.STARSHIP else "发射源")
 	# 只留一行，细节（角度加距离、圆钮怎么调）在提示和圆盘的悬停说明里
 	if aim == Aim.TARGET:
@@ -332,52 +340,38 @@ func preview() -> Dictionary:
 ## 每种行动：[图标, 名字, 说明, 要什么输入]。都要花 1 个行动点。
 func _action_specs() -> Dictionary:
 	return {
-		Action.DISPATCH: ["🚀", "派出 / 转向",
-				"派出停着的探测器（%dE）、战舰（%dE）、吞噬者（%dE），或让在飞的战舰、吞噬者转向（%dE，转过 90° 以上速度归零）。单位每回合先加速再飞。" % [
-					Balance.COST_PROBE_LAUNCH, Balance.COST_WARSHIP_LAUNCH, Balance.COST_DEVOURER_LAUNCH, Balance.COST_TURN],
-				Aim.DIRECTION],
-		Action.COLONY: ["🌱", "殖民",
-				"派殖民船去一个格子，不花能量。绿圈是看到过的宜居星系；没看到过的地方也能盲飞。到了能殖民就建星系，不能就原地待命。路过别人的星系会被毁。",
-				Aim.TARGET],
-		Action.STARSHIP: ["🛸", "星舰移动",
-				"星舰飞到目标格子停下，不能停在已知的敌方星系。星舰是据点：星系全丢了也能活。",
-				Aim.TARGET],
-		Action.SETTLE: ["🏠", "星舰定居",
-				"星舰停在无主的宜居星系上时，在那里建星系，星舰用掉。", Aim.NONE],
-		Action.GRAIN: ["✨", "光粒",
-				"从存着光粒的发射源朝一个方向发射，光速飞行。打中路上第一个别人的星系：毁 1 颗恒星，抹掉那里的文明（有掩体时人活下来）。",
-				Aim.DIRECTION],
-		Action.ANTIMATTER: ["⚛️", "反物质",
-				"用 1 份反物质，消灭自己星系 %.0f 格内最近的敌方战舰。" % Balance.ANTIMATTER_RANGE, Aim.NONE],
-		Action.SOPHON: ["👁️", "智子",
-				"派智子去一个格子，以 %.2f 倍光速飞，别人看不到。到了别人的母星系就锁住它：%d 回合不能升科技，%d 回合达到的等级条件不算，它做的事你都看得到，直到它自己造出智子。不是母星系就原地待命。" % [
-					Balance.SOPHON_MOVE[0], Balance.SOPHON_RESEARCH_TURNS, Balance.SOPHON_TIER_TURNS],
-				Aim.TARGET],
-		Action.BROADCAST: ["📢", "广播",
-				"从有广播器的发射源把一个坐标以光速告诉所有人。那里的文明可能被听到的人（包括看不见的隐藏文明）打。离目标越近，越容易暴露自己。",
-				Aim.TARGET],
-		Action.FOIL: ["📄", "二向箔",
-				"准备 %d 回合后飞向目标格子，路上不停，到了才展开（可以打空格子）：从落点向四周球形扩散，扫过的格子铺到平面上固定的位置。全图完成后得到 %d×%d 新坐标并重新探索。未自身降维的文明会被消灭。" % [Balance.FOIL_PREPARE_TURNS, DimensionSpace.PLANE_SIZE, DimensionSpace.PLANE_SIZE],
-				Aim.TARGET],
-		Action.LINE_FOIL: ["━", "单向著",
-				"二维里用。准备 %d 回合后起飞，展开后沿 x 轴扩散，把平面压成直线。只有再次降维的文明能活。" % Balance.FOIL_PREPARE_TURNS,
-				Aim.TARGET],
-		Action.DOMAIN: ["🕳️", "黑域",
-				"在现在看得到的一格投放黑域，准备 %d 回合后生效：那一格的光速变成 0，保持 %d 回合，同时每回合向周围扩散一格，之后慢慢恢复。光速变慢的地方舰船和情报都变慢；光速低于 %.2f 时光粒没有杀伤力，那里的星系产出只有 1/10，母星系在里面不能升科技；光速接近 0 时光和舰船过不去，舰船停 %d 回合后消失。所有星系都困在光速为 0 的地方算输。" % [
-					Balance.BLACK_DOMAIN_PREPARE_TURNS, Balance.BLACK_DOMAIN_TURNS, Balance.GRAIN_MIN_LIGHT,
-					Balance.SHIP_STUCK_TURNS],
-				Aim.TARGET],
-		Action.SINGULARITY: ["⚫", "奇异点",
-				"全图压成直线、自己已进入一维后可用。%d 回合后降到零维，获胜。" % Balance.SINGULARITY_TURNS,
-				Aim.NONE],
+		Action.DISPATCH:["🚀","派出 / 转向","命令按光速传到舰船。基础费用4E；聚变能、反物质收集科技可减费，真空能提取后免费；探测器与运输船免费。",Aim.DIRECTION],
+		Action.COLONY:["🌱","运输船航行","选择目的地，运输船抵达后停下；建立殖民地还需研究「星际殖民」并支付建设费。",Aim.TARGET],
+		Action.STARSHIP:["🛸","星舰移动","让星舰前往指定坐标；命令按光速传到星舰，到达目的地后停下。",Aim.TARGET],
+		Action.SETTLE:["🏠","星舰定居","星舰本身就是移动家园。要建立星系殖民地，请使用运输船并研究「星际殖民」。",Aim.NONE],
+		Action.GRAIN:["✨","光粒","以背景光速的99%飞行，打中航线上第一个有人居住的恒星星系。",Aim.DIRECTION],
+		Action.ANTIMATTER:["⚛️","反物质","消耗一枚炸弹和1行动点；以光速飞向目标，命中造成4点物理伤害。",Aim.NONE],
+		Action.SOPHON:["👁️","智子","前往目标侦察；情报须按光速传回。",Aim.TARGET],
+		Action.BROADCAST:["📢","广播","5E广播坐标；命令先到发射器，广播再以当地光速传播。",Aim.TARGET],
+		Action.FOIL:["📄","二向箔","消耗一枚降维武器，以背景光速的25%飞行；抵达1年后启动，降维波以背景光速的一半扩散。",Aim.TARGET],
+		Action.LINE_FOIL:["━","单向著","在二维空间发射，将空间降为一维。星系、设施和舰船需要分别准备进入一维。",Aim.TARGET],
+		Action.DOMAIN:["🕳️","黑域","以背景光速的90%飞向目标，抵达2年后启动。中心区域光速降至零，黑域到期后恢复；刚恢复的区域暂时不受新黑域影响。",Aim.TARGET],
+		Action.SINGULARITY:["⚫","奇异点","在一维空间发射，抵达后摧毁影响范围内的空间和其中的星系、设施与舰船。",Aim.TARGET],
+		Action.SCAN:["📡","主动扫描","原母星或流浪地球；8E，8光年长、1光年半径，10年冷却，等待往返回波。",Aim.DIRECTION],
+		Action.LANDING:["🏠","建立殖民地","先研究「星际殖民」。运输船抵达无主宜居星系后，花3E和4M施工，正常需4年；完工后消耗运输船并建立殖民地。",Aim.NONE],
 	}
+
 
 
 ## 行动 a 要花的能量。派出和转向看单位：选中的行动用选中的单位，其他用第一个能选的单位。
 func _cost(me: Civ, a: int) -> int:
 	if a == Action.DISPATCH:
 		var s := _unit_for(me, a)
-		return GameState.dispatch_cost(s) if s != null else 0
+		return state.command_cost(me,s) if s != null else 0
+	if a==Action.STARSHIP:
+		var ship:=state.reported_starship(me)
+		return state.command_cost(me,ship) if ship!=null else 0
+	if a==Action.SCAN:
+		return Balance.SCAN_COST[0]
+	if a==Action.LANDING:
+		return Construction.cost("landing")[0]
+	if a==Action.DOMAIN:
+		return Balance.DOMAIN_COST[0]
 	return GameState.action_cost(RULE_NAMES[a])
 
 
@@ -399,6 +393,11 @@ func _block(me: Civ, a: int) -> String:
 			return state.colony_error(me, s.id, target)
 		Action.STARSHIP:
 			return state.starship_move_error(me, target)
+		Action.SCAN:
+			return state.scan_error(me,_direction())
+		Action.LANDING:
+			var ship:=_unit_for(me,a)
+			return state.landing_error(me,ship.id) if ship!=null else "需要收到待命运输船的状态"
 		Action.SETTLE:
 			return state.settle_error(me)
 		Action.GRAIN:
@@ -437,12 +436,12 @@ func _unit_for(me: Civ, a: int) -> Ship:
 ## 智子用停着的、没锁住别人的智子。
 func _unit_choices(me: Civ, a: int) -> Array[Ship]:
 	var result: Array[Ship] = []
-	for s in me.ships:
-		if s.dead:
+	for s in Signals.reported_ships(state,me):
+		if s.dead or state.ship_command_pending(me,s.id):
 			continue
 		if a == Action.DISPATCH and (Ship.AIMED.has(s.kind) if s.docked else Ship.TURNABLE.has(s.kind)):
 			result.append(s)
-		elif a == Action.COLONY and s.kind == Ship.COLONY and s.waiting():
+		elif a in [Action.COLONY,Action.LANDING] and s.kind == Ship.COLONY and s.waiting():
 			result.append(s)
 		elif a == Action.SOPHON and s.kind == Ship.SOPHON and s.lock < 0 and s.waiting():
 			result.append(s)
@@ -468,11 +467,11 @@ func _refresh_units(me: Civ) -> void:
 
 
 func _selected_unit() -> Ship:
-	if not _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON]:
+	if not _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON, Action.LANDING]:
 		return null
 	if _unit_pick.selected < 0 or _unit_pick.item_count == 0:
 		return null
-	return main.viewed().ship_by_id(_unit_pick.get_item_metadata(_unit_pick.selected))
+	return Signals.reported_ship(state,main.viewed(),_unit_pick.get_item_metadata(_unit_pick.selected))
 
 
 # ---------- 瞄准 ----------
@@ -494,12 +493,12 @@ func aim_at(c: Vector3i) -> void:
 ## 角度和距离从哪里算起：派出、转向、殖民、智子从选中的单位算，星舰移动从星舰算，其他从发射源算。
 func _aim_point() -> Vector3:
 	var me: Civ = main.viewed()
-	if _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON]:
+	if _action in [Action.DISPATCH, Action.COLONY, Action.SOPHON, Action.LANDING]:
 		var s := _selected_unit()
 		if s != null:
 			return s.pos
-	if _action == Action.STARSHIP and me.has_starship():
-		return me.starship().pos
+	if _action == Action.STARSHIP and state.reported_starship(me)!=null:
+		return state.reported_starship(me).pos
 	return Vector3(main.panel.selected_origin())
 
 
@@ -557,6 +556,10 @@ func _on_go() -> void:
 			r = state.send_colony(me, s.id, _target_cell()) if s != null else {"error": "没有选殖民船"}
 		Action.STARSHIP:
 			r = state.move_starship(me, _target_cell())
+		Action.SCAN:
+			r=state.active_scan(me,_direction())
+		Action.LANDING:
+			r=state.start_landing(me,s.id) if s!=null else {"error":"没有选运输船"}
 		Action.SETTLE:
 			r = state.settle_starship(me)
 		Action.GRAIN:
@@ -574,7 +577,7 @@ func _on_go() -> void:
 		Action.DOMAIN:
 			r = state.launch_black_domain(me, _target_cell())
 		Action.SINGULARITY:
-			r = state.launch_singularity(me)
+			r = state.launch_singularity(me,_target_cell())
 	main.panel.set_feedback("无法执行：" + r["error"] if r["error"] != "" else "")
 	main.refresh()
 
@@ -588,3 +591,12 @@ func cycle_action(direction: int) -> void:
 	_action = choices[posmod(choices.find(_action) + direction, choices.size())]
 	main.panel.set_feedback("")
 	main.refresh()
+
+
+func _price_text(me: Civ,a: int) -> String:
+	var m:=0.0
+	if a==Action.LANDING:
+		m=Construction.cost("landing")[1]
+	elif a==Action.DOMAIN:
+		m=Balance.DOMAIN_COST[1]
+	return "%sE / %sM"%[Widgets.number(_cost(me,a)),Widgets.number(m)]

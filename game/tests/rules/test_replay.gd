@@ -26,13 +26,18 @@ func _scripted_player_turn(s: GameState) -> void:
 		if s.research_error(me, id) == "":
 			s.research(me, id)
 			break
-	var probe = s.build(me, "probe")["ship"]
+	# 新建订单只返回工程；仅对已收到完工遥测、仍待命的单位发命令。
+	var probe := AI._docked(s, me, Ship.PROBE)
 	if probe != null:
 		s.dispatch(me, probe.id, Vector3(1, (s.turn % 5) - 2, 0.5), s.turn % 2 == 0)
+	else:
+		s.build(me, "probe")
 	if not me.known.is_empty():
-		var ship = s.build(me, "warship")["ship"]
+		var ship := AI._docked(s, me, Ship.WARSHIP)
 		if ship != null:
 			s.dispatch(me, ship.id, Vector3(me.known.keys()[0]) - ship.pos)
+		else:
+			s.build(me, "warship", GameState.NO_HIT, AI.warship_modules(me))
 
 
 ## 玩家照固定做法打 n 回合（中途让 AI 接管几回合再交还）。
@@ -57,6 +62,7 @@ func test_same_seed_same_game() -> void:
 	for s in [a, b]:
 		for i in 180:
 			s.end_turn()
+			trace_long(s,"determinism180")
 	check(a.checksums.size() == b.checksums.size() and a.checksums == b.checksums, "同一个种子的两局 AI 对局每回合都一样")
 	check(a.checksum() == b.checksum(), "最后的局面一样")
 
@@ -293,32 +299,53 @@ func test_snapshots_ignore_other_history() -> void:
 
 
 ## 规则：二向箔，二维、单向著和奇异点
-func test_snapshots_across_dimensions() -> void:
+func _near_foil_target(s: GameState) -> Vector3i:
+	var target:=GameState.ANY_TARGET
+	var distance:=INF
+	for cell in s.system_cells:
+		var d:=Vector3(cell-s.human().home).length_squared()
+		if d<distance and s.foil_target_error(s.human(),s.dimension==2,cell)=="":
+			target=cell
+			distance=d
+	return target
+
+
+func _recorded_dimensions() -> Dictionary:
 	var s := GameState.new_game(71, 1)
 	for civ in s.civs:
 		s.set_autoplay(civ, false)
-		s.dev_set(civ, "energy", 2000)
-		s.dev_set(civ, "reduced", true)
-		s.dev_set(civ, "line_reduced", true)
+		s.dev_set(civ, "energy", 10000)
+		s.dev_set(civ, "mineral", 10000)
 		s.dev_tech(civ, "dimension", true)
-	var target := Vector3i(4, 4, 4)
-	if s.human().owns(target):
-		target.x += 1
-	s.launch_foil(s.human(), target)
+		s.dev_set(civ, "dimension_ammo", 3)
+		check_eq(s.start_reduce(civ)["error"], "", "记录第一阶段付费准备")
+	for i in 6: s.end_turn()
+	check_eq(s.launch_foil(s.human(),_near_foil_target(s))["error"], "", "准备完成后向合法邻格正式发出载荷")
 	var flat_step := -1
 	for i in 100:
-		if s.all_flat():
-			break
+		if s.all_flat() or s.is_over(): break
 		s.end_turn()
-		if s.dimension == 2 and flat_step < 0:
-			flat_step = s.steps
-	s.launch_line_foil(s.human(), Vector3i(13, 13, s.flat_plane))
+		if s.dimension == 2: flat_step = s.steps
+	check(flat_step > 0 and not s.is_over(), "第一次展开完成，各锚点凭收到的准备自动迁维存续")
+	if flat_step < 0 or s.is_over(): return {"state":s,"flat_step":flat_step}
+	for civ in s.civs:
+		check_eq(s.start_reduce(civ)["error"], "", "独立冻结第二阶段名册")
+	for i in 6: s.end_turn()
+	check_eq(s.launch_line_foil(s.human(),_near_foil_target(s))["error"], "", "二维向合法邻格正式发出单向著")
 	for i in 200:
-		if s.all_linear():
-			break
+		if s.all_linear() or s.is_over(): break
 		s.end_turn()
+	return {"state":s,"flat_step":flat_step}
+
+
+## 规则：二向箔，二维、单向著和奇异点
+func test_snapshots_across_dimensions() -> void:
+	var fixture := _recorded_dimensions()
+	var s: GameState = fixture["state"]
+	var flat_step: int = fixture["flat_step"]
 	check(flat_step > 0 and s.dimension == 1, "对局从三维到二维再到一维")
 	check(_loose_objects(s, "s").is_empty(), "降维以后对象也只放在 StateCopy.LINKS 列出的变量里")
+	if flat_step < 1: return
 	var r := Replay.from_state(s)
 	var snaps := Snapshots.new()
 	r.play_to(r.last_step(), snaps)
@@ -361,28 +388,8 @@ func test_ai_writes_notes() -> void:
 
 ## 规则：二向箔，二维、单向著和奇异点
 func test_replay_across_dimension_epochs() -> void:
-	var s := GameState.new_game(71, 1)
-	for civ in s.civs:
-		s.set_autoplay(civ, false)
-		s.dev_set(civ, "energy", 2000)
-		s.dev_set(civ, "reduced", true)
-		s.dev_set(civ, "line_reduced", true)
-		s.dev_tech(civ, "dimension", true)
-	var target := Vector3i(4, 4, 4)
-	if s.human().owns(target):
-		target.x += 1
-	check(s.launch_foil(s.human(), target)["error"] == "", "通过正式行动触发可重放的展开")
-	for i in 100:
-		if s.all_flat():
-			break
-		s.end_turn()
-	check(s.all_flat() and not s.is_over(), "首次换坐标后仍是可玩的对局")
-	target = Vector3i(13, 13, s.flat_plane)
-	check(s.launch_line_foil(s.human(), target)["error"] == "", "二维通过正式行动再次展开")
-	for i in 200:
-		if s.all_linear():
-			break
-		s.end_turn()
+	var fixture := _recorded_dimensions()
+	var s: GameState = fixture["state"]
 	check(s.all_linear(), "两次维度展开均完成")
 	var replay := Replay.from_state(s)
 	var again := replay.play_to(s.steps)

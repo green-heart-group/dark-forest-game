@@ -88,6 +88,9 @@ func load_file(path: String) -> void:
 	var data = f.get_var() if f != null else null
 	if f != null:
 		f.close()
+	if data is Dictionary and data.get("replay") is Dictionary and data["replay"].get("version", 0) < Replay.VERSION:
+		main.overlay.show_toast("这是旧规则存档，请用原版本打开；文件未修改")
+		return
 	if not data is Dictionary or data.get("version") != VERSION or not data.get("checksum") is int \
 			or not data.get("collapse") is Array or not Replay.valid_data(data.get("replay")):
 		main.overlay.show_toast("无法读取：存档损坏或版本不兼容")

@@ -8,7 +8,7 @@ var results
 var root := ProjectSettings.globalize_path("res://").trim_suffix("/").get_base_dir()
 
 ## 规则编号，比如 T23、F3.5（前后不能紧挨着字母或数字，所以 E7F6 这样的名字不算）
-const RULE_ID := "(?<![A-Za-z0-9_])[A-Z]\\d+(?:\\.\\d+)?(?![A-Za-z0-9_])"
+const RULE_ID := "(?<![A-Za-z0-9_])(?!V0\\.)[A-Z]\\d+(?:\\.\\d+)?(?![A-Za-z0-9_])"
 
 
 func check(ok: bool, what: String) -> void:
@@ -18,6 +18,15 @@ func check(ok: bool, what: String) -> void:
 ## 比较两个值，不一样时失败信息里写出实际值和期望值。
 func check_eq(actual, expected, what: String) -> void:
 	results.check_eq(actual, expected, what)
+
+
+## 可选长测诊断；不改数值、操作、随机数或断言。默认静默。
+func trace_long(s: GameState, label: String) -> void:
+	if OS.get_environment("FOREST_TEST_PROGRESS")!="1" or s.steps%20!=0: return
+	print(JSON.stringify({"long_test":label,"step":s.steps,"clock":s.clock,"messages":s.messages.size(),
+		"ships":s.civs.reduce(func(n,c):return n+c.ships.size(),0),"deadlines":s.deadlines.size(),
+		"broadcasts":s.broadcasts.size(),"scans":s.scans.size(),"checksum":s.checksum(),"wall_msec":Time.get_ticks_msec()}))
+	FileAccess.open("user://diagnostic-"+label+".state",FileAccess.WRITE).store_buffer(StateCopy.pack(s))
 
 
 # ---------- 摆局面的小工具 ----------
@@ -42,6 +51,10 @@ func _two_civs(ai_home: Vector3i) -> GameState:
 		civ.energy = 100
 		civ.mineral = 100
 		s.start_turn(civ)
+	# 当前行动通过永久宿主ID发命令；基本夹具必须像正常开局一样先建立锚点。
+	s.ensure_cells()
+	for civ in s.civs:
+		Assets.ensure(s,civ)
 	return s
 
 
@@ -68,6 +81,9 @@ func _ship(s: GameState, civ: Civ, kind: String, pos: Vector3, dir := Vector3.ZE
 	var sh := Ship.make(kind, pos, s.next_id())
 	sh.docked = dir == Vector3.ZERO
 	sh.direction = dir.normalized()
+	if kind==Ship.GRAIN:
+		s.ensure_cells()
+		sh.origin_cell_id=s.cell_ids.get(sh.cell(),-1)
 	civ.ships.append(sh)
 	return sh
 
@@ -103,6 +119,8 @@ func _collapse_match() -> GameState:
 	var s := _two_civs(Vector3i(8, 8, 8))
 	for civ in s.civs:
 		civ.reduced = true
+		for asset in civ.assets:
+			asset["entity_dim"]=2 # 几何测试的已转换资产夹具，不代表走过准备流程。
 		civ.energy = 1000
 		_give(civ, ["dimension"])
 	return s

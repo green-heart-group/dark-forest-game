@@ -2,6 +2,7 @@ extends PanelContainer
 ## 独立的全屏科技树。列按等级与同级前置排列，连线只取 Tech.ALL.needs。
 ## 选节点看详情，再研究；锁定节点也能查看，条件和价格仍由规则提供。
 
+const Widgets := preload("res://view/widgets.gd")
 const NODE_SIZE := Vector2(176, 58)
 const COLUMN_STEP := 226.0
 const ROW_STEP := 68.0
@@ -109,12 +110,6 @@ func _build_graph() -> void:
 	for id in order:
 		var col: int = columns[id]
 		var row: int = rows.get(col, 0)
-		if id == "beam":
-			row = 2
-		elif id == "dimension":
-			row = 2
-		elif id == "domain":
-			row = 4
 		rows[col] = row + 1
 		max_rows = maxi(max_rows, row + 1)
 		var tile := Button.new()
@@ -155,7 +150,7 @@ func select_tech(id: String) -> void:
 
 
 func refresh(me: Civ) -> void:
-	_resources.text = "%d E   /   %d M     已有 · 可研究 · 未解锁     选节点查看；箭头只表示直接前置，等级另需开放。" % [me.energy, me.mineral]
+	_resources.text = "%s E   /   %s M     已有 · 研究中 · 可研究 · 未解锁     选节点查看；箭头只表示直接前置，等级另需开放。" % [Widgets.number(me.energy), Widgets.number(me.mineral)]
 	for i in _headings.size():
 		var tier := _heading_tiers[i]
 		_headings[i].text = "%s · %s" % [Tech.TIER_NAMES[tier], "已开放" if main.state.tier_open(me, tier) else "未开放"]
@@ -166,6 +161,8 @@ func refresh(me: Civ) -> void:
 		if reason == "":
 			reason = main.state.research_error(me, id)
 		var status := "已有" if has else ("可研究" if reason == "" else "未解锁")
+		if Knowledge.research(me).get("kind", "") == id:
+			status = "研究中"
 		if not has and reason != "" and main.locked_reason() == "" and main.state.research_block_error(me, id) == "":
 			status = "资源不足"
 		var cost := Tech.cost(id)
@@ -183,11 +180,11 @@ func refresh(me: Civ) -> void:
 	if reason == "":
 		reason = main.state.research_error(me, selected_id)
 	_research.disabled = reason != "" or me.has_tech(selected_id)
-	_research.text = "已有" if me.has_tech(selected_id) else "研究 · 不花行动点"
-	var status := "已经拥有" if me.has_tech(selected_id) else ("可以研究，立即生效" if reason == "" else reason)
+	_research.text = "已有" if me.has_tech(selected_id) else "研究 · 1 行动点"
+	var status := "已经拥有" if me.has_tech(selected_id) else ("可以研究，预付后进入队列" if reason == "" else reason)
 	_details.text = "%s　|　%s\n%s\n前置：%s。等级条件：%s。\n%s" % [Tech.title(selected_id), status,
 			main.panel._tech_desc(selected_id), "无" if needs.is_empty() else "、".join(needs), Tech.TIER_RULES[Tech.tier(selected_id)],
-			"II、III 级至少比上一级晚 %d 回合开放。" % Balance.TIER_GAP]
+			"正常研究需 %s 年，一次只能研究一项；远程命令和完成消息另需传播时间。产能门槛按三维产量扣除维护计算。" % Widgets.number(Tech.work(selected_id))]
 	_canvas.queue_redraw()
 
 

@@ -15,6 +15,10 @@ var to_line := false
 var speed := Balance.FOIL_SPEED
 ## 隐藏文明发的：只在目标展开，路上不停（二向箔本来就这样，只对单向著有用）
 var precise := false
+## V0.1 用永久载荷ID同步原绘图接口；position不再由旧准备倒计时重算。
+var id := -1
+var current_position := Vector3.ZERO
+var position_override := false
 
 
 func _init(p_origin: Vector3, p_target: Vector3i, p_prepare: int, p_to_line := false) -> void:
@@ -34,4 +38,6 @@ func total_distance() -> float:
 
 ## 现在的位置（浮点坐标，沿直线，不取整）。
 func position() -> Vector3:
+	if position_override:
+		return current_position
 	return origin + direction() * minf(traveled, total_distance())

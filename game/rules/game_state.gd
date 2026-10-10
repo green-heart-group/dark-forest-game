@@ -1,5 +1,12 @@
 class_name GameState
 extends RefCounted
+## 等同刻伤亡、工程和空间变换结算完毕后采集战场侦察截面。
+var pending_battle_surveys: Array[Dictionary] = []
+## 私有的传感器原始录像缓冲；仅实际收件者收到查询后才可转发。AI/UI不能读取。
+var battle_archive: Dictionary = {}
+## 私有事件号与各收件方本地战报号之间的映射，不进入玩家/AI历史。
+var battle_tokens: Dictionary = {}
+var survey_sequence := -1
 
 ## 仅供模拟统计；不参与规则状态或回放校验。
 signal civilization_eliminated(civ: Civ, cause: String)
@@ -16,18 +23,14 @@ const ANY_TARGET := Vector3i(-2, -2, -2)
 ## 情报传不回母星系时（路上光速几乎为 0）的「到达回合」
 const NEVER := 1 << 30
 ## 会造在星系里、下一回合建好的设施
-const FACILITIES := ["miner", "dyson", "bunker", "broadcaster", "warning"]
+const FACILITIES := Construction.FACILITIES
 ## 调试时 dev_set 不能直接改的文明属性：直接改会让别处对不上（比如灭亡了却还占着星系）
 const DEV_SET_LOCKED := ["is_ai", "alive", "name", "home"]
 ## 造好后停在星系里、要另外派出的单位
-const UNITS := ["probe", "warship", "colony", "starship", "devourer", "sophon"]
-const BUILD_NAMES := {"miner": "采矿船", "dyson": "戴森球", "bunker": "掩体", "broadcaster": "恒星广播器",
-		"warning": "预警系统", "antimatter": "反物质", "grain": "光粒", "probe": "探测器", "warship": "恒星级战舰",
-		"colony": "殖民船", "starship": "星舰", "devourer": "吞噬者", "sophon": "智子"}
+const UNITS := Construction.UNITS
+const BUILD_NAMES := Construction.NAMES
 ## 每种建造要哪项科技
-const BUILD_TECH := {"miner": "miner", "dyson": "dyson", "bunker": "bunker", "broadcaster": "broadcaster",
-		"warning": "warning", "antimatter": "antimatter", "grain": "grain", "probe": "probe", "warship": "warship",
-		"colony": "colony", "starship": "starship", "devourer": "devourer", "sophon": "sophon"}
+const BUILD_TECH := Construction.TECH
 ## 智子看到被锁的文明做了什么时，日志里怎么写（只写给玩家看）
 const SOPHON_REPORTS := {"dispatch": "派出了一个单位", "turn_ship": "让舰船转向", "send_colony": "派殖民船去 %s",
 		"move_starship": "让星舰飞向 %s", "settle_starship": "用星舰建立了星系", "launch_grain": "发射了光粒",
@@ -45,6 +48,23 @@ var last_mapping := {}
 var map: StarMap
 var civs: Array[Civ] = []
 var turn := 1
+var clock := 0.0
+## 格子ID不随729格的展开映射改变；局部空间维度与全图维度独立。
+var cell_ids: Dictionary[Vector3i, int] = {}
+var cell_dims: Dictionary[int, int] = {}
+var projectiles: Array[Dictionary] = []
+var payloads: Array[Dictionary] = []
+var events: Array[Dictionary] = []
+var applied_hits: Dictionary[int, bool] = {}
+var messages: Array[Dictionary] = []
+var scans: Array[Dictionary] = []
+var neutral_assets: Array[Dictionary] = []
+var sensor_stamps: Dictionary = {}
+var next_sensor_time := 0.0
+var domain_cells: Dictionary[int, Dictionary] = {}
+var zero_zones: Array[Dictionary] = []
+var remap_until := -1.0
+var deadlines: Array[Dictionary] = []
 var log_lines: Array[String] = []
 ## 结束时为「你」「AI」「无」（都灭亡了）或「平局」；观战模式下是赢家的名字。进行中为空。
 var winner := ""
@@ -139,6 +159,8 @@ static func new_game(seed_value: int, ai_count: int = Balance.AI_COUNT, spectato
 			if not candidates.has(c):
 				candidates.append(c)
 	var homes := s._pick_homes(candidates, ai_count + 1)
+	for home in homes:
+		s.map.rocky[home] = maxi(1, s.map.rocky.get(home, 0))
 
 	s.civs.append(Civ.new("你", false, homes[0]))
 	for i in ai_count:
@@ -154,9 +176,13 @@ static func new_game(seed_value: int, ai_count: int = Balance.AI_COUNT, spectato
 		if not s.map.contains(c) and not s.hidden.has(c):
 			s.hidden.append(c)
 	for civ in s.civs:
-		s._observe(civ)
+		Assets.ensure(s, civ)
+		civ.intel[civ.home] = s.snapshot(civ.home)
 		s.start_turn(civ)
 	s.human().is_ai = spectator  # 开局这一眼照玩家算，和以前的对局记录一样
+	s.ensure_cells()
+	Signals.sample(s, true)
+	Signals.receive_due(s)
 	return s
 
 
@@ -315,12 +341,31 @@ func _dev_record(civ_index: int, name: String, args: Array) -> void:
 
 ## 当前局面的校验值：两次计算出的局面一样，校验值就一样。只取主要的数据，够发现回放走偏就行。
 func checksum() -> int:
-	var parts: Array = [turn, winner, steps, _next_id, flattened.size(), linearized.size(), dimension, space_epoch, map.extent, light, rng.state]
+	var parts: Array = [turn, clock, winner, steps, _next_id, flattened.size(), linearized.size(), dimension, space_epoch, map.extent, light, rng.state, cell_ids, cell_dims]
+	parts.append([map.stars, map.rocky, map.gas, map.habitable, messages, projectiles, payloads,
+			domain_cells, black_domains, deadlines, sensor_stamps, next_sensor_time, zero_zones, remap_until, applied_hits])
+	parts.append([scans,neutral_assets,hidden_listen,foil_zones,line_zones,pending_battle_surveys,battle_archive,battle_tokens,survey_sequence])
+	for wave in broadcasts:
+		parts.append([wave["id"],wave["from"],wave["target"],civs.find(wave["sender"]),wave["samples"],wave["visited"],wave.get("propagation",{})])
 	for civ in civs:
 		parts.append([civ.alive, civ.energy, civ.mineral, civ.actions_left, civ.colonies, civ.techs.keys(),
 				civ.known.keys(), civ.antimatter, civ.foils.size(), civ.tier1_turn, civ.tier2_turn, civ.tier3_turn])
+		parts.append([civ.research_project, civ.pending, civ.miners, civ.advanced_miners, civ.dysons,
+				civ.warnings, civ.colonial, civ.dormant_colonies, civ.dormant_dysons, civ.maintenance_priority,
+				civ.stopped_packages, civ.emergency_turn, civ.starship_ever_built, civ.dimension_ammo,
+				civ.discovered, civ.contacted, civ.conquered,civ.pending_permissions,
+				civ.battle_reports,civ.battle_surveys,civ.battle_queries,civ.conquest_confirmation])
+		parts.append([civ.assets, civ.flow_remainder, civ.ledger, civ.conversion_receipts, civ.conversions,
+				civ.telemetry, civ.intel, civ.sightings, civ.wake_reports, civ.domain_ready_at, civ.scan_ready_at])
+		parts.append([civ.command_pending,civ.command_results,civ.ai_receipt_cursor,civ.coverage,civ.local_contacts_by_source,civ.order_reports,civ.payload_reports,civ.site_reports,civ.front_reports,civ.broadcast_reports,civ.original_home,civ.original_anchor_id])
 		for sh in civ.ships:
 			parts.append([sh.id, sh.kind, sh.pos, sh.docked, sh.direction, sh.damage, sh.lock])
+			parts.append([sh.modules, sh.cost, sh.dormant, sh.entity_dim, sh.conversion_receipts,
+					sh.salvage_claimed, sh.work_locked,sh.carried_rocky])
+			parts.append([sh.speed, sh.target, sh.has_target, sh.pause_until, sh.last_hit, sh.next_repair,
+					sh.fired_turn, sh.contact_ids, sh.ready, sh.command, sh.local_contacts, sh.weapon_policy,
+					sh.target_id, sh.channel, sh.ammo_reserved, sh.suppression, sh.origin_cell_id,
+					sh.last_devour_turn, sh.leg_origin, sh.leg_distance, sh.distance_flown])
 	return hash(parts)
 
 
@@ -328,7 +373,6 @@ func checksum() -> int:
 ## 每结束一回合记一个校验值，回放时用来检查重算的结果和原来一样。
 func end_turn() -> void:
 	if is_over():
-		advance_collapse()
 		return
 	var t := Time.get_ticks_usec()
 	_end_turn()
@@ -339,76 +383,30 @@ func end_turn() -> void:
 
 
 func _end_turn() -> void:
-	var t := Time.get_ticks_usec()
+	ensure_cells()
 	for civ in civs:
-		if civ.is_ai and civ.alive and not is_over():
+		Assets.ensure(self, civ)
+	# 决策只读取边界前已经到达的信息。各方提交后统一推进，不在AI之间移动或采样。
+	Signals.receive_due(self)
+	var started := Time.get_ticks_usec()
+	for civ in civs:
+		if civ.is_ai and civ.alive:
 			AI.take_turn(self, civ)
-	t = _lap("AI 行动", t)
-	if is_over():
-		_clean_dead()
-		return
-	_move_all_ships()
-	t = _lap("移动", t)
-	_combat()
-	t = _lap("交战", t)
-	# 先扩散已有的压平区域，再让二向箔前进；这一回合新展开的，下一回合才扩散
-	_spread_flat()
+	started = _lap("AI 行动", started)
+	WorldTime.advance(self, 1.0)
+	_lap("统一连续事件", started)
 	for civ in civs:
-		if civ.alive and not is_over():
-			civ.foils = _advance_foil_list(civ.foils, civ)
-	hidden_foils = _advance_foil_list(hidden_foils, null)
-	t = _lap("二向箔和压平", t)
-	_tick_domains()
-	for civ in civs:
+		_expire_intel(civ)
 		if civ.alive:
-			_advance_domains(civ)
-	_check_hiding()
-	t = _lap("黑域和光速", t)
-	_spread_broadcasts()
-	_hidden_strikes()
-	t = _lap("广播和隐藏文明", t)
-	_clean_dead()
-	if is_over():
-		return
-	_begin_view_cache()
-	for civ in civs:
-		if civ.alive:
-			_observe(civ)
-			t = _lap("视野", t)
-			_deliver_reports(civ)
-			t = _lap("情报传回", t)
-			_warn(civ)
-			t = _lap("预警", t)
-		else:
-			_expire_intel(civ)
-	_view_cache = {}
-	for civ in civs:
-		if not civ.alive:
-			continue
-		_finish_pending(civ)
-		_advance_reduce(civ)
-		_advance_singularity(civ)
-		var income := energy_income(civ)
-		civ.energy += income
-		civ.mineral += mineral_income(civ)
-		if income >= Balance.TIER3_ENERGY:
-			_reach_tier(civ, 3, "能量收入达到 %dE" % Balance.TIER3_ENERGY)
-		if civ.is_ai and rng.randf() < Balance.TECH_BURST_CHANCE:
-			_tech_burst(civ)
-		start_turn(civ)
-	if all_linear():
-		line_turns += 1
-		_check_winner()
-	_lap("收入和其他", t)
-	turn += 1
-	add_log("第 %d 回合开始" % turn)
-	var me := human()
-	for tier in [1, 2, 3]:
-		if me != null and me.alive and me.tier_turn(tier) == turn:
-			add_log("可以升级 %s科技" % Tech.TIER_NAMES[tier])
+			_refresh_permissions(civ)
+			if not is_over() and civ.is_ai and Balance.TECH_BURST_CHANCE>0.0 and rng.randf()<Balance.TECH_BURST_CHANCE:
+				_tech_burst(civ)
+			start_turn(civ)
+	if not is_over():
+		turn += 1
+		add_log("第 %d 回合开始" % turn)
 
 
-## 测速：把从 since 到现在的时间记到 what 上，返回现在的时间。
 func _lap(what: String, since: int) -> int:
 	var now := Time.get_ticks_usec()
 	if profiling:
@@ -426,15 +424,12 @@ func tier_open(civ: Civ, tier: int) -> bool:
 
 ## 达到第 tier 级的条件（E8）。三级按顺序来：上一级已经开放时才算，被智子锁着时不算（D5）。
 ## 条件是回合结束时算的，最早下一回合开放；II、III 级还要比上一级晚 TIER_GAP 回合，中间先发展一段时间。
-func _reach_tier(civ: Civ, tier: int, what: String) -> void:
-	if civ.tier_turn(tier) >= 0 or not tier_open(civ, tier - 1) or sophon_tier_left(civ) > 0:
-		return
-	var at := turn + 1
-	if tier >= 2:
-		at = maxi(at, civ.tier_turn(tier - 1) + Balance.TIER_GAP)
-	civ.set_tier_turn(tier, at)
-	if not civ.is_ai:
-		add_log("%s：%s第 %d 回合开放" % [what, Tech.TIER_NAMES[tier], at])
+func _reach_tier(civ: Civ, tier: int, _what: String) -> void:
+	if tier == 1:
+		civ.discovered = true
+	elif tier == 2:
+		civ.contacted = true
+	_refresh_permissions(civ)
 
 
 ## 发现别人（看到别人的星系或舰船、听到广播）：I 级的条件。
@@ -449,7 +444,7 @@ func research_error(civ: Civ, id: String) -> String:
 	if error != "":
 		return error
 	var cost := Tech.cost(id)
-	return _money_error(civ, cost[0], cost[1])
+	return _pay_error(civ, cost[0], cost[1])
 
 
 ## 前置科技都有了没有。
@@ -469,18 +464,18 @@ func research_block_error(civ: Civ, id: String) -> String:
 		return "没有这项科技"
 	if civ.has_tech(id):
 		return "已经有了"
-	var tier := Tech.tier(id)
-	if not tier_open(civ, tier):
-		if civ.tier_turn(tier) >= 0:
-			return "%s第 %d 回合开放" % [Tech.TIER_NAMES[tier], civ.tier_turn(tier)]
-		return "%s要%s才能升级" % [Tech.TIER_NAMES[tier], Tech.TIER_RULES[tier]]
+	if not Knowledge.research(civ).is_empty():
+		return "已有研究进行中"
+	if not tier_open(civ, Tech.tier(id)):
+		return "%s尚未开放：%s" % [Tech.TIER_NAMES[Tech.tier(id)], Tech.TIER_RULES[Tech.tier(id)]]
 	for need in Tech.ALL[id]["needs"]:
 		if not civ.has_tech(need):
 			return "要先有「%s」" % Tech.ALL[need]["name"]
-	if not civ.colonies.is_empty() and in_black_domain(civ.home):
-		return "母星系躲在黑域里，不能升级科技"
-	if sophon_research_left(civ) > 0:
-		return "被智子锁住，还要 %d 回合才能升级科技" % sophon_research_left(civ)
+	if Knowledge.origins(self,civ).is_empty():
+		return "没有可进行研究的星系或星舰"
+	if Knowledge.site(self,civ,civ.home).get("dormant",false) or (Knowledge.colonies(self,civ).is_empty() and reported_starship(civ)!=null and reported_starship(civ).dormant):
+		if id not in ["miner", "fission", "probe", "interstellar_travel", "colony"]:
+			return "休眠救援槽只支持基础生产、探测、运输与殖民研究"
 	return ""
 
 
@@ -490,116 +485,134 @@ func research(civ: Civ, id: String) -> Dictionary:
 	if error != "":
 		return {"error": error}
 	var cost := Tech.cost(id)
-	civ.energy -= cost[0]
-	civ.mineral -= cost[1]
-	civ.techs[id] = true
+	Economy.charge(self,civ,cost,"project")
+	civ.actions_left -= 1
+	civ.research_project = WorkOrder.create(next_id(), id, civ.home, cost, Tech.work(id), "research")
+	if Knowledge.colonies(self,civ).is_empty() and reported_starship(civ)!=null:
+		civ.research_project["host_ship"] = reported_starship(civ).id
+	OrderControl.submit(self,civ,civ.research_project)
 	if not civ.is_ai:
-		add_log("升级科技：%s" % Tech.title(id))
+		add_log("开始研究：%s，工作量 %.1f" % [Tech.title(id), Tech.work(id)])
 	_record(civ, "research", [id])
-	return {"error": ""}
+	return {"error": "", "order": civ.research_project["id"]}
 
 
 ## AI 的技术爆炸：不花资源直接得到一项能升的科技（D6）。
 func _tech_burst(civ: Civ) -> void:
-	if sophon_research_left(civ) > 0:
+	if Balance.TECH_BURST_CHANCE<=0.0:
 		return
 	var options: Array[String] = []
 	for id in Tech.ALL:
-		if not civ.has_tech(id) and tier_open(civ, Tech.tier(id)) and _needs_met(civ, id):
+		if not civ.has_tech(id) and id!=Knowledge.research(civ).get("kind","") and tier_open(civ, Tech.tier(id)) and _needs_met(civ, id):
 			options.append(id)
+	var obtained:=""
 	if not options.is_empty():
-		civ.techs[options[rng.randi_range(0, options.size() - 1)]] = true
+		obtained=options[rng.randi_range(0, options.size() - 1)]
+		civ.techs[obtained] = true
+	events.append({"id":next_id(),"kind":"tech_burst","t":clock,"owner":civs.find(civ),"tech":obtained,"granted":obtained!=""})
+	if civ==human() and obtained!="":
+		add_log("技术爆炸：免费获得%s"%Tech.title(obtained))
 
 
 ## 射电望远镜（"telescope"）或预警范围（"warning"）升一级要多少能量。
 static func upgrade_cost(kind: String) -> int:
-	return Balance.COST_TELESCOPE if kind == "telescope" else Balance.COST_WARNING_UPGRADE
+	return Balance.TELESCOPE_UPGRADE_COST[0][0] if kind == "telescope" else Balance.WARNING_UPGRADE_COST[0]
+
+
+func upgrade_price(civ: Civ, kind: String, at: Vector3i = AT_HOME) -> Array:
+	if at == AT_HOME:
+		at = civ.home
+	if kind == "telescope":
+		return Balance.TELESCOPE_UPGRADE_COST[mini(civ.telescope, Balance.TELESCOPE_MAX - 1)].duplicate()
+	return Balance.WARNING_UPGRADE_COST.duplicate()
 
 
 ## 为什么不能升级射电望远镜或预警范围（能升级时为空）。
-func upgrade_error(civ: Civ, kind: String) -> String:
+func upgrade_error(civ: Civ, kind: String, at: Vector3i = AT_HOME) -> String:
+	if at == AT_HOME:
+		at = civ.home
 	var error := _common_error(civ)
 	if error != "":
 		return error
 	if kind == "telescope":
 		if civ.telescope >= Balance.TELESCOPE_MAX:
 			return "射电望远镜已经升满"
+		if OrderControl.visible(self,civ).any(func(project):return project["kind"]=="telescope"):
+			return "已有射电望远镜升级待完成或待回报"
 	elif kind == "warning":
-		if not civ.has_warning:
-			return "要先建预警系统"
-		if civ.warning_level >= Balance.WARNING_MAX:
+		if Knowledge.site(self,civ,at).get("warning",-1)<0:
+			return "要先在这个星系建预警系统"
+		if Knowledge.site(self,civ,at).get("warning",-1) >= Balance.WARNING_MAX:
 			return "预警范围已经升满"
+		if OrderControl.visible(self,civ).any(func(project):return project["category"]=="upgrade" and project["kind"]=="warning" and project["at"]==at):
+			return "这个星系已有预警升级施工或正在等待回报"
 	else:
 		return "未知的升级"
-	var cost := upgrade_cost(kind)
-	return "能量不足（还差 %d）" % (cost - civ.energy) if civ.energy < cost else ""
+	var host := construction_host(civ, at)
+	if host == -2 or construction_busy(civ, at, host):
+		return "升级需要空闲的己方建造队列"
+	if Knowledge.site(self,civ,at).get("dormant",false) or (host >= 0 and Signals.reported_ship(self,civ,host).dormant):
+		return "休眠锚点不能进行普通升级"
+	var cost := upgrade_price(civ, kind, at)
+	return _pay_error(civ, cost[0], cost[1])
 
 
 ## 射电望远镜（"telescope"）或预警范围（"warning"）升一级：花能量，不花行动点，马上生效。
-func upgrade(civ: Civ, kind: String) -> Dictionary:
-	var error := upgrade_error(civ, kind)
+func upgrade(civ: Civ, kind: String, at: Vector3i = AT_HOME) -> Dictionary:
+	if at == AT_HOME:
+		at = civ.home
+	var error := upgrade_error(civ, kind, at)
 	if error != "":
 		return {"error": error}
-	civ.energy -= upgrade_cost(kind)
-	if kind == "telescope":
-		civ.telescope += 1
-	else:
-		civ.warning_level += 1
+	var cost := upgrade_price(civ, kind, at)
+	var work: float = Balance.TELESCOPE_UPGRADE_WORK[civ.telescope] if kind == "telescope" else Balance.WARNING_UPGRADE_WORK
+	var project := WorkOrder.create(next_id(), kind, at, cost, work, "upgrade")
+	project["host_ship"] = construction_host(civ, at)
+	Economy.charge(self,civ,cost,"project")
+	civ.actions_left -= 1
+	civ.pending.append(project)
+	OrderControl.submit(self,civ,project)
 	if not civ.is_ai:
-		add_log("升级%s，现在第 %d 级" % ["射电望远镜" if kind == "telescope" else "预警范围",
-				civ.telescope if kind == "telescope" else civ.warning_level])
-	_record(civ, "upgrade", [kind])
-	return {"error": ""}
+		add_log("开始升级%s，工作量 %.1f" % ["射电望远镜" if kind == "telescope" else "预警范围", work])
+	_record(civ, "upgrade", [kind, at])
+	return {"error": "", "order": project["id"]}
 
 
 # ---------- 建造 ----------
 
 ## 建造的价格 [能量, 矿石]（含曲率引擎、引力波广播器多花的）。
-func build_cost(civ: Civ, kind: String) -> Array:
-	var cost: Array = {"miner": Balance.COST_MINER, "dyson": Balance.COST_DYSON, "bunker": Balance.COST_BUNKER,
-			"broadcaster": Balance.COST_BROADCASTER, "warning": Balance.COST_WARNING,
-			"antimatter": Balance.COST_ANTIMATTER, "grain": Balance.COST_GRAIN, "probe": Balance.COST_PROBE,
-			"warship": Balance.COST_WARSHIP, "colony": Balance.COST_COLONY, "starship": Balance.COST_STARSHIP,
-			"devourer": Balance.COST_DEVOURER, "sophon": Balance.COST_SOPHON}[kind].duplicate()
-	if kind == "warship" and civ.has_tech("gravity"):
-		cost[0] += Balance.COST_WARSHIP_GRAVITY
-	if kind == "warship":
-		for w in warship_weapons(civ):
-			var extra := weapon_extra(w)
-			cost[0] += extra[0]
-			cost[1] += extra[1]
-	if UNITS.has(kind) and civ.has_tech("warp"):
-		cost[0] += Balance.COST_WARP_EXTRA
+func build_cost(_civ: Civ, kind: String, modules: Array = []) -> Array:
+	var cost := Construction.cost(kind)
+	for module in modules:
+		var extra: Array = Balance.MODULE_COST.get(module, [0, 0])
+		cost[0] += extra[0]
+		cost[1] += extra[1]
 	return cost
 
 
 ## 现在造的战舰会带哪些武器：升级过的都带上（T23）。
-static func warship_weapons(civ: Civ) -> Array[String]:
-	var result: Array[String] = []
-	for w in Tech.WEAPONS:
-		if civ.has_tech(w):
-			result.append(w)
-	return result
+static func warship_weapons(_civ: Civ) -> Array[String]:
+	# 裸舰是始终保留的型号；武器由建造/改装订单的选装清单决定。
+	return []
 
 
 ## 带一种武器，造战舰多花的 [能量, 矿石]。
 static func weapon_extra(w: String) -> Array:
-	return {"beam": Balance.COST_BEAM_EXTRA, "torpedo": Balance.COST_TORPEDO_EXTRA,
-			"hbomb": Balance.COST_HBOMB_EXTRA}[w]
+	return Balance.MODULE_COST[w]
 
 
 ## 一种武器开一次火花的 [能量, 矿石]。
 static func weapon_shot(w: String) -> Array:
-	return {"beam": Balance.BEAM_SHOT, "torpedo": Balance.TORPEDO_SHOT, "hbomb": Balance.HBOMB_SHOT}[w]
+	return Balance.WEAPON_DATA[w]["cost"]
 
 
 ## 一种武器的射程（格）。
 static func weapon_range(w: String) -> float:
-	return {"beam": Balance.BEAM_RANGE, "torpedo": Balance.TORPEDO_RANGE, "hbomb": Balance.HBOMB_RANGE}[w]
+	return Balance.WEAPON_DATA[w]["range"]
 
 
 ## 为什么不能在 at 建这个（能建时为空）。
-func build_error(civ: Civ, kind: String, at: Vector3i) -> String:
+func build_error(civ: Civ, kind: String, at: Vector3i, modules: Array = []) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
@@ -607,119 +620,131 @@ func build_error(civ: Civ, kind: String, at: Vector3i) -> String:
 		return "不能建这个"
 	if not civ.has_tech(BUILD_TECH[kind]):
 		return "要先升级科技「%s」" % Tech.ALL[BUILD_TECH[kind]]["name"]
-	if civ.reduce_left > 0:
-		return "降维期间不能建造"
-	if not civ.owns(at):
-		return "只能建在自己的星系"
-	match kind:
-		"miner":
-			if civ.miners.get(at, 0) + civ.pending_count("miner", at) >= Balance.MAX_MINERS:
-				return "这个星系的采矿船已经有 %d 艘" % Balance.MAX_MINERS
-		"dyson":
-			if map.star_at(at) == StarMap.Star.NONE:
-				return "这个星系没有恒星"
-			if civ.dyson_count() + civ.pending_count("dyson") >= civ.star_total(map):
-				return "戴森球已经和恒星一样多"
-		"bunker":
-			if map.gas.get(at, 0) == 0:
-				return "这个星系没有类木行星"
-			if civ.bunkers.has(at) or civ.pending_count("bunker", at) > 0:
-				return "这个星系已经有掩体"
-		"broadcaster":
-			if civ.broadcasters.has(at) or civ.pending_count("broadcaster", at) > 0:
-				return "这个星系已经有恒星广播器"
-		"warning":
-			if civ.has_warning or civ.pending_count("warning") > 0:
-				return "已经有预警系统"
-		"antimatter":
-			if civ.antimatter >= Balance.MAX_ANTIMATTER:
-				return "反物质已经存满"
-		"grain":
-			if civ.grains.has(at):
-				return "这个星系已经存着一颗光粒"
-		"warship":
-			if civ.count(Ship.WARSHIP) >= Balance.MAX_WARSHIPS:
-				return "战舰最多 %d 艘" % Balance.MAX_WARSHIPS
-		"colony":
-			if civ.count(Ship.COLONY) >= Balance.MAX_COLONY_SHIPS:
-				return "殖民船最多 %d 艘" % Balance.MAX_COLONY_SHIPS
-		"starship":
-			if civ.count(Ship.STARSHIP) >= Balance.MAX_STARSHIPS:
-				return "星舰最多 %d 艘" % Balance.MAX_STARSHIPS
-		"devourer":
-			if civ.count(Ship.DEVOURER) >= Balance.MAX_DEVOURERS:
-				return "吞噬者最多 %d 个" % Balance.MAX_DEVOURERS
-		"sophon":
-			if civ.count(Ship.SOPHON) >= Balance.MAX_SOPHONS:
-				return "智子最多 %d 个" % Balance.MAX_SOPHONS
-	var cost := build_cost(civ, kind)
+	if kind == "landing":
+		return "运输船抵达后从行动页建立殖民地"
+	var host := construction_host(civ, at)
+	var known:=Knowledge.site(self,civ,at)
+	var info:=Knowledge.snapshot(self,civ,at)
+	if host == -2:
+		return "先选择自己的星系或星舰作为建造地点"
+	if construction_busy(civ, at, host):
+		return "这里的 %d 个建造槽已占满，已有施工或正在等待回报；收到完工或取消回报后释放对应槽位" % construction_capacity(civ,at,host)
+	if host >= 0 and FACILITIES.has(kind):
+		return "普通星舰上不能建造天体设施"
+	if known.get("dormant",false) or (host >= 0 and Signals.reported_ship(self,civ,host).dormant):
+		if kind not in ["probe", "colony"]:
+			return "休眠救援队列只支持基础探测器或运输船"
+	if kind in ["miner", "advanced_miner"]:
+		if info.get("rocky",0) <= 0:
+			return "根据已收到的观测，这个星系没有可开采的类地行星"
+		var count: int = known.get("miners",0) + known.get("advanced_miners",0) + Knowledge.pending(civ,"miner", at) + Knowledge.pending(civ,"advanced_miner", at)
+		var limit: int = Balance.MAX_MINERS if civ.has_tech("mining_advanced") else Balance.BASE_MINER_LIMIT
+		if count >= limit:
+			return "这个星系的矿船已达到 %d 艘" % limit
+	if kind == "dyson" and known.get("dysons",0) + Knowledge.pending(civ,kind, at) >= StarMap.star_count(info.get("stars",StarMap.Star.NONE)):
+		return "每颗本地恒星最多一座戴森球"
+	if kind == "bunker" and (info.get("gas",0) == 0 or known.get("bunker",false) or Knowledge.pending(civ,kind,at)>0):
+		return "需要有类木行星，且尚无掩体或掩体工程的星系"
+	if kind == "broadcaster" and (known.get("broadcaster",false) or info.get("stars",StarMap.Star.NONE) == StarMap.Star.NONE or Knowledge.pending(civ,kind,at)>0):
+		return "需要有恒星，且尚无广播器或广播器工程的星系"
+	if kind == "warning" and (known.get("warning",-1)>=0 or Knowledge.pending(civ,kind,at)>0):
+		return "这个星系已有预警系统或预警建造工程"
+	if kind == "antimatter" and civ.antimatter + Knowledge.pending(civ,kind) >= Balance.MAX_ANTIMATTER:
+		return "反物质炸弹已经存满"
+	if kind == "grain" and (known.get("grain",false) or Knowledge.pending(civ,kind, at) > 0):
+		return "这个星系已经有光粒或在制光粒"
+	if kind == "warship" and Knowledge.count(self,civ,Ship.WARSHIP) + Knowledge.pending(civ,kind) >= (3 if civ.has_tech("shield") else 2):
+		return "战舰数量已达当前科技上限"
+	if kind == "starship" and (civ.starship_ever_built or reported_starship(civ)!=null or Knowledge.pending(civ,kind) > 0):
+		return "整局最多建造一艘星舰"
+	if kind == "wandering_earth" and (at != civ.home or reported_starship(civ)!=null):
+		return "需在母星改造，且不能已有存活星舰"
+	if kind == "wandering_earth":
+		var earth_error := EarthTransform.known_error(self,civ,EarthTransform.known_options(self,civ),1)
+		if earth_error != "":
+			return earth_error
+	var module_error := _module_error(civ, kind, modules)
+	if module_error != "":
+		return module_error
+	var cost := build_cost(civ, kind, modules)
 	return _pay_error(civ, cost[0], cost[1])
 
 
 ## 在自己的星系 at（默认母星系）建造，花 1 行动点。
-## 设施（采矿船、戴森球、掩体、恒星广播器、预警系统）下一回合建好；
-## 反物质、光粒马上存好；单位马上造好，停在星系里，等「派出」。
-## 返回 {"error": 出错原因，成功时为空, "ship": 造好的单位（只有单位才有）}。
-func build(civ: Civ, kind: String, at: Vector3i = AT_HOME) -> Dictionary:
+## 全额托管资源，命令抵达后按工作量建造；完成信息经有限光速回传。
+## 成功返回订单ID；单位ID由完成回报提供，前端不能读取未回传的实际成品。
+func build(civ: Civ, kind: String, at: Vector3i = AT_HOME, modules: Array = []) -> Dictionary:
 	if at == AT_HOME:
 		at = civ.home
-	var error := build_error(civ, kind, at)
+	var result := _submit_build(civ,kind,at,modules)
+	if result["error"] == "":
+		_record(civ, "build", [kind, at, modules.duplicate()])
+	return result
+
+
+func _submit_build(civ: Civ, kind: String, at: Vector3i, modules: Array) -> Dictionary:
+	if at == AT_HOME:
+		at = civ.home
+	var error := build_error(civ, kind, at, modules)
 	if error != "":
 		return {"error": error, "ship": null}
-	var cost := build_cost(civ, kind)
-	civ.energy -= cost[0]
-	civ.mineral -= cost[1]
+	var cost := build_cost(civ, kind, modules)
+	var work := Construction.work(kind)
+	for module in modules:
+		work += Balance.MODULE_WORK[module]
+	var project := WorkOrder.create(next_id(), kind, at, cost, work)
+	project["host_ship"] = construction_host(civ, at)
+	project["modules"] = modules.duplicate()
+	if kind == "wandering_earth":
+		project["earth_roster"] = EarthTransform.known_options(self,civ)
+		project["earth_rocky"] = 1
+	Economy.charge(self,civ,cost,"project")
 	civ.actions_left -= 1
-	var ship: Ship = null
-	if FACILITIES.has(kind):
-		civ.pending.append({"kind": kind, "at": at})
-		if not civ.is_ai:
-			add_log("开始在 %s 建%s，下一回合建好" % [at, BUILD_NAMES[kind]])
-	elif kind == "antimatter":
-		civ.antimatter += 1
-		if not civ.is_ai:
-			add_log("造好 1 份反物质")
-	elif kind == "grain":
-		civ.grains[at] = true
-		if not civ.is_ai:
-			add_log("在 %s 造好 1 颗光粒" % at)
-	else:
-		ship = Ship.make(kind, Vector3(at), next_id())
-		if kind == Ship.PROBE and civ.has_tech("interstellar_probe"):
-			ship.interstellar = true
-			ship.max_speed = Balance.IPROBE_MOVE[0]
-			ship.accel = Balance.IPROBE_MOVE[1]
-		ship.gravity = kind == Ship.WARSHIP and civ.has_tech("gravity")
-		if kind == Ship.WARSHIP:
-			ship.weapons = warship_weapons(civ)
-		ship.warp = civ.has_tech("warp")
-		ship.cost = cost
-		civ.ships.append(ship)
-		if not civ.is_ai:
-			add_log("在 %s 造好%s，等待派出" % [at, ship.label()])
-		if kind == Ship.SOPHON:
-			_free_from_sophons(civ)
-	_record(civ, "build", [kind, at])
-	return {"error": "", "ship": ship}
+	civ.pending.append(project)
+	OrderControl.submit(self,civ,project)
+	if not civ.is_ai:
+		add_log("开始在 %s 建造%s，工作量 %.1f" % [at, BUILD_NAMES[kind], work])
+	return {"error": "", "ship": null, "order": project["id"]}
 
 
-func _finish_pending(civ: Civ) -> void:
-	for p in civ.pending:
-		var at: Vector3i = p["at"]
-		# 预警系统是整个文明的，下单的星系丢了也照样建好（_lose_system 特意留下了它）
-		if p["kind"] == "warning":
-			civ.has_warning = true
+func _finish_pending(civ: Civ, duration := 1.0, messages_due := true) -> void:
+	var changed:=false
+	if not civ.research_project.is_empty():
+		var research := civ.research_project
+		if not research.get("command_ready",true):
+			pass
+		elif not project_host_alive(civ, research):
+			OrderControl.discard(self,civ,research,"destroyed")
+			changed=true
+		elif WorkOrder.advance(research, project_work_rate(civ, research) * duration):
+			OrderControl.report(self,civ,research,"completed")
+			civ.research_project = {}
+			changed=true
+	var remaining: Array[Dictionary] = []
+	for project in civ.pending.duplicate():
+		if not project.get("command_ready",true):
+			remaining.append(project)
 			continue
-		if not civ.owns(at):
+		if not project_host_alive(civ, project):
+			OrderControl.discard(self,civ,project,"destroyed")
+			changed=true
 			continue
-		match p["kind"]:
-			"miner": civ.miners[at] = civ.miners.get(at, 0) + 1
-			"bunker": civ.bunkers[at] = true
-			"broadcaster": civ.broadcasters[at] = true
-			"dyson":
-				if civ.dyson_count() < civ.star_total(map) and map.star_at(at) != StarMap.Star.NONE:
-					civ.dysons[at] = civ.dysons.get(at, 0) + 1
-	civ.pending.clear()
+		var error:=OrderControl.physical_error(self,civ,project)
+		if error!="":
+			project["failure_reason"]=error
+			OrderControl.discard(self,civ,project,"failed")
+			changed=true
+			continue
+		if WorkOrder.advance(project, project_work_rate(civ, project) * duration):
+			_complete_project(civ, project)
+			OrderControl.report(self,civ,project,"completed")
+			changed=true
+		else:
+			remaining.append(project)
+	civ.pending = remaining
+	# 同刻第一批接收后，无完工/失败就没有新增消息或接收实体变化。
+	if messages_due or changed:
+		Signals.receive_due(self)
 
 
 # ---------- 调度 ----------
@@ -731,10 +756,10 @@ static func action_cost(name: String) -> int:
 		"move_starship": return Balance.COST_STARSHIP_MOVE
 		"launch_grain": return Balance.COST_GRAIN_LAUNCH
 		"broadcast": return Balance.COST_BROADCAST
-		"launch_foil": return Balance.COST_FOIL
-		"launch_line_foil": return Balance.COST_LINE_FOIL
+		"launch_foil": return 0
+		"launch_line_foil": return 0
 		"launch_black_domain": return Balance.COST_BLACK_DOMAIN
-		"launch_singularity": return Balance.COST_SINGULARITY
+		"launch_singularity": return 0
 		"send_sophon": return Balance.COST_SOPHON_LAUNCH
 	return 0
 
@@ -760,18 +785,18 @@ func dispatch_error(civ: Civ, id: int, direction: Vector3) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.ship_by_id(id)
+	var s := Signals.reported_ship(self, civ, id)
 	if s == null:
 		return "没有这个单位"
+	if s.work_locked:
+		return "单位正在施工或改装，完成或取消工程后才能派出"
 	if not s.docked:
 		return "已经派出了"
 	if not Ship.AIMED.has(s.kind):
 		return "这个单位要选目的地"
 	if space_direction(direction).length() < 1e-6:
 		return "需要指定方向"
-	if _stuck_at(s):
-		return STUCK_ERROR
-	return _pay_error(civ, dispatch_cost(s))
+	return _pay_error(civ, command_cost(civ, s))
 
 
 ## 派出停在星系里的探测器、战舰或吞噬者，朝 direction 飞。探测器可以选「先慢速飞出视野」（G13.4）。
@@ -780,27 +805,17 @@ func dispatch(civ: Civ, id: int, direction: Vector3, slow := false) -> Dictionar
 	var error := dispatch_error(civ, id, direction)
 	if error != "":
 		return {"error": error}
-	var s := civ.ship_by_id(id)
-	var raw_direction := direction
-	direction = space_direction(direction)
-	civ.energy -= dispatch_cost(s)
-	civ.actions_left -= 1
-	s.docked = false
-	s.direction = direction
-	s.speed = 0.0
-	s.slow_start = slow and s.kind == Ship.PROBE
-	if not civ.is_ai:
-		add_log("%s出发，方向 (%.2f, %.2f, %.2f)" % [s.label(), direction.x, direction.y, direction.z])
-	_record(civ, "dispatch", [id, raw_direction, slow])
+	var ship := Signals.reported_ship(self, civ, id)
+	queue_ship_command(civ, ship, {"name": "dispatch", "direction": direction, "slow": slow}, command_cost(civ, ship))
+	_record(civ, "dispatch", [id, direction, slow])
 	return {"error": ""}
 
 
-## 为什么不能让这个单位转向（能转向时为空）。
 func turn_error(civ: Civ, id: int, direction: Vector3) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.ship_by_id(id)
+	var s := Signals.reported_ship(self, civ, id)
 	if s == null:
 		return "没有这个单位"
 	if not Ship.TURNABLE.has(s.kind):
@@ -809,7 +824,7 @@ func turn_error(civ: Civ, id: int, direction: Vector3) -> String:
 		return "还没派出"
 	if space_direction(direction).length() < 1e-6:
 		return "需要指定方向"
-	return _pay_error(civ, dispatch_cost(s))
+	return _pay_error(civ, command_cost(civ, s))
 
 
 ## 在飞的战舰、吞噬者转向（G8）：花 1 行动点和 COST_TURN 能量；转过 90° 以上时速度归零。
@@ -817,37 +832,28 @@ func turn_ship(civ: Civ, id: int, direction: Vector3) -> Dictionary:
 	var error := turn_error(civ, id, direction)
 	if error != "":
 		return {"error": error}
-	var s := civ.ship_by_id(id)
-	var raw_direction := direction
-	direction = space_direction(direction)
-	civ.energy -= dispatch_cost(s)
-	civ.actions_left -= 1
-	if s.direction.dot(direction) < 0.0:
-		s.speed = 0.0
-	s.direction = direction
-	if not civ.is_ai:
-		add_log("%s转向" % s.label())
-	_record(civ, "turn_ship", [id, raw_direction])
+	var ship := Signals.reported_ship(self, civ, id)
+	queue_ship_command(civ, ship, {"name": "turn_ship", "direction": direction}, command_cost(civ, ship))
+	_record(civ, "turn_ship", [id, direction])
 	return {"error": ""}
 
 
-## 为什么不能派这艘殖民船去 target（能派时为空）。target 为 ANY_TARGET 时不检查目的地。
 func colony_error(civ: Civ, id: int, target := ANY_TARGET) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.ship_by_id(id)
+	var s := Signals.reported_ship(self, civ, id)
 	if s == null or s.kind != Ship.COLONY:
 		return "没有这艘殖民船"
+	if s.work_locked:
+		return "运输船正在落地施工"
 	if not s.waiting():
 		return "还在飞"
 	if target != ANY_TARGET:
-		if civ.owns(target):
+		if Knowledge.owns(self,civ,target):
 			return "这已经是自己的星系"
 		if not colony_target_ok(civ, target):
 			return "目的地在星图外"
-	if _stuck_at(s):
-		return STUCK_ERROR
 	return _pay_error(civ, action_cost("send_colony"))
 
 
@@ -857,19 +863,13 @@ func send_colony(civ: Civ, id: int, target: Vector3i) -> Dictionary:
 	var error := colony_error(civ, id, target)
 	if error != "":
 		return {"error": error}
-	var s := civ.ship_by_id(id)
-	civ.actions_left -= 1
-	_set_target(s, target)
-	if not civ.is_ai:
-		add_log("%s出发，目的地 %s" % [s.label(), target])
+	queue_ship_command(civ, Signals.reported_ship(self, civ, id), {"name": "send_colony", "target": target}, 0)
 	_record(civ, "send_colony", [id, target])
 	return {"error": ""}
 
 
-## 殖民船能不能以 c 为目的地：星图里、不是自己星系的任意格子（F4.4，可以盲飞）。
-## 能不能殖民、有没有人占，飞到才知道。画面也用这个判断，免得提示泄露没看到过的东西。
 func colony_target_ok(civ: Civ, c: Vector3i) -> bool:
-	return not civ.owns(c) and cell_exists(c)
+	return not Knowledge.owns(self,civ,c) and cell_exists(c)
 
 
 ## 文明知道的、可以去殖民的星系：情报里看到过是宜居、还有恒星，不是自己的，也不是已知的敌方星系（F4.4）。
@@ -878,7 +878,7 @@ func known_habitable(civ: Civ) -> Array[Vector3i]:
 	var cells: Array[Vector3i] = []
 	for c in civ.intel:
 		var info: Dictionary = civ.intel[c]
-		if info.get("habitable", false) and info["stars"] != StarMap.Star.NONE and not civ.owns(c) \
+		if info.get("habitable", false) and info["stars"] != StarMap.Star.NONE and not Knowledge.owns(self,civ,c) \
 				and not civ.known.has(c) and cell_exists(c):
 			cells.append(c)
 	return cells
@@ -895,9 +895,9 @@ func starship_move_error(civ: Civ, target := ANY_TARGET) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.starship()
+	var s := reported_starship(civ)
 	if s == null:
-		return "没有星舰"
+		return "没有收到可用星舰的状态"
 	if target != ANY_TARGET:
 		if not cell_exists(target):
 			return "目的地不在星图里"
@@ -905,30 +905,25 @@ func starship_move_error(civ: Civ, target := ANY_TARGET) -> String:
 			return "已经在那里"
 		if not starship_target_ok(civ, target):
 			return "那里是已知的敌方星系，不能停"
-	if _stuck_at(s):
-		return STUCK_ERROR
-	return _pay_error(civ, action_cost("move_starship"))
+	if s.work_locked or ship_command_pending(civ,s.id):
+		return "星舰正在施工或等待命令回执"
+	return _pay_error(civ, command_cost(civ,s))
 
 
 ## 星舰飞向目的地 target，到了就停下（G9）。
 func move_starship(civ: Civ, target: Vector3i) -> Dictionary:
-	var error := starship_move_error(civ, target)
+	var error := starship_move_error(civ,target)
 	if error != "":
-		return {"error": error}
-	var s := civ.starship()
-	civ.energy -= action_cost("move_starship")
-	civ.actions_left -= 1
-	if s.direction == Vector3.ZERO:
-		s.speed = 0.0
-	_set_target(s, target)
-	if not civ.is_ai:
-		add_log("星舰飞向 %s" % target)
-	_record(civ, "move_starship", [target])
-	return {"error": ""}
+		return {"error":error}
+	var ship := reported_starship(civ)
+	queue_ship_command(civ,ship,{"name":"move_starship","target":target},command_cost(civ,ship))
+	_record(civ,"move_starship",[target])
+	return {"error":""}
 
 
 func _set_target(s: Ship, target: Vector3i) -> void:
 	s.docked = false
+	s.parked = false
 	s.has_target = true
 	s.target = Vector3(target)
 	s.direction = (s.target - s.pos).normalized()
@@ -939,37 +934,19 @@ func settle_error(civ: Civ) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.starship()
-	if civ.reduce_left > 0:
-		return "降维期间不能建立星系"
-	if s == null:
-		return "没有星舰"
-	if s.direction != Vector3.ZERO and not s.docked:
-		return "星舰还在飞"
-	if not can_settle(s.cell()) or not cell_survives(civ, s.cell()):
-		return "星舰不在无主的宜居星系上"
-	return _pay_error(civ, action_cost("settle_starship"))
+	return "星舰本身就是移动家园；建立星系殖民地请用运输船，并先研究「星际殖民」"
 
 
 ## 星舰停在无主的宜居星系上时，在那里建立星系，星舰用掉。花 1 个行动点。
 func settle_starship(civ: Civ) -> Dictionary:
-	var error := settle_error(civ)
-	if error != "":
-		return {"error": error}
-	var s := civ.starship()
-	civ.actions_left -= 1
-	var c := s.cell()
-	_remove_ship(civ, s)
-	_add_colony(civ, c)
-	if not civ.is_ai:
-		add_log("星舰在 %s 建立星系（%d 颗恒星）" % [c, map.star_at(c)])
-	_record(civ, "settle_starship", [])
-	return {"error": ""}
+	return {"error":settle_error(civ)}
 
 
 ## 加一个星系；只剩星舰的文明落脚时，这里就是新的母星系。
-func _add_colony(civ: Civ, c: Vector3i) -> void:
+func _add_colony(civ: Civ, c: Vector3i,entity_dim: int = -1) -> void:
 	civ.colonies.append(c)
+	civ.colonial[c] = true
+	Assets.make(self, civ, "anchor", c,[0.0,0.0],entity_dim)
 	if civ.colonies.size() == 1:
 		civ.home = c
 
@@ -981,11 +958,12 @@ func grain_error(civ: Civ, direction: Vector3, at: Vector3i = AT_HOME) -> String
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	if not civ.owns(at) or not civ.grains.has(at):
+	var known:=Knowledge.site(self,civ,at)
+	if not known.get("owned",false) or not known.get("grain",false):
 		return "这个星系没有存着光粒"
 	if space_direction(direction).length() < 1e-6:
 		return "需要指定方向"
-	if in_black_domain(at):
+	if known.get("relative_light",1.0)<Balance.GRAIN_MIN_LIGHT:
 		return "这里在黑域里，光速太低，光粒发出去没有杀伤力"
 	return _pay_error(civ, action_cost("launch_grain"))
 
@@ -997,68 +975,109 @@ func launch_grain(civ: Civ, direction: Vector3, at: Vector3i = AT_HOME) -> Dicti
 	var error := grain_error(civ, direction, at)
 	if error != "":
 		return {"error": error}
-	var raw_direction := direction
-	direction = space_direction(direction)
-	civ.energy -= action_cost("launch_grain")
-	civ.actions_left -= 1
-	civ.grains.erase(at)
-	var g := Ship.make(Ship.GRAIN, Vector3(at), next_id())
-	g.docked = false
-	g.direction = direction
-	civ.ships.append(g)
+	Assets.ensure(self,civ)
+	var anchor:=Knowledge.anchor(self,civ,at)
+	if anchor.is_empty() or ship_command_pending(civ,anchor["id"]):
+		return {"error":"等待发射源回报或上一命令回执"}
+	queue_entity_command(civ,anchor["id"],anchor["pos"],{"name":"grain","direction":direction},[action_cost("launch_grain"),0],true)
 	if not civ.is_ai:
 		add_log("从 %s 发射光粒，方向 (%.2f, %.2f, %.2f)" % [at, direction.x, direction.y, direction.z])
-	_record(civ, "launch_grain", [raw_direction, at])
+	_record(civ, "launch_grain", [direction, at])
 	return {"error": ""}
 
 
 ## 离自己星系 ANTIMATTER_RANGE 以内的敌方战舰（最近的在前）。
+func antimatter_origins(civ: Civ) -> Array[Dictionary]:
+	var origins: Array[Dictionary] = []
+	for asset in Knowledge.assets(self,civ):
+		if asset["kind"] == "anchor" and not Knowledge.site(self,civ,asset["at"]).get("dormant",false):
+			origins.append({"id":asset["id"],"pos":Vector3(asset["at"])})
+	for ship in Signals.reported_ships(self,civ):
+		if ship.kind == Ship.WARSHIP and not ship.dormant:
+			origins.append({"id":ship.id,"pos":ship.pos})
+	return origins
+
+
 func antimatter_targets(civ: Civ) -> Array[Ship]:
 	var found: Array = []
-	for other in civs:
-		if other == civ or not other.alive:
+	for contact in civ.sightings:
+		if contact.get("owner",-1)==civs.find(civ) or not Ship.NAMES.has(contact["kind"]) or contact["kind"]==Ship.GRAIN:
 			continue
-		for s in other.ships:
-			if s.kind != Ship.WARSHIP or s.dead or s.docked:
-				continue
-			var d := nearest_distance(civ.colonies, s.pos)
-			if d <= Balance.ANTIMATTER_RANGE + 1e-6:
-				found.append([d, s])
-	found.sort_custom(func(a, b): return a[0] < b[0])
+		var distance := INF
+		for origin in antimatter_origins(civ):
+			distance = minf(distance,origin["pos"].distance_to(contact["pos"])*physical_cell_size())
+		if distance <= Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
+			var seen := Ship.make(contact["kind"],contact["pos"],contact["id"])
+			found.append([distance,seen])
+	found.sort_custom(func(a,b):return a[0]<b[0])
 	var result: Array[Ship] = []
-	for f in found:
-		result.append(f[1])
+	for entry in found:
+		result.append(entry[1])
 	return result
 
 
-## 为什么现在不能用反物质（能用时为空）。
 func antimatter_error(civ: Civ) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
 	if civ.antimatter <= 0:
-		return "没有反物质"
+		return "没有反物质炸弹"
 	if antimatter_targets(civ).is_empty():
-		return "自己星系 %.1f 格以内没有敌方战舰" % Balance.ANTIMATTER_RANGE
-	return _pay_error(civ, action_cost("use_antimatter"))
+		return "作用范围 %.1fly 内没有已收到的敌舰观测" % Balance.ANTIMATTER_RANGE
+	return _pay_error(civ,0)
 
 
-## 用掉 1 份反物质，让离自己星系最近的敌方战舰消失（G6）。花 1 行动点。
+## 指令送达后由执行节点按本地观测发射；弹药真正发射后不退款。
 func use_antimatter(civ: Civ) -> Dictionary:
 	var error := antimatter_error(civ)
 	if error != "":
-		return {"error": error}
+		return {"error":error}
+	var target := antimatter_targets(civ)[0]
+	var origins := antimatter_origins(civ)
+	origins.sort_custom(func(a,b):return a["pos"].distance_squared_to(target.pos)<b["pos"].distance_squared_to(target.pos))
+	var origin: Dictionary = origins[0]
+	var control := Signals.entity(self,civs.find(civ),Signals.controller(civ))
 	civ.actions_left -= 1
 	civ.antimatter -= 1
-	var target := antimatter_targets(civ)[0]
-	var owner := ship_owner(target)
-	_destroy(owner, target, "")
-	if not civ.is_ai:
-		add_log("反物质消灭了 %s 的一艘战舰" % owner.name)
-	elif owner == human():
-		add_log("你的%s被反物质消灭" % target.label())
-	_record(civ, "use_antimatter", [])
-	return {"error": ""}
+	var message := Signals.send(self,civs.find(civ),control["pos"],origin["id"],"command",
+		{"name":"antimatter","target_id":target.id,"recipient_pos":origin["pos"],"ammo_reserved":1,"reserved":[0,0]})
+	civ.command_pending[message["id"]] = {"recipient":origin["id"],"name":"antimatter","sent":clock}
+	Signals.receive_due(self)
+	_record(civ,"use_antimatter",[])
+	return {"error":""}
+
+
+func _fire_antimatter(civ: Civ, source: int, target: int) -> bool:
+	var receiver := Signals.entity(self,civs.find(civ),source)
+	if receiver.is_empty():
+		return false
+	var contacts: Dictionary
+	if receiver.has("ship"):
+		var ship: Ship = receiver["ship"]
+		if ship.dead or ship.dormant or ship.work_locked or ship.fired_turn == turn:
+			return false
+		contacts = ship.local_contacts
+	else:
+		if civ.dormant_colonies.has(receiver["asset"]["at"]):
+			return false
+		contacts = civ.local_contacts_by_source.get(source,{})
+	if not contacts.has(target):
+		return false
+	var contact: Dictionary = contacts[target]
+	if receiver["pos"].distance_to(contact["pos"])*physical_cell_size()>Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
+		return false
+	var speed := light_speed_at(receiver["pos"])
+	if speed <= 0.0:
+		return false
+	var shot := {"id":next_id(),"owner":civs.find(civ),"source":source,"weapon":"antimatter","pos":receiver["pos"],
+		"direction":Combat.aim(receiver["pos"],contact["pos"],contact["velocity"],speed/physical_cell_size()),
+		"remaining":Balance.ANTIMATTER_RANGE,"distance":0.0,"created":clock,"epoch":space_epoch,"dead":false}
+	projectiles.append(shot)
+	if receiver.has("ship"):
+		receiver["ship"].fired_turn = turn
+		receiver["ship"].last_hit = clock
+	events.append({"id":shot["id"],"t":clock,"kind":"fire","source":source,"target":target,"weapon":"antimatter"})
+	return true
 
 
 # ---------- 智子（D5） ----------
@@ -1068,7 +1087,7 @@ func sophon_error(civ: Civ, id: int, target := ANY_TARGET) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	var s := civ.ship_by_id(id)
+	var s := Signals.reported_ship(self, civ, id)
 	if s == null or s.kind != Ship.SOPHON:
 		return "没有这个智子"
 	if s.lock >= 0:
@@ -1076,13 +1095,11 @@ func sophon_error(civ: Civ, id: int, target := ANY_TARGET) -> String:
 	if not s.waiting():
 		return "还在飞"
 	if target != ANY_TARGET:
-		if civ.owns(target):
+		if Knowledge.owns(self,civ,target):
 			return "这是自己的星系"
 		if not cell_exists(target):
 			return "目的地在星图外"
-	if _stuck_at(s):
-		return STUCK_ERROR
-	return _pay_error(civ, action_cost("send_sophon"))
+	return _pay_error(civ, command_cost(civ, s))
 
 
 ## 派智子去 target（一出发就以 0.99 倍光速飞）。到了别人的母星系就锁住那个文明，不是就原地待命，可以再派。
@@ -1090,18 +1107,12 @@ func send_sophon(civ: Civ, id: int, target: Vector3i) -> Dictionary:
 	var error := sophon_error(civ, id, target)
 	if error != "":
 		return {"error": error}
-	var s := civ.ship_by_id(id)
-	civ.energy -= action_cost("send_sophon")
-	civ.actions_left -= 1
-	s.speed = 0.0
-	_set_target(s, target)
-	if not civ.is_ai:
-		add_log("%s出发，目的地 %s" % [s.label(), target])
+	var ship := Signals.reported_ship(self, civ, id)
+	queue_ship_command(civ, ship, {"name": "send_sophon", "target": target}, command_cost(civ, ship))
 	_record(civ, "send_sophon", [id, target])
 	return {"error": ""}
 
 
-## 智子到了目的地：是别人的母星系就锁住那个文明（D5）。
 func _sophon_arrive(civ: Civ, s: Ship) -> void:
 	var c := s.cell()
 	var victim := coord_owner(c)
@@ -1173,7 +1184,12 @@ func _free_from_sophons(civ: Civ) -> void:
 
 ## 能广播的地方：有恒星广播器、没被星际探测器封锁的星系；有引力波广播（203）时所有自己的星系。
 func can_broadcast_from(civ: Civ, c: Vector3i) -> bool:
-	if not civ.owns(c):
+	var status:=Knowledge.site(self,civ,c)
+	return status.get("owned",false) and not status.get("dormant",false) and not status.get("jammed",false) and (civ.has_tech("gravity") or status.get("broadcaster",false))
+
+
+func can_broadcast_now(civ: Civ, c: Vector3i) -> bool:
+	if not civ.owns(c) or civ.dormant_colonies.has(c) or jammed(civ, c):
 		return false
 	if civ.has_tech("gravity"):
 		return true
@@ -1183,7 +1199,7 @@ func can_broadcast_from(civ: Civ, c: Vector3i) -> bool:
 ## 能听到广播：有引力波广播（203），或者至少有一个能用的恒星广播器（E7F6 2026-10-06）。
 func can_hear(civ: Civ) -> bool:
 	for c in civ.broadcasters:
-		if can_broadcast_from(civ, c):
+		if civ.owns(c) and not civ.dormant_colonies.has(c):
 			return true
 	return civ.has_tech("gravity") and not civ.colonies.is_empty()
 
@@ -1194,7 +1210,7 @@ func jammed(civ: Civ, c: Vector3i) -> bool:
 		if other == civ or not other.alive:
 			continue
 		for s in other.ships:
-			if s.parked and s.cell() == c:
+			if s.kind == Ship.DROPLET and s.parked and not s.dead and not s.dormant and s.cell() == c:
 				return true
 	return false
 
@@ -1207,14 +1223,14 @@ func broadcast_error(civ: Civ, target := ANY_TARGET, source: Vector3i = AT_HOME,
 	if target != ANY_TARGET:
 		if not map.contains(target):
 			return "坐标不在星图内"
-		if civ.owns(target):
+		if Knowledge.owns(self,civ,target):
 			return "不能广播自己的坐标"
 	if ship_id >= 0:
-		var s := civ.ship_by_id(ship_id)
-		if s == null or not s.gravity:
+		var s := Signals.reported_ship(self, civ, ship_id)
+		if s == null or not s.gravity or s.dormant:
 			return "这艘战舰没有引力波广播器"
 	elif not can_broadcast_from(civ, civ.home if source == AT_HOME else source):
-		return "这个星系不能广播（要有恒星广播器，而且没被别人的星际探测器封锁）"
+		return "这个星系不能广播（要有恒星广播器，而且最近回报未被水滴封锁）"
 	return _pay_error(civ, action_cost("broadcast"))
 
 
@@ -1226,15 +1242,15 @@ func broadcast(civ: Civ, target: Vector3i, source: Vector3i = AT_HOME, ship_id :
 	var error := broadcast_error(civ, target, source, ship_id)
 	if error != "":
 		return {"error": error}
-	var from := civ.ship_by_id(ship_id).pos if ship_id >= 0 else Vector3(source)
-	var exposed := NO_HIT
-	# 检查都通过了才掷暴露的骰子：失败的操作不进对局记录，不能动随机数
-	if ship_id < 0 and rng.randf() < pow(0.5, from.distance_to(Vector3(target)) / Balance.BROADCAST_EXPOSE_HALF):
-		exposed = source
-	civ.energy -= action_cost("broadcast")
-	civ.actions_left -= 1
-	broadcasts.append({"from": from, "target": target, "sender": civ, "exposed": exposed, "radius": 0.0,
-			"heard": {}, "hidden_heard": {}})
+	var from := Signals.reported_ship(self,civ,ship_id).pos if ship_id>=0 else Vector3(source)
+	Assets.ensure(self,civ)
+	var recipient:=ship_id
+	if recipient<0:
+		var anchor:=Knowledge.anchor(self,civ,source)
+		if anchor.is_empty():
+			return {"error":"没有已知广播宿主"}
+		recipient=anchor["id"]
+	queue_entity_command(civ,recipient,from,{"name":"broadcast","target":target},[action_cost("broadcast"),0],true)
 	if not civ.is_ai:
 		add_log("开始广播 %s，以光速向四周传播" % target)
 	_record(civ, "broadcast", [target, source, ship_id])
@@ -1333,26 +1349,9 @@ func _speed_limits(civ: Civ, s: Ship, at: Vector3, slow_start: bool) -> Array[fl
 
 ## 照现在的速度，civ 的单位 s 接下来 turns 个回合大概在哪（第一项是现在的位置），画航线用。
 ## 加速、曲率引擎、慢速出发和光速都和 _move_ship 一样算；不管吞噬者停下来吃行星、星舰停在别人星系旁边、被困住。
-func predict_path(civ: Civ, s: Ship, turns: int) -> Array[Vector3]:
-	var points: Array[Vector3] = [s.pos]
-	if not s.moving():
-		return points
-	var speed := s.speed
-	var p := s.pos
-	var slow := s.slow_start
-	for i in turns:
-		slow = slow and civ != null and in_own_vision(civ, p)
-		var limits := _speed_limits(civ, s, p, slow)
-		speed = minf(speed + limits[1], limits[0])
-		var step := _travel(p, s.direction, speed)
-		if s.has_target and p.distance_to(s.target) <= step + 1e-6:
-			points.append(s.target)
-			break
-		p += s.direction * step
-		points.append(p)
-		if Ship.outside(p, map.bounds()):
-			break
-	return points
+func predict_path(civ: Civ, ship: Ship, turns: int) -> Array[Vector3]:
+	return Knowledge.predict_path(self,civ,ship,turns)
+
 
 
 ## 单位先加速、再沿直线移动（G1），检查这一步扫过的格子。有目的地的，最后一步直接落在目的地上。
@@ -1484,15 +1483,9 @@ func _eat(civ: Civ, c: Vector3i) -> void:
 
 ## 殖民船到了目的地：能殖民就建殖民地（船用掉）；不能就停在那里，可以再派去别处（F4.4）。
 func _settle(civ: Civ, s: Ship) -> void:
-	var c := s.cell()
-	if not can_settle(c) or not cell_survives(civ, c):
-		if not civ.is_ai:
-			add_log("%s到达 %s，这里不能殖民，原地待命" % [s.label(), c])
-		return
-	_destroy(civ, s, "")
-	_add_colony(civ, c)
-	if not civ.is_ai:
-		add_log("殖民船在 %s 建立殖民地（%d 颗恒星）" % [c, map.star_at(c)])
+	s.direction = Vector3.ZERO
+	s.has_target = false
+	Signals.report_ship(self,civ,s)
 
 
 ## 这个格子能不能建立殖民地：宜居、还有恒星、没有活着的文明占着。
@@ -1715,14 +1708,32 @@ func _destroy(civ: Civ, s: Ship, cause: String) -> void:
 	if s.dead:
 		return
 	s.dead = true
-	if civ != null and s.kind == Ship.STARSHIP:
-		if civ == human() and cause != "":
-			add_log("你的星舰被%s毁掉" % cause)
-		if civ.colonies.is_empty():
-			_die(civ, cause)
+	if civ != null:
+		if s.kind in [Ship.STARSHIP, Ship.WANDERING_EARTH]:
+			civ.last_anchor_loss_cause = cause
+		civ.assets = civ.assets.filter(func(asset): return asset["carrier"] != s.id)
+		Signals.report_ship(self, civ, s)
+	if civ != null:
+		if civ.research_project.get("host_ship", -1) == s.id and civ.research_project.get("command_ready",true):
+			OrderControl.discard(self,civ,civ.research_project,"destroyed")
+		var surviving: Array[Dictionary] = []
+		for project in civ.pending:
+			if (project.get("host_ship", -1) == s.id or project.get("target_ship", -1) == s.id) and project.get("command_ready",true):
+				OrderControl.report(self,civ,project,"destroyed")
+				if civ.conversions.has(project["id"]):
+					civ.conversions[project["id"]]["status"] = "destroyed"
+				var target := civ.ship_by_id(project.get("target_ship", -1))
+				if target != null:
+					target.work_locked = false
+			else:
+				surviving.append(project)
+		civ.pending = surviving
+
 
 
 func _remove_ship(civ: Civ, s: Ship) -> void:
+	s.dead=true
+	Signals.report_ship(self,civ,s)
 	civ.ships.erase(s)
 
 
@@ -1785,14 +1796,12 @@ static func in_view(o: Dictionary, p: Vector3) -> bool:
 
 ## 点 p 在不在自己星系的视野里（曲率引擎、慢速飞出视野用）。
 func in_own_vision(civ: Civ, p: Vector3) -> bool:
-	for c in civ.colonies:
-		var r := sphere_radius(civ, Balance.VISION_HOME if c == civ.home else Balance.VISION_COLONY)
-		if Vector3(c).distance_to(p) <= r + 1e-6:
+	for observer in Signals.observers(self, civ):
+		if Signals.in_view(self, observer, p):
 			return true
 	return false
 
 
-## 现在能直接看到这个格子（自己的星系、星舰的视野，不用等传回）。
 func sees_now(civ: Civ, c: Vector3i) -> bool:
 	for o in observers(civ):
 		if o["base"] and in_view(o, Vector3(c)) and not blocked(o["pos"], Vector3(c)):
@@ -1805,7 +1814,7 @@ func snapshot(c: Vector3i) -> Dictionary:
 	var owner := coord_owner(c)
 	var info := {"turn": turn, "stars": map.star_at(c), "rocky": map.rocky.get(c, 0), "gas": map.gas.get(c, 0),
 			"habitable": map.is_habitable(c), "owner": civs.find(owner) if owner != null else -1, "dysons": 0, "warships": 0, "broadcaster": false, "grain": false, "foil": false,
-			"bunker": false}
+			"bunker": false,"cell_dim":cell_dims.get(cell_ids.get(c,-1),dimension),"relative_light":relative_light(Vector3(c))}
 	if owner != null:
 		info["dysons"] = owner.dysons.get(c, 0)
 		info["broadcaster"] = owner.broadcasters.has(c)
@@ -2054,35 +2063,13 @@ func vision_cells(civ: Civ) -> int:
 
 ## 每回合的能量：每个星系的基础能量（按恒星数）、裂变能（每颗类地行星）、戴森球（星系还有恒星时）和暗能量；
 ## 被困在黑域里的星系产出只有 1/10（向上取整，G14）；每次自身降维后减半。只剩星舰时只有一点点。
-func energy_income(civ: Civ) -> int:
-	if civ.colonies.is_empty():
-		return Balance.STARSHIP_ENERGY if civ.has_starship() else 0
-	var total := 0.0
-	for c in civ.colonies:
-		var e := float(Balance.ENERGY_PER_SYSTEM + Balance.ENERGY_PER_STAR * StarMap.star_count(map.star_at(c)))
-		if civ.has_tech("fission"):
-			e += map.rocky.get(c, 0) * Balance.FISSION_ENERGY
-		if map.star_at(c) != StarMap.Star.NONE:
-			e += civ.dysons.get(c, 0) * Balance.DYSON_ENERGY
-		if in_black_domain(c):
-			e = ceilf(e * Balance.DOMAIN_INCOME)
-		total += e
-	if civ.has_tech("dark_energy"):
-		total += vision_cells(civ) / Balance.DARK_ENERGY_CELLS
-	return int(total * civ.output_factor())
+func energy_income(civ: Civ) -> float:
+	return WorkOrder.amount(WorkOrder.units(Economy.plan(self, civ)["net"][0]))
 
 
 ## 每回合的矿石：每个星系一些，每艘采矿船再多一些；被困在黑域里的星系只有 1/10（向上取整）。
-func mineral_income(civ: Civ) -> int:
-	if civ.colonies.is_empty():
-		return Balance.STARSHIP_MINERAL if civ.has_starship() else 0
-	var total := 0.0
-	for c in civ.colonies:
-		var m := float(Balance.MINERAL_PER_COLONY + civ.miners.get(c, 0) * Balance.MINER_MINERAL)
-		if in_black_domain(c):
-			m = ceilf(m * Balance.DOMAIN_INCOME)
-		total += m
-	return int(total * civ.output_factor())
+func mineral_income(civ: Civ) -> float:
+	return WorkOrder.amount(WorkOrder.units(Economy.plan(self, civ)["net"][1]))
 
 
 # ---------- 降维 ----------
@@ -2098,61 +2085,65 @@ func launch_line_foil(civ: Civ, target: Vector3i, origin: Vector3i = AT_HOME) ->
 
 ## 为什么不能发射二向箔（to_line 时是单向著），能发射时为空。target 为 ANY_TARGET 时不检查目标。
 func foil_error(civ: Civ, to_line: bool, target := ANY_TARGET, origin: Vector3i = AT_HOME) -> String:
-	if origin == AT_HOME:
-		origin = civ.home
 	var error := _common_error(civ)
 	if error != "":
 		return error
 	if not civ.has_tech("dimension"):
-		return "要先升级科技「维度打击」"
-	if civ.reduce_left > 0 or civ.colonies.is_empty():
-		return "降维期间、没有星系时不能发射"
-	if to_line and not all_flat():
-		return "整张星图进入二维后才能发射单向著"
-	if not to_line and all_flat():
-		return "星图已是二维，请使用单向著"
+		return "需要302维度打击"
+	if dimension != (2 if to_line else 3):
+		return "等待世界进入二维" if to_line else "当前世界已不支持二向箔"
+	if civ.dimension_ammo <= 0:
+		return "需要先完成一枚维度武器弹药的建造"
+	if origin == AT_HOME:
+		origin = civ.home
+	if not Knowledge.origins(self,civ).has(origin):
+		return "发射源必须是自己的星系或星舰"
 	if target != ANY_TARGET:
 		error = foil_target_error(civ, to_line, target)
 		if error != "":
 			return error
-	if not civ.origins().has(origin):
-		return "发射源必须是自己的星系或星舰"
-	if target == origin:
-		return "目标不能是发射源"
-	return _pay_error(civ, action_cost("launch_line_foil" if to_line else "launch_foil"))
+	return _pay_error(civ, 0)
 
 
-## 这一格能不能当二向箔（to_line 时是单向著）的目标，只看格子本身（能时为空）。
 func foil_target_error(civ: Civ, to_line: bool, target: Vector3i) -> String:
 	if not map.contains(target):
 		return "目标坐标不在星图内"
 	if to_line and target.z != flat_plane:
 		return "目标必须在二维平面上"
-	if civ.owns(target):
+	if Knowledge.owns(self,civ,target):
 		return "目标不能是自己的星系"
-	if (linearized.has(target) if to_line else flattened.has(target)):
+	if Knowledge.snapshot(self,civ,target).get("cell_dim",dimension) < dimension:
 		return "这一格已经压成直线了，换一个目标" if to_line else "这一格已经压平了，换一个目标"
 	return ""
 
 
 func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -> Dictionary:
-	if origin == AT_HOME:
-		origin = civ.home
 	var error := foil_error(civ, to_line, target, origin)
 	if error != "":
 		return {"error": error}
-	civ.energy -= action_cost("launch_line_foil" if to_line else "launch_foil")
-	civ.actions_left -= 1
-	civ.foils.append(Foil.new(Vector3(origin), target, Balance.FOIL_PREPARE_TURNS, to_line))
-	if not civ.is_ai:
-		add_log("%s开始准备，目标 %s，%d 回合后起飞" % ["单向著" if to_line else "二向箔", target, Balance.FOIL_PREPARE_TURNS])
+	if origin == AT_HOME:
+		origin = civ.home
+	Assets.ensure(self,civ)
+	var recipient: int=Signals.controller(civ)
+	var anchor:=Knowledge.anchor(self,civ,origin)
+	if not anchor.is_empty():
+		recipient=anchor["id"]
+	else:
+		var ship:=reported_starship(civ)
+		if ship!=null:
+			recipient=ship.id
+	var payload_id:=next_id()
+	civ.dimension_ammo-=1
+	var foil := Foil.new(Vector3(origin), target, 0, to_line)
+	foil.id = payload_id
+	foil.position_override = true
+	foil.current_position = Vector3(origin)
+	civ.foils.append(foil)
+	queue_entity_command(civ,recipient,Vector3(origin),{"name":"payload","kind":"dimension","target":target,"payload_id":payload_id,"dimension_reserved":1},[0,0],true)
 	_record(civ, "launch_line_foil" if to_line else "launch_foil", [target, origin])
-	return {"error": ""}
+	return {"error": "", "payload": payload_id}
 
 
-## 每片箔：还在准备的，准备回合减一；已经起飞的，前进一段。
-## 二向箔只在到达目标（最后一步直接落在目标上）时展开，路上不停（U2）；
-## 单向著途中碰到别人的星系（隐藏文明的不会）就在那里展开。
 func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
 	var still_flying: Array[Foil] = []
 	for foil: Foil in list.duplicate():
@@ -2288,16 +2279,14 @@ func line_y_for(target: Vector3i) -> int:
 ## 二向箔在格子 at 展开，从这里按球形向外扩散（U3），马上压平它能压到的格子。
 ## 平面的高度由第一回合展开的箔定下：同一回合有几片时取它们 z 的平均，之后的箔不再改。
 func _unfold_foil(at: Vector3i) -> void:
-	if dimension != 3 or not map.contains(at):
+	if dimension!=3 or not map.contains(at):
 		return
-	var zone := {"center": at, "age": 0.0}
-	foil_zones.append(zone)
-	if foil_zones.all(func(z): return z["age"] == 0.0):
-		flat_plane = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(foil_zones)).z)
-		fold_anchor = Vector3i(foil_zones[0]["center"].x, foil_zones[0]["center"].y, flat_plane)
-		for c in flattened:
-			flattened[c] = flat_plane
-	_apply_zone(zone)
+	ensure_cells()
+	for civ in civs:
+		Assets.ensure(self,civ)
+	SpaceEvents.unfold(self,at)
+	SpaceEvents.resolve(self)
+	_check_winner()
 
 
 ## 胜负结束后也允许环境继续演化，不恢复行动、不结算收入或 AI。
@@ -2313,27 +2302,22 @@ func advance_collapse() -> void:
 
 ## 每回合每片展开的箔再向外扩散 FOIL_SPREAD 格（T17）。
 func _spread_flat() -> void:
-	if not all_flat():
-		for zone in foil_zones:
-			zone["age"] += Balance.FOIL_SPREAD
-			_apply_zone(zone)
-	if not all_linear():
-		for zone in line_zones:
-			zone["age"] += Balance.FOIL_SPREAD
-			_apply_line_zone(zone)
+	# 仅供展开演示/终局后的环境动画；对局内由WorldTime统一推进。
+	ensure_cells()
+	clock+=1.0
+	SpaceEvents.resolve(self)
+	_check_winner()
 
 
 func _unfold_line_foil(at: Vector3i) -> void:
-	if dimension != 2 or not map.contains(at):
+	if dimension!=2 or not map.contains(at):
 		return
-	var zone := {"center": at, "age": 0.0}
-	line_zones.append(zone)
-	if line_zones.all(func(z): return z["age"] == 0.0):
-		line_y = int(DimensionSpace.Layout.base_plane(DimensionSpace.zone_origins(line_zones), true).y)
-		line_anchor = Vector3i(line_zones[0]["center"].x, line_y, flat_plane)
-		for c in linearized:
-			linearized[c] = line_y
-	_apply_line_zone(zone)
+	ensure_cells()
+	for civ in civs:
+		Assets.ensure(self,civ)
+	SpaceEvents.unfold(self,at)
+	SpaceEvents.resolve(self)
+	_check_winner()
 
 
 ## 二维里在平面上按圆形扩散，扫过的格子压到一维（U3）。
@@ -2378,98 +2362,75 @@ func _apply_zone(zone: Dictionary) -> void:
 ## 格子 c 再过几个回合会被压没（已经压没时为 0，没有展开的二向箔时为 INF）。
 func turns_until_flat(c: Vector3i) -> float:
 	var best := INF
-	var zones := line_zones if all_flat() else foil_zones
-	for zone in zones:
-		var center: Vector3i = zone["center"]
-		var distance := zone_distance(center, c)
-		best = minf(best, maxf(0.0, (distance - zone["age"]) / Balance.FOIL_SPREAD))
+	for zone in SpaceEvents.zones(self):
+		var distance := SpaceEvents.cell_distance(self, Vector3(zone["center"]), c)
+		best = minf(best, maxf(0.0, (distance - SpaceEvents.radius(self, zone, clock)) / (Balance.FOIL_SPREAD * background_light())))
+	return best
+
+
+## 仅用已收到的转换格和战略载荷轨迹估计危险；不读取尚未送达的真实波中心/目标。
+func known_front_eta(civ: Civ, at: Vector3i) -> float:
+	var best := INF
+	for cell in civ.intel:
+		var info: Dictionary = civ.intel[cell]
+		if info.get("cell_dim",dimension) < dimension:
+			var observed: float = info.get("t_observed",clock)
+			var travel := Vector3(at).distance_to(Vector3(cell))*physical_cell_size()/(Balance.FOIL_SPREAD*background_light())
+			best = minf(best,maxf(0.0,travel-(clock-observed)))
+	for alert in civ.alerts:
+		if alert.get("payload_kind","") != "dimension":
+			continue
+		var velocity: Vector3 = alert.get("velocity",Vector3.ZERO)
+		var relative: Vector3 = Vector3(at)-alert["pos"]
+		if velocity.length_squared()<=1e-15 or relative.dot(velocity)<0:
+			continue
+		var lead := relative.dot(velocity)/velocity.length_squared()
+		if (relative-velocity*lead).length()*physical_cell_size()<=Balance.WARNING_RANGE:
+			best=minf(best,maxf(0.0,lead-(clock-alert["t_observed"]))+Balance.DIMENSION_ACTIVATION)
 	return best
 
 
 ## 为什么现在不能开始自身降维（能开始时为空）。
 func reduce_error(civ: Civ) -> String:
-	var error := _common_error(civ)
-	if error != "":
-		return error
-	if not civ.has_tech("dimension"):
-		return "要先升级科技「维度打击」"
-	if civ.line_reduced:
-		return "已经进入一维"
-	if civ.reduce_left > 0:
-		return "正在降维，还剩 %d 回合" % civ.reduce_left
-	if civ.reduced and not all_flat():
-		return "整张星图进入二维后才能再次降维"
-	if not civ.pending.is_empty():
-		return "请先完成建造，再开始降维"
-	return _pay_error(civ, civ.reduce_cost())
+	return Conversion.error(self, civ, Conversion.known_roster(self,civ,dimension), Signals.controller(civ), false)
 
 
-## 开始自身降维：花能量和 1 个行动点，几个回合后完成，期间不能建造。
 func start_reduce(civ: Civ) -> Dictionary:
-	var error := reduce_error(civ)
-	if error != "":
-		return {"error": error}
-	var cost := civ.reduce_cost()
-	civ.energy -= cost
-	civ.actions_left -= 1
-	civ.reduce_left = Balance.REDUCE_TURNS
-	if not civ.is_ai:
-		add_log("携带 %d 个单位，消耗 %dE；开始自身降维到%s，%d 回合后完成，期间不能建造" % [
-				civ.reduce_units(), cost, "一维" if civ.reduced else "二维", Balance.REDUCE_TURNS])
-	_record(civ, "start_reduce", [])
-	return {"error": ""}
+	return prepare_conversion(civ, Conversion.known_roster(self,civ,dimension), Signals.controller(civ), false, true)
 
 
-func _advance_reduce(civ: Civ) -> void:
-	if civ.reduce_left <= 0:
-		return
-	civ.reduce_left -= 1
-	if civ.reduce_left == 0:
-		if civ.reduced:
-			civ.line_reduced = true
-		else:
-			civ.reduced = true
-		if not civ.is_ai:
-			add_log("自身降维完成：进入%s，产能为原来的 %s" % ["一维" if civ.line_reduced else "二维", "1/4" if civ.line_reduced else "1/2"])
+func _advance_reduce(_civ: Civ) -> void:
+	pass # 迁维由工程完成、有限传播和逐实体转换事件推进。
 
 
-## 为什么现在不能发射奇异点（能发射时为空）。
 func singularity_error(civ: Civ) -> String:
 	var error := _common_error(civ)
 	if error != "":
 		return error
-	if not civ.has_tech("dimension"):
-		return "要先升级科技「维度打击」"
-	if not all_linear():
-		return "整张星图压成直线后才能发射奇异点"
-	if not civ.line_reduced:
-		return "要先降到一维"
-	if civ.singularity_left > 0:
-		return "奇异点正在准备，还剩 %d 回合" % civ.singularity_left
-	return _pay_error(civ, action_cost("launch_singularity"))
+	if not civ.has_tech("dimension") or dimension != 1:
+		return "需要302且等待世界进入一维"
+	if civ.dimension_ammo <= 0:
+		return "需要先完成维度武器弹药"
+	return _pay_error(civ, 0)
 
 
-## 全图压成直线后，已经进入一维的文明发射奇异点，准备几个回合后降到零维，赢得对局（T14）。
-func launch_singularity(civ: Civ) -> Dictionary:
+func launch_singularity(civ: Civ, target: Vector3i = AT_HOME) -> Dictionary:
 	var error := singularity_error(civ)
 	if error != "":
 		return {"error": error}
-	civ.energy -= action_cost("launch_singularity")
+	if target == AT_HOME:
+		target = civ.home
+	if not map.contains(target):
+		return {"error": "目标不在星图内"}
+	civ.dimension_ammo -= 1
 	civ.actions_left -= 1
-	civ.singularity_left = Balance.SINGULARITY_TURNS
-	add_log("%s发射了奇异点，%d 回合后降到零维" % [civ.name if civ != human() else "你", Balance.SINGULARITY_TURNS])
-	_record(civ, "launch_singularity", [])
+	SpaceEvents.launch(self, civs.find(civ), Signals.entity(self,civs.find(civ),Signals.controller(civ))["pos"], Vector3(target), "dimension")
+	_record(civ, "launch_singularity", [target])
 	return {"error": ""}
 
 
-func _advance_singularity(civ: Civ) -> void:
-	if civ.singularity_left <= 0 or zero_winner != null:
-		return
-	civ.singularity_left -= 1
-	if civ.singularity_left == 0:
-		zero_winner = civ
-		add_log("%s降到了零维，整个宇宙只剩一个点" % civ.name)
-		_check_winner()
+func _advance_singularity(_civ: Civ) -> void:
+	pass # 奇异点是物理前沿，不产生倒计时胜利。
 
 
 # ---------- 黑域 ----------
@@ -2481,27 +2442,25 @@ func domain_error(civ: Civ, center := ANY_TARGET) -> String:
 	if error != "":
 		return error
 	if not civ.has_tech("domain"):
-		return "要先升级科技「黑域投放」"
-	if civ.reduce_left > 0 or civ.colonies.is_empty():
-		return "降维期间、没有星系时不能投放"
+		return "需要303黑域投放"
+	if clock < civ.domain_ready_at:
+		return "黑域投放还需冷却%.2f年" % (civ.domain_ready_at - clock)
 	if center != ANY_TARGET:
 		if not map.contains(center):
 			return "坐标不在星图内"
-		if not sees_now(civ, center):
-			return "只能投放在自己现在看得到的地方"
-	return _pay_error(civ, action_cost("launch_black_domain"))
+		if not civ.intel.has(center) and not Knowledge.in_vision(self,civ,Vector3(center)):
+			return "请选择已知或有效覆盖的位置"
+	return _pay_error(civ, Balance.DOMAIN_COST[0], Balance.DOMAIN_COST[1])
 
 
-## 在 center 投放黑域（科技 303）：准备几个回合后，那一格的光速变成 0（G14）。
 func launch_black_domain(civ: Civ, center: Vector3i) -> Dictionary:
 	var error := domain_error(civ, center)
 	if error != "":
 		return {"error": error}
-	civ.energy -= action_cost("launch_black_domain")
+	Economy.charge(self,civ,Balance.DOMAIN_COST,"black_domain")
 	civ.actions_left -= 1
-	civ.pending_domains.append({"center": center, "left": Balance.BLACK_DOMAIN_PREPARE_TURNS})
-	if not civ.is_ai:
-		add_log("开始投放黑域，位置 %s，%d 回合后生效" % [center, Balance.BLACK_DOMAIN_PREPARE_TURNS])
+	civ.domain_ready_at = clock + Balance.DOMAIN_COOLDOWN
+	SpaceEvents.launch(self, civs.find(civ), Signals.entity(self,civs.find(civ),Signals.controller(civ))["pos"], Vector3(center), "domain")
 	_record(civ, "launch_black_domain", [center])
 	return {"error": ""}
 
@@ -2700,45 +2659,51 @@ func _may_block(lo: Vector3, hi: Vector3) -> bool:
 
 ## 文明失去一个星系，那里的设施和停着的单位（星舰除外）也没了。星系全丢了、又没有星舰，文明灭亡。
 func _lose_system(c: Vector3i, owner: Civ, cause := "其他") -> void:
+	if owner.colonies.has(c):
+		owner.last_anchor_loss_cause = cause
+	for project in WorldTime.orders(owner):
+		if project["at"]==c and project.get("host_ship",-1)<0 and project.get("command_ready",true):
+			OrderControl.report(self,owner,project,"destroyed")
+			if owner.conversions.has(project["id"]):
+				owner.conversions[project["id"]]["status"] = "destroyed"
+	Assets.remove_at(owner, c)
 	owner.colonies.erase(c)
 	owner.dysons.erase(c)
 	owner.miners.erase(c)
 	owner.bunkers.erase(c)
 	owner.broadcasters.erase(c)
 	owner.grains.erase(c)
-	owner.pending = owner.pending.filter(func(p): return p["at"] != c or p["kind"] == "warning")
-	for s in owner.ships:
-		if s.docked and s.kind != Ship.STARSHIP and s.cell() == c:
-			s.dead = true
+	owner.pending = owner.pending.filter(func(p): return p["at"] != c or p.get("host_ship", -1) >= 0 or not p.get("command_ready",true))
+	owner.advanced_miners.erase(c)
+	owner.warnings.erase(c)
+	owner.colonial.erase(c)
+	owner.dormant_colonies.erase(c)
+	if not owner.research_project.is_empty() and owner.research_project["at"] == c and owner.research_project["host_ship"] < 0 and owner.research_project.get("command_ready",true):
+		owner.research_project = {}
+	owner.has_warning = not owner.warnings.is_empty()
 	if owner.colonies.is_empty():
-		owner.pending.clear()
 		if owner.has_starship():
 			owner.home = owner.starship().cell()
-			add_log("%s 失去了所有星系，只剩星舰" % owner.name)
-		else:
-			_die(owner, cause)
 	elif owner.home == c:
 		owner.home = owner.colonies[0]
+	Knowledge.report_site(self,owner,c)
 
 
 ## 文明灭亡，准备中和在飞的东西也随之消失（已经发出的光粒除外）。
 func _die(owner: Civ, cause := "其他") -> void:
 	if not owner.alive:
 		return
-	for s in sophons_on(owner):
-		s.dead = true
 	owner.alive = false
 	civilization_eliminated.emit(owner, cause if cause != "" else "其他")
-	for s in owner.ships:
-		if s.kind != Ship.GRAIN:
-			s.dead = true
-	owner.foils.clear()
-	owner.pending_domains.clear()
-	add_log("%s 灭亡" % owner.name)
-	_check_winner()
+	owner.pending.clear()
+	owner.research_project = {}
+	for ship in owner.ships:
+		if ship.kind != Ship.GRAIN:
+			ship.dead = true
+	# 已发射弹丸、载荷和光粒继续进入同刻批次；终局只在批次结束判断。
+	events.append({"id":next_id(),"kind":"eliminated","t":clock,"owner":civs.find(owner),"cause":cause})
 
 
-## 观战或者玩家死后接着打的，胜负（winner）写赢家的名字，不写「你」「AI」。
 func winner_by_name() -> bool:
 	return spectator or (play_on_after_death and not human().alive)
 
@@ -2746,33 +2711,22 @@ func winner_by_name() -> bool:
 ## 每有文明灭亡就重新判断一次。二向箔可能让好几个文明同时灭亡，
 ## 所以已经分出胜负后还会再改（例如你灭亡后，剩下的 AI 也被压平，就变成「无」）。
 func _check_winner() -> void:
-	if _collapse_depth > 0:
+	if _collapse_depth > 0 or winner != "":
 		return
+	for civ in civs:
+		if civ.alive and civ.colonies.is_empty() and not civ.has_starship():
+			_die(civ, civ.last_anchor_loss_cause if civ.last_anchor_loss_cause != "" else "失去最后生存锚点")
 	var alive := civs.filter(func(c): return c.alive)
-	var result := ""
-	var by_name := winner_by_name()
-	if zero_winner != null:
-		result = zero_winner.name if by_name else ("你" if zero_winner == human() else "AI")
-	elif alive.is_empty():
-		result = "无"
-	elif not spectator and not play_on_after_death and not human().alive:
-		result = "AI"
-	elif alive.size() == 1:
-		result = alive[0].name if by_name else "你"
-	elif all_linear() and line_turns >= Balance.LINE_GRACE_TURNS:
-		result = "平局"
-	if result == "" or result == winner:
+	if alive.size() > 1:
 		return
-	winner = result
-	if by_name and result not in ["无", "平局"]:
-		add_log("%s 胜利" % result)  # 观战局里 0 号文明也叫「你」，不能当成玩家赢了
-		return
-	match result:
-		"你": add_log("你胜利了")
-		"AI": add_log("你失败了")
-		"无": add_log("所有文明都灭亡了")
-		"平局": add_log("整张星图压成直线 %d 回合后还剩 %d 个文明，平局" % [line_turns, alive.size()])
-		_: add_log("%s 胜利" % result)
+	if alive.is_empty():
+		winner = "平局"
+	elif winner_by_name():
+		winner = alive[0].name
+	else:
+		winner = "你" if alive[0] == human() else "AI"
+	events.append({"id": next_id(), "kind": "terminal", "t": clock, "winner": winner})
+	add_log("同刻结算后：" + ("没有存续文明，平局" if alive.is_empty() else "%s 获胜" % alive[0].name))
 
 
 # ---------- 小工具 ----------
@@ -2786,18 +2740,18 @@ func _common_error(civ: Civ) -> String:
 
 
 ## 行动点、能量、矿石够不够（够时为空）。
-func _pay_error(civ: Civ, energy: int, mineral := 0) -> String:
+func _pay_error(civ: Civ, energy: float, mineral: float = 0.0) -> String:
 	if civ.actions_left <= 0:
 		return "行动点用完了，结束回合后恢复"
 	return _money_error(civ, energy, mineral)
 
 
 ## 能量、矿石够不够（够时为空），不看行动点。
-func _money_error(civ: Civ, energy: int, mineral := 0) -> String:
-	if civ.energy < energy:
-		return "能量不足（还差 %d）" % (energy - civ.energy)
-	if civ.mineral < mineral:
-		return "矿石不足（还差 %d）" % (mineral - civ.mineral)
+func _money_error(civ: Civ, energy: float, mineral: float = 0.0) -> String:
+	if civ.energy_millis < WorkOrder.units(energy):
+		return "能量不足（还差 %.3f）" % (energy - civ.energy)
+	if civ.mineral_millis < WorkOrder.units(mineral):
+		return "矿石不足（还差 %.3f）" % (mineral - civ.mineral)
 	return ""
 
 
@@ -2818,3 +2772,664 @@ func random_direction() -> Vector3:
 
 func add_log(line: String) -> void:
 	log_lines.append(line)
+
+
+# ---------- V0.1 工程账本 ----------
+
+func construction_host(civ: Civ, at: Vector3i) -> int:
+	if Knowledge.owns(self,civ,at):
+		return -1
+	var ship := reported_starship(civ)
+	return ship.id if ship != null and ship.cell() == at else -2
+
+
+## 只依照已收到的原母星永久身份判断容量；重殖原坐标与同格星舰都不另开槽。
+func construction_capacity(civ: Civ, at: Vector3i, host: int) -> int:
+	if host == -2:
+		return 0
+	if host < 0 or Balance.HOME_BUILD_SLOTS>Balance.BUILD_SLOTS:
+		var anchor := Knowledge.anchor(self,civ,at)
+		if civ.original_anchor_id>=0 and anchor.get("id",-1)==civ.original_anchor_id:
+			return Balance.HOME_BUILD_SLOTS
+	return Balance.BUILD_SLOTS
+
+
+## 队列归属在受理时冻结；实际工程宿主仍单独保留，不能用同格星舰多开母星槽。
+func construction_queue_id(civ: Civ, at: Vector3i, host: int) -> int:
+	if host<0 or (Balance.HOME_BUILD_SLOTS>Balance.BUILD_SLOTS and Knowledge.owns(self,civ,at)):
+		return Knowledge.anchor(self,civ,at).get("id",-1)
+	return host
+
+
+## 送出的订单也占位；真实完工或失败不能在回执抵达前释放容量。
+func construction_orders(civ: Civ, at: Vector3i, host: int) -> Array[Dictionary]:
+	var orders: Array[Dictionary] = []
+	var anchor_id: int = Knowledge.anchor(self,civ,at).get("id",-1) if host<0 else -1
+	var queue_id := construction_queue_id(civ,at,host)
+	for p in OrderControl.visible(self,civ):
+		if p["category"]!="research" and p.has("queue_id") and queue_id>=0:
+			if p["queue_id"]==queue_id:
+				orders.append(p)
+			continue
+		if p["category"]!="research" and p.get("host_ship", -1) == host and (host >= 0 or p["at"] == at):
+			if host>=0 or anchor_id<0 or p.get("host_id",-1) in [-1,anchor_id]:
+				orders.append(p)
+	return orders
+
+
+func construction_busy(civ: Civ, at: Vector3i, host: int) -> bool:
+	if host>=0 and OrderControl.visible(self,civ).filter(func(project):return project["category"]!="research" and project.get("host_ship",-1)==host).size()>=Balance.BUILD_SLOTS:
+		return true
+	return construction_orders(civ,at,host).size()>=construction_capacity(civ,at,host)
+
+
+func project_host_alive(civ: Civ, project: Dictionary) -> bool:
+	if project.get("host_id",-1)>=0 and Signals.entity(self,civs.find(civ),project["host_id"]).is_empty():
+		return false
+	if project["host_ship"] >= 0:
+		var ship := civ.ship_by_id(project["host_ship"])
+		return ship != null and not ship.dead
+	return civ.owns(project["at"])
+
+
+func project_work_rate(civ: Civ, project: Dictionary) -> float:
+	if not project.get("command_ready", true):
+		return 0.0
+	var dim := Assets.dimension(civ, "anchor", project["at"])
+	var rescue := false
+	if project["host_ship"] >= 0:
+		var host := civ.ship_by_id(project["host_ship"])
+		if host == null or host.dead:
+			return 0.0
+		dim = host.entity_dim
+		rescue = host.dormant
+	else:
+		rescue = civ.dormant_colonies.has(project["at"])
+	if rescue:
+		if project["kind"] not in ["miner", "fission", "probe", "interstellar_travel", "colony"] or not project["modules"].is_empty():
+			return 0.0
+		if project["category"] != "research" and project["kind"] not in ["probe", "colony"]:
+			return 0.0
+		for other in WorldTime.orders(civ):
+			if other["id"] >= project["id"] or not other.get("command_ready", true) or not project_host_alive(civ, other):
+				continue
+			var dormant := civ.dormant_colonies.has(other["at"])
+			if other["host_ship"] >= 0:
+				dormant = civ.ship_by_id(other["host_ship"]).dormant
+			var eligible: bool = other["kind"] in ["miner", "fission", "probe", "interstellar_travel", "colony"] if other["category"] == "research" else other["kind"] in ["probe", "colony"] and other["modules"].is_empty()
+			if dormant and eligible:
+				return 0.0
+	return Balance.DIMENSION_WORK[str(dim)] * (Balance.RESCUE_WORK_FACTOR if rescue else 1.0)
+
+
+func _module_error(civ: Civ, kind: String, modules: Array) -> String:
+	var seen := {}
+	for module in modules:
+		if seen.has(module) or not Balance.MODULE_COST.has(module):
+			return "模块重复或未知"
+		seen[module] = true
+		if not civ.has_tech(module):
+			return "尚未研究模块：%s" % Tech.title(module)
+		if module == "warp":
+			if kind not in ["warship", "colony", "starship", "devourer"]:
+				return "这种舰体不能安装曲率引擎"
+		elif kind != "warship":
+			return "这种模块只用于恒星级战舰"
+	return ""
+
+
+func _complete_project(civ: Civ, project: Dictionary) -> void:
+	var at: Vector3i = project["at"]
+	var kind: String = project["kind"]
+	if kind == "wandering_earth":
+		EarthTransform.complete(self,civ,project)
+		return
+	if project["category"] == "conversion":
+		Conversion.complete(self, civ, project)
+		return
+	if project["category"] == "upgrade":
+		if kind == "telescope":
+			pass # 全局视距升级在完成回报送达控制端后生效。
+		else:
+			civ.warnings[at] += 1
+			civ.warning_level = civ.warnings.get(civ.home, 0)
+		return
+	if project["category"] == "refit":
+		var ship := civ.ship_by_id(project["target_ship"])
+		if ship == null or ship.dead:
+			return
+		ship.work_locked = false
+		for module in project["modules"]:
+			ship.modules.append(module)
+			if module in ["railgun", "beam", "hbomb", "torpedo"]:
+				ship.weapons.append(module)
+		ship.warp = ship.modules.has("warp")
+		ship.gravity = ship.modules.has("gravity")
+		var paid := WorkOrder.salvage(project)
+		ship.cost[0] += paid[0]
+		ship.cost[1] += paid[1]
+		return
+	if project["category"] == "miner_refit":
+		var original := Assets.at(civ, "miner", at)
+		if not original.is_empty():
+			original[0]["kind"] = "advanced_miner"
+			var extra := WorkOrder.salvage(project)
+			for i in 2:
+				original[0]["paid"][i] += extra[i]
+		civ.miners[at] -= 1
+		civ.advanced_miners[at] = civ.advanced_miners.get(at, 0) + 1
+		return
+	if kind == "landing":
+		var ship := civ.ship_by_id(project["host_ship"])
+		if ship != null:
+			ship.work_locked = false
+			if can_settle(at) and landing_site_survives(ship,at):
+				_remove_ship(civ, ship)
+				_add_colony(civ, at,ship.entity_dim)
+		return
+	match kind:
+		"miner": civ.miners[at] = civ.miners.get(at, 0) + 1
+		"advanced_miner": civ.advanced_miners[at] = civ.advanced_miners.get(at, 0) + 1
+		"dyson": civ.dysons[at] = civ.dysons.get(at, 0) + 1
+		"bunker": civ.bunkers[at] = true
+		"broadcaster": civ.broadcasters[at] = true
+		"warning":
+			civ.warnings[at] = 0
+			civ.has_warning = true
+		"antimatter": pass # 完成回报到达后才进入可下令弹药库存。
+		"grain": civ.grains[at] = true
+		"dimension_weapon": pass
+		_:
+			if not UNITS.has(kind):
+				return
+			var pos := Vector3(at)
+			if project["host_ship"] >= 0:
+				pos = civ.ship_by_id(project["host_ship"]).pos
+			var ship := Ship.make(kind, pos, next_id())
+			project["result_ship"]=ship.id
+			ship.entity_dim = Assets.dimension(civ, "anchor", at) if project["host_ship"] < 0 else civ.ship_by_id(project["host_ship"]).entity_dim
+			ship.cost = WorkOrder.salvage(project)
+			ship.modules.assign(project["modules"])
+			for module in ship.modules:
+				if module in ["railgun", "beam", "hbomb", "torpedo"]:
+					ship.weapons.append(module)
+			ship.warp = ship.modules.has("warp")
+			ship.gravity = ship.modules.has("gravity")
+			ship.interstellar = kind == Ship.NUCLEAR_PROBE
+			civ.ships.append(ship)
+			Signals.report_ship(self, civ, ship)
+			Signals.receive_due(self)
+			if kind == Ship.STARSHIP:
+				civ.starship_ever_built = true
+	if kind in FACILITIES:
+		Assets.make(self, civ, kind, at, WorkOrder.salvage(project), Assets.dimension(civ, "anchor", at))
+
+
+func cancel_order_error(civ: Civ, id: int) -> String:
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	for order in OrderControl.visible(self,civ):
+		if order["id"]==id:
+			return "取消命令已发出" if order.get("cancel_pending",false) else ""
+	return "没有这项已知未完成工程"
+
+
+func cancel_order(civ: Civ, id: int) -> Dictionary:
+	var error := cancel_order_error(civ,id)
+	if error != "":
+		return {"error":error}
+	var order: Dictionary = civ.order_reports[id]
+	var recipient: int = order.get("host_id",order["host_ship"])
+	if recipient<0:
+		var anchor:=Knowledge.anchor(self,civ,order["at"])
+		if not anchor.is_empty():
+			recipient=anchor["id"]
+	order["cancel_pending"]=true
+	queue_entity_command(civ,recipient,Vector3(order["at"]),{"name":"cancel_order","project":id},[0,0],false)
+	_record(civ,"cancel_order",[id])
+	return {"error":"","refund":[0.0,0.0]}
+
+
+func _refresh_permissions(civ: Civ) -> void:
+	Assets.ensure(self,civ)
+	var plan:=Economy.plan(self,civ)
+	var reference: Array = plan["reference"]
+	var events := [false, civ.discovered, civ.contacted, civ.conquered]
+	for tier in [1, 2, 3]:
+		var gate: Array = Balance.TIER_NET_INCOME[str(tier)]
+		if not events[tier] or civ.tier_turn(tier)>=0 or civ.pending_permissions.has(tier) or reference[0]<gate[0] or reference[1]<gate[1]:
+			continue
+		# 账本可即时结算余额，但远端增产、停机和损失不能经权限按钮提前暴露。
+		# 同一时点冻结达标证明；来源分别走实际光路，不能用一个全局直线延时替代。
+		var receiver:=Signals.controller(civ)
+		var origins: Array[Dictionary]=[{"pos":Vector3(civ.home),"recipient":receiver}]
+		for item in plan["items"]:
+			var pos:=Vector3(item["at"])
+			var via:=receiver
+			if item.has("id"):
+				pos=Signals.entity(self,civs.find(civ),item["id"]).get("pos",pos)
+			if item["kind"]=="coverage":
+				via=int(item["key"].get_slice(":",2))
+			var source: Dictionary={"pos":pos,"recipient":via}
+			if not origins.has(source):
+				origins.append(source)
+		# 已毁来源只能等待毁坏时已发出的回报，不能事后在空址造一份报告。
+		var missing_sites: Array[int]=[]
+		var missing_ships: Array[int]=[]
+		for cell in Knowledge.colonies(self,civ):
+			if not civ.owns(cell):
+				missing_sites.append(cell_ids.get(cell,-1))
+		for ship in Signals.reported_ships(self,civ):
+			if Signals.entity(self,civs.find(civ),ship.id).is_empty():
+				missing_ships.append(ship.id)
+		var ticket:=next_id()
+		var waiting:=range(origins.size())
+		civ.pending_permissions[tier]={"id":ticket,"waiting":waiting,"missing_sites":missing_sites,"missing_ships":missing_ships}
+		for i in origins.size():
+			Signals.send(self,civs.find(civ),origins[i]["pos"],origins[i]["recipient"],"sensor",{
+				"type":"permission","tier":tier,"ticket":ticket,"source":i,"t_observed":clock,"epoch":space_epoch})
+	Signals.receive_due(self)
+
+
+func emergency_work_error(civ: Civ, resource: String, anchor_id := -1) -> String:
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	if resource not in ["E", "M"]:
+		return "一次只能选择一种资源"
+	if civ.emergency_turn == turn:
+		return "本回合已经进行过应急作业"
+	if Knowledge.origins(self,civ).is_empty():
+		return "没有存续锚点"
+	if anchor_id>=0 and not Conversion.is_anchor(Knowledge.entity(self,civ,anchor_id)):
+		return "请选择现有生存锚点"
+	return _pay_error(civ, 0.0)
+
+
+func emergency_work(civ: Civ, resource: String, anchor_id := -1) -> Dictionary:
+	var error := emergency_work_error(civ, resource,anchor_id)
+	if error != "":
+		return {"error": error}
+	Assets.ensure(self,civ)
+	if anchor_id<0:
+		anchor_id=Signals.controller(civ)
+	var host:=Knowledge.entity(self,civ,anchor_id)
+	var dim: int=host["ship"].entity_dim if host.has("ship") else host["asset"]["entity_dim"]
+	var amount: float=Balance.EMERGENCY_YIELD*Balance.DIMENSION_OUTPUT[str(dim)]
+	civ.emergency_turn = turn
+	queue_entity_command(civ,anchor_id,host["pos"],{"name":"emergency","resource":resource},[0,0],true)
+	_record(civ, "emergency_work", [resource,anchor_id])
+	return {"error": "", "yield": amount}
+
+
+func refit_error(civ: Civ, ship_id: int, modules: Array) -> String:
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	var ship := Signals.reported_ship(self,civ,ship_id)
+	if ship == null or ship.dead or ship.work_locked or not ship.waiting():
+		return "需要一艘空闲待命的己方舰船"
+	if OrderControl.visible(self,civ).any(func(project):return project["category"]=="refit" and project.get("target_ship",-1)==ship_id):
+		return "这艘舰船已有改装施工或正在等待回报"
+	if modules.is_empty():
+		return "需要选择新增模块"
+	var module_error := _module_error(civ, ship.kind, modules)
+	if module_error != "":
+		return module_error
+	for module in modules:
+		if ship.modules.has(module):
+			return "已经安装这个模块"
+	var host := construction_host(civ, ship.cell())
+	if host == -2 or construction_busy(civ, ship.cell(), host):
+		return "改装需要所在锚点的空闲工程队列"
+	if Knowledge.site(self,civ,ship.cell()).get("dormant",false) or (host >= 0 and Signals.reported_ship(self,civ,host).dormant):
+		return "休眠锚点不能进行普通改装"
+	var cost := refit_cost(modules)
+	return _pay_error(civ, cost[0], cost[1])
+
+
+static func refit_cost(modules: Array) -> Array:
+	var cost := [0.0, 0.0]
+	for module in modules:
+		var price: Array = Balance.MODULE_COST.get(module, [0, 0])
+		cost[0] += price[0]
+		cost[1] += price[1]
+	return cost
+
+
+func refit_ship(civ: Civ, ship_id: int, modules: Array) -> Dictionary:
+	var error := refit_error(civ, ship_id, modules)
+	if error != "":
+		return {"error": error}
+	var ship := Signals.reported_ship(self,civ,ship_id)
+	var cost := refit_cost(modules)
+	var work := 0.0
+	for module in modules:
+		work += Balance.MODULE_WORK[module]
+	var project := WorkOrder.create(next_id(), ship.kind, ship.cell(), cost, work, "refit")
+	project["host_ship"] = construction_host(civ, ship.cell())
+	project["target_ship"] = ship_id
+	project["modules"] = modules.duplicate()
+	Economy.charge(self,civ,cost,"project")
+	civ.actions_left -= 1
+	civ.pending.append(project)
+	OrderControl.submit(self,civ,project)
+	_record(civ, "refit_ship", [ship_id, modules.duplicate()])
+	return {"error": "", "order": project["id"]}
+
+
+## 只供命令到达和实际施工检查，不能在下令按钮读取尚未回报的格子维度。
+func landing_site_survives(ship: Ship,at: Vector3i) -> bool:
+	var cell_dim: int=cell_dims.get(cell_ids.get(at,-1),dimension)
+	return ship!=null and not ship.dead and cell_dim>0 and ship.entity_dim<=cell_dim
+
+
+func landing_error(civ: Civ, ship_id: int) -> String:
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	if not civ.has_tech("colony"):
+		return "需要研究109星际殖民"
+	var ship := Signals.reported_ship(self,civ,ship_id)
+	if ship == null or ship.dead or ship.kind != Ship.COLONY or ship.work_locked or not ship.waiting():
+		return "需要抵达目的地、空闲待命的运输船"
+	if not known_habitable(civ).has(ship.cell()):
+		return "尚未收到当前位置可殖民的观测"
+	if construction_busy(civ, ship.cell(), ship.id):
+		return "运输船已经在施工"
+	var cost := Construction.cost("landing")
+	return _pay_error(civ, cost[0], cost[1])
+
+
+func start_landing(civ: Civ, ship_id: int) -> Dictionary:
+	var error := landing_error(civ, ship_id)
+	if error != "":
+		return {"error": error}
+	var ship := Signals.reported_ship(self,civ,ship_id)
+	var cost := Construction.cost("landing")
+	var project := WorkOrder.create(next_id(), "landing", ship.cell(), cost, Construction.work("landing"))
+	project["host_ship"] = ship_id
+	Economy.charge(self,civ,cost,"project")
+	civ.actions_left -= 1
+	civ.pending.append(project)
+	OrderControl.submit(self,civ,project)
+	_record(civ, "start_landing", [ship_id])
+	return {"error": "", "order": project["id"]}
+
+
+func refit_miner_error(civ: Civ, at: Vector3i = AT_HOME) -> String:
+	if at == AT_HOME:
+		at = civ.home
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	var known:=Knowledge.site(self,civ,at)
+	if not civ.has_tech("mining_advanced") or not known.get("owned",false) or known.get("miners",0)<1:
+		return "需要008科技及本地一艘基础矿船"
+	var reserved := OrderControl.visible(self,civ).filter(func(project):return project["category"]=="miner_refit" and project["at"]==at).size()
+	if known.get("miners",0)<=reserved:
+		return "当地基础矿船均已安排改装，需等待改装或取消回报"
+	if known.get("dormant",false):
+		return "休眠锚点不能进行普通改装"
+	if construction_busy(civ, at, -1):
+		return "这个锚点已有工程进行中"
+	return _pay_error(civ, Balance.MINER_REFIT_COST[0], Balance.MINER_REFIT_COST[1])
+
+
+func refit_miner(civ: Civ, at: Vector3i = AT_HOME) -> Dictionary:
+	if at == AT_HOME:
+		at = civ.home
+	var error := refit_miner_error(civ, at)
+	if error != "":
+		return {"error": error}
+	var cost := Balance.MINER_REFIT_COST
+	var project := WorkOrder.create(next_id(), "advanced_miner", at, cost, Balance.MINER_REFIT_WORK, "miner_refit")
+	Economy.charge(self,civ,cost,"project")
+	civ.actions_left -= 1
+	civ.pending.append(project)
+	OrderControl.submit(self,civ,project)
+	_record(civ, "refit_miner", [at])
+	return {"error": "", "order": project["id"]}
+
+
+func ensure_cells() -> void:
+	if not cell_ids.is_empty():
+		return
+	for cell in map.cells():
+		var id := cell_ids.size() + 1
+		cell_ids[cell] = id
+		cell_dims[id] = dimension
+
+
+func physical_cell_size() -> float:
+	return Balance.DIMENSION_CELL_SIZE[str(dimension)]
+
+
+func background_light() -> float:
+	return Balance.DIMENSION_LIGHT[str(dimension)]
+
+
+func relative_light(pos: Vector3) -> float:
+	return minf(light_at(Vector3i(pos.round())), Hazards.suppression(self, pos))
+
+
+func light_speed_at(pos: Vector3) -> float:
+	var dim: int = cell_dims.get(cell_ids.get(Vector3i(pos.round()), -1), dimension)
+	return 0.0 if dim == 0 else Balance.DIMENSION_LIGHT[str(dim)] * relative_light(pos)
+
+
+func _receive_command(message: Dictionary, exists: bool) -> void:
+	var civ: Civ = civs[message["owner"]]
+	var body: Dictionary = message["body"]
+	var ship := civ.ship_by_id(message["recipient"])
+	var valid := exists and civ.alive
+	if body["name"] in ["scan","broadcast","payload","emergency","grain"]:
+		valid = valid and _execute_source_command(civ,message["recipient"],body)
+	elif body["name"]=="weapon_policy":
+		valid = valid and ship!=null and not ship.dead
+		if valid:
+			ship.weapon_policy=body["policy"]
+	elif body["name"] == "antimatter":
+		valid = valid and _fire_antimatter(civ,message["recipient"],body["target_id"])
+	elif body["name"] == "activate_project":
+		valid = valid and OrderControl.activate(self,civ,body["project"])
+		if not valid:
+			var project:=OrderControl.find(civ,body["project"])
+			if not project.is_empty():
+				OrderControl.discard(self,civ,project,"destroyed")
+	elif body["name"] == "cancel_order":
+		body["returned"] = OrderControl.cancel(self,civ,body["project"]) if valid else [0,0]
+	elif ship == null or ship.dead or ship.dormant or ship.work_locked:
+		valid = false
+	elif valid:
+		match body["name"]:
+			"dispatch", "turn_ship":
+				var direction := space_direction(body["direction"])
+				if ship.direction.dot(direction) < 0.0:
+					ship.speed = 0.0
+				ship.direction = direction
+				ship.docked = false
+				ship.parked = false
+				ship.slow_start = body.get("slow", false) and ship.kind in [Ship.PROBE,Ship.NUCLEAR_PROBE]
+			"send_colony", "move_starship", "send_sophon":
+				_set_target(ship, body["target"])
+			_: valid = false
+	var reserved: Array = body.get("reserved", [0, 0])
+	Signals.send(self, civs.find(civ), message["pos"], Signals.controller(civ), "report",
+			{"type": "command_result", "executed": valid, "refund": body.get("returned",[0,0]) if valid else reserved,
+			"ammo_refund": 0 if valid else body.get("ammo_reserved",0),
+			"dimension_refund": 0 if valid else body.get("dimension_reserved",0),
+			"payload_id":body.get("payload_id",-1),
+			"scan_ready_at": body.get("scan_ready_at",-1.0),
+			"command": message["id"], "t_observed": clock, "source_id": message["recipient"], "epoch": space_epoch,
+			"request_name": body["name"], "request_target": body.get("target", NO_HIT),
+			"reason": "" if valid else "命令抵达时宿主已失效、停机或被工程占用"})
+	if ship != null:
+		Signals.report_ship(self, civ, ship)
+	events.append({"id": message["id"], "t": clock, "kind": "command_arrived", "recipient": message["recipient"], "executed": valid})
+
+
+func prepare_conversion(civ: Civ, ids: Array, host_id: int, emergency: bool, automatic: bool) -> Dictionary:
+	var result := Conversion.prepare(self, civ, ids, host_id, emergency, automatic)
+	if result["error"] == "":
+		_record(civ, "prepare_conversion", [ids, host_id, emergency, automatic])
+	return result
+
+
+func execute_conversion(civ: Civ, plan_id: int) -> Dictionary:
+	var result := Conversion.execute(self, civ, plan_id)
+	if result["error"] == "":
+		_record(civ, "execute_conversion", [plan_id])
+	return result
+
+
+func command_cost(civ: Civ, ship: Ship) -> int:
+	if ship.kind in [Ship.PROBE, Ship.NUCLEAR_PROBE, Ship.COLONY] or civ.has_tech("dark_energy"):
+		return 0
+	return maxi(0, Balance.COST_TURN - (Balance.FUSION_DISCOUNT if civ.has_tech("fusion") else 0) - (Balance.COLLECTION_DISCOUNT if civ.has_tech("antimatter_collection") else 0))
+
+
+func queue_ship_command(civ: Civ, ship: Ship, body: Dictionary, energy_cost: float) -> void:
+	queue_entity_command(civ,ship.id,ship.pos,body,[energy_cost,0.0],true)
+
+
+func ship_command_pending(civ: Civ, id: int) -> bool:
+	for pending in civ.command_pending.values():
+		if pending["recipient"] == id:
+			return true
+	return false
+
+
+func scan_error(civ: Civ, direction: Vector3) -> String:
+	var error := _common_error(civ)
+	if error != "":
+		return error
+	if not civ.has_tech("gravity_scan"):
+		return "需要103引力波探测"
+	if Knowledge.scan_source(self,civ).is_empty():
+		return "原母星已失去；只有仍存续母星或流浪地球能扫描"
+	if clock < civ.scan_ready_at:
+		return "扫描冷却还需 %.2f 年" % (civ.scan_ready_at-clock)
+	if space_direction(direction) == Vector3.ZERO:
+		return "需要指定扫描方向"
+	return _pay_error(civ,Balance.SCAN_COST[0],Balance.SCAN_COST[1])
+
+
+func active_scan(civ: Civ, direction: Vector3) -> Dictionary:
+	var error := scan_error(civ,direction)
+	if error != "":
+		return {"error":error}
+	var source:=Knowledge.scan_source(self,civ)
+	civ.scan_ready_at=INF
+	queue_entity_command(civ,source["id"],source["pos"],{"name":"scan","direction":direction},Balance.SCAN_COST,true)
+	_record(civ,"active_scan",[direction])
+	return {"error":""}
+
+
+func start_earth(civ: Civ, ids: Array, rocky: int) -> Dictionary:
+	var error := EarthTransform.known_error(self,civ,ids,rocky)
+	if error != "":
+		return {"error":error}
+	var result := _submit_build(civ,"wandering_earth",civ.original_home,[])
+	if result["error"] != "":
+		return result
+	for project in civ.pending:
+		if project["id"] == result["order"]:
+			project["earth_roster"] = ids.duplicate()
+			project["earth_rocky"] = rocky
+	_record(civ,"start_earth",[ids.duplicate(),rocky])
+	return result
+
+
+func queue_entity_command(civ: Civ, id: int, pos: Vector3, body: Dictionary, cost: Array, spend_ap: bool) -> void:
+	var control := Signals.entity(self,civs.find(civ),Signals.controller(civ))
+	if spend_ap:
+		civ.actions_left-=1
+	Economy.charge(self,civ,cost,body["name"])
+	body["reserved"]=[WorkOrder.units(cost[0]),WorkOrder.units(cost[1])]
+	body["recipient_pos"]=pos
+	var message := Signals.send(self,civs.find(civ),control["pos"],id,"command",body)
+	civ.command_pending[message["id"]]={"recipient":id,"name":body["name"],"sent":clock}
+	Signals.receive_due(self)
+
+
+func reported_starship(civ: Civ) -> Ship:
+	for ship in Signals.reported_ships(self,civ):
+		if ship.kind in [Ship.STARSHIP,Ship.WANDERING_EARTH]:
+			return ship
+	return null
+
+
+func _execute_source_command(civ: Civ,id: int,body: Dictionary) -> bool:
+	var source := Signals.entity(self,civs.find(civ),id)
+	if source.is_empty():
+		return false
+	var pos: Vector3=source["pos"]
+	var cell:=Vector3i(pos.round())
+	if body["name"]=="emergency":
+		if not Conversion.is_anchor(source):
+			return false
+		var dim: int=source["ship"].entity_dim if source.has("ship") else source["asset"]["entity_dim"]
+		var gained:=WorkOrder.units(Balance.EMERGENCY_YIELD*Balance.DIMENSION_OUTPUT[str(dim)])
+		body["returned"]=[gained,0] if body["resource"]=="E" else [0,gained]
+		return true
+	if (source.has("ship") and source["ship"].dormant) or (source.has("asset") and civ.dormant_colonies.has(cell)):
+		return false
+	match body["name"]:
+		"grain":
+			if not civ.grains.has(cell) or relative_light(pos)<Balance.GRAIN_MIN_LIGHT:
+				return false
+			civ.grains.erase(cell)
+			var grain:=Ship.make(Ship.GRAIN,pos,next_id())
+			grain.docked=false
+			grain.direction=space_direction(body["direction"])
+			grain.origin_cell_id=cell_ids.get(cell,-1)
+			civ.ships.append(grain)
+			Signals.report_ship(self,civ,grain)
+			Knowledge.report_site(self,civ,cell)
+		"scan":
+			Information.scan(self,civ,source,space_direction(body["direction"]))
+			body["scan_ready_at"]=clock+Balance.SCAN_COOLDOWN
+		"broadcast":
+			if source.has("ship"):
+				if not source["ship"].gravity:
+					return false
+			elif not can_broadcast_now(civ,cell):
+				return false
+			var exposed:=NO_HIT
+			if source.has("asset") and rng.randf()<pow(0.5,pos.distance_to(Vector3(body["target"]))*physical_cell_size()/Balance.BROADCAST_EXPOSE_HALF):
+				exposed=cell
+			Information.broadcast(self,civ,pos,body["target"],exposed)
+		"payload":
+			SpaceEvents.launch(self,civs.find(civ),pos,Vector3(body["target"]),body["kind"],body["payload_id"])
+	return true
+
+
+func set_weapon_policy(civ: Civ,ship_id: int,policy: String) -> Dictionary:
+	if policy not in ["lethal","economy","special"]:
+		return {"error":"未知武器优先级"}
+	var ship:=Signals.reported_ship(self,civ,ship_id)
+	if ship==null or ship.kind!=Ship.WARSHIP or _common_error(civ)!="":
+		return {"error":"需要已知己方战舰"}
+	queue_entity_command(civ,ship_id,ship.pos,{"name":"weapon_policy","policy":policy},[0,0],false)
+	_record(civ,"set_weapon_policy",[ship_id,policy])
+	return {"error":""}
+
+
+func set_maintenance(civ: Civ,priority: Array,stopped: Array) -> Dictionary:
+	if _common_error(civ)!="":
+		return {"error":_common_error(civ)}
+	var keys: Array=Knowledge.maintenance(self,civ).map(func(p):return p["key"])
+	var seen: Dictionary={}
+	for key in priority:
+		if not keys.has(key) or seen.has(key):
+			return {"error":"维护顺序含未知或重复对象"}
+		seen[key]=true
+	for key in stopped:
+		if not keys.has(key):
+			return {"error":"停止列表含未知对象"}
+	civ.maintenance_priority.assign(priority)
+	civ.stopped_packages.assign(stopped)
+	_record(civ,"set_maintenance",[priority.duplicate(),stopped.duplicate()])
+	return {"error":""}

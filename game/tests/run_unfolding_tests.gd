@@ -324,7 +324,7 @@ func capture(label: String) -> void:
 	check(root.get_texture().get_image().save_png(output.path_join(label + ".png")) == OK, "保存截图")
 
 
-## 规则：V4
+## 规则：二维、单向著和奇异点
 ## 远处体素在波前到达之前逐回合向固定终点移动，不把主要位移挤在末尾。
 func test_anticipatory_motion() -> void:
 	for to_line in [false, true]:
@@ -346,7 +346,7 @@ func test_anticipatory_motion() -> void:
 		check(halfway["amounts"][index] > 0.1, "扩散走到一半时远处体素已有明显进度")
 
 
-## 规则：V4
+## 规则：二维、单向著和奇异点
 ## 同一条曲线覆盖全部体素，中间展开不产生新端点，二维到一维沿用原编号。
 func test_curve_display() -> void:
 	for input in demo.anchor_inputs:

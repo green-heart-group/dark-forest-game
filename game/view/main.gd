@@ -14,6 +14,7 @@ const Tip := preload("res://view/tip.gd")
 const WebFiles := preload("res://view/web_files.gd")
 const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
+const MigrationPreview := preload("res://view/migration_preview.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -25,6 +26,7 @@ var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
 var saves := SavedGames.new()
 var tech_tree := TechTree.new()
+var migration_preview := MigrationPreview.new()
 var panel_toggle := Button.new()
 var compact := false
 var _layout_ready := false
@@ -83,6 +85,8 @@ func _ready() -> void:
 	_layer.add_child(panel_toggle)
 	tech_tree.setup(self)
 	_layer.add_child(tech_tree)
+	migration_preview.setup(self)
+	_layer.add_child(migration_preview)
 	panel.offset_top = 46
 	add_child(window_settings)
 	window_settings.setup(self)
@@ -139,12 +143,14 @@ func refresh() -> void:
 	map.refresh(me, aim, overlay.show_vision.button_pressed, reveal.button_pressed)
 	overlay.refresh(me)
 	tech_tree.refresh(me)
+	migration_preview.refresh(me)
 	if debug != null:
 		debug.refresh_panel()
 
 
 ## 换一个局面（新开一局、回放跳到别的回合）：重画网格，不播放压平的动画。
 func set_state(s: GameState) -> void:
+	migration_preview.hide()
 	state = s
 	panel.set_feedback("")
 	panel.actions.reset()
@@ -222,6 +228,11 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	var key := event as InputEventKey
+	if migration_preview.visible and from == get_viewport():
+		if key.keycode == KEY_ESCAPE:
+			migration_preview.close_preview()
+			from.set_input_as_handled()
+		return
 	if tech_tree.visible and from == get_viewport():
 		if key.keycode == KEY_ESCAPE:
 			tech_tree.close_tree()

@@ -40,6 +40,10 @@ func test_broadcast_reveals_owner_and_needs_source() -> void:
 	var third := Civ.new("第三方", false, Vector3i(0, 3, 0))
 	third.broadcasters[third.home] = true
 	s.civs.append(third)
+	_set_star(s,third.home,StarMap.Star.SINGLE)
+	third.energy=100
+	third.mineral=100
+	s.start_turn(third)
 	_turns(s, 5)
 	check(third.known.has(Vector3i.ZERO), "听到的人知道被广播的星系")
 

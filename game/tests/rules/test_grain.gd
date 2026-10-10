@@ -5,22 +5,30 @@ extends "res://tests/rules/rule_suite.gd"
 ## 规则：光粒，建造
 func test_grain_build_then_launch_flies_and_wipes_system() -> void:
 	var s := _two_civs(Vector3i(3, 0, 0))
+	var third:=Civ.new("旁观文明",false,Vector3i(8,8,8))
+	s.civs.append(third)
+	_set_star(s,third.home,StarMap.Star.SINGLE)
+	s.start_turn(third)
 	var me := s.human()
 	check(s.build(me, "grain")["error"] != "", "没有光粒投送科技不能造")
 	_give(me, ["grain"])
 	var m := me.mineral
-	check(s.build(me, "grain")["error"] == "" and me.grains.has(Vector3i.ZERO), "造光粒，存在星系里")
+	check(s.build(me, "grain")["error"] == "" and me.grains.is_empty(), "光粒提交6W工程，不立即获得弹药")
 	check(me.mineral == m - Balance.COST_GRAIN[1], "造光粒花矿石")
 	check(s.build(me, "grain")["error"] != "", "每个星系最多存 1 颗")
+	_turns(s,6)
+	check(me.grains.has(me.home),"完工后收到光粒库存")
 	var e := me.energy
 	check(s.launch_grain(me, Vector3(1, 0, 0))["error"] == "", "发射光粒")
 	check(me.energy == e - Balance.COST_GRAIN_LAUNCH and me.grains.is_empty(), "发射花能量，光粒用掉")
-	_turns(s, 3)
-	check(s.civs[1].alive, "飞了 3 回合（0.5、1.5、2.5 格），还没到")
+	_turns(s, 2)
+	check(s.civs[1].alive, "2年飞1.98ly，还没进入3ly目标的.25ly碰撞半径")
 	s.end_turn()
-	check(not s.civs[1].alive and s.winner == "你", "第 4 回合打中，抹掉那里的文明")
+	check(not s.civs[1].alive and not s.is_over(), "第3年打中；仍有两个文明故继续")
 	check(s.map.star_at(Vector3i(3, 0, 0)) == StarMap.Star.NONE, "毁掉 1 颗恒星")
-	check(me.record_hits.has(Vector3i(3, 0, 0)), "打中记在敌情记录图上")
+	check(not me.record_hits.has(Vector3i(3,0,0)),"真实命中不能瞬间写远端战报")
+	_turns(s,3)
+	check(me.record_hits.has(Vector3i(3,0,0)) and not me.battle_reports.is_empty(),"3ly战报回传后保留原敌情标记功能")
 
 
 ## 规则：掩体，光粒
@@ -39,7 +47,7 @@ func test_grain_bunker_keeps_civ_and_costs_star_and_dyson() -> void:
 	check(ai.hit_dirs.size() == 1 and ai.hit_dirs[0]["dir"].x < -0.9, "被打的一方知道打击从哪个方向来")
 
 
-## 规则：光粒，T20
+## 规则：光粒
 func test_grain_passes_starless_system() -> void:
 	var s := _two_civs(Vector3i(2, 0, 0))
 	var ai := s.civs[1]
@@ -54,13 +62,17 @@ func test_grain_passes_starless_system() -> void:
 
 
 ## 规则：光粒，自身降维
-func test_grain_no_effect_on_reduced() -> void:
+func test_grain_still_hits_converted_entity() -> void:
 	var s := _two_civs(Vector3i(2, 0, 0))
 	s.civs[1].reduced = true
+	Assets.ensure(s,s.civs[1])
+	for asset in s.civs[1].assets:
+		asset["entity_dim"] = 2
+	check_eq(s.civs[1].assets[0]["entity_dim"],2,"夹具明确采用已转换实体")
 	var g := _ship(s, s.human(), Ship.GRAIN, Vector3.ZERO, Vector3(1, 0, 0))
 	g.speed = 1.0
 	_turns(s, 3)
-	check(s.civs[1].alive and s.map.star_at(Vector3i(2, 0, 0)) == StarMap.Star.SINGLE, "降维的文明不怕光粒")
+	check(not s.civs[1].alive and s.map.star_at(Vector3i(2, 0, 0)) == StarMap.Star.NONE, "转换不产生额外光粒免疫")
 
 
 ## 只有一个星系、星舰停在那里：光粒打中后星系和星舰都没了，文明要灭亡，不能「只剩星舰」地活着。
