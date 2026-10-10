@@ -10,7 +10,11 @@ static func begin(s: GameState, origin: Vector3) -> Dictionary:
 		"size":s.physical_cell_size(),"speed":s.background_light()}
 
 
-static func environment(s: GameState) -> Dictionary:
+## uniform：调用方已确认全图光速处处相同（Hazards.uniform_light）。这时逐格算出来的就是这份空表，不用再扫一遍地图。
+static func environment(s: GameState, uniform := false) -> Dictionary:
+	if uniform and s.domain_cells.is_empty():
+		return {"size":s.physical_cell_size(),"speed":s.background_light(),"speeds":{},
+			"immunity":{},"domains":[],"lines":[],"epoch":s.space_epoch}
 	var speeds := {}
 	var immunity := {}
 	for cell in s.cell_ids:
@@ -146,10 +150,10 @@ static func _trace(ray: Dictionary, env: Dictionary, start: float, end: float) -
 		t+=dt
 
 
-static func events_in(s: GameState, motions: Dictionary, dt: float) -> Array[Dictionary]:
+static func events_in(s: GameState, motions: Dictionary, dt: float, uniform := false) -> Array[Dictionary]:
 	var out: Array[Dictionary]=[]
 	if (s.broadcasts.is_empty() and s.scans.is_empty()) or s.clock<s.remap_until: return out
-	var env:=environment(s)
+	var env:=environment(s,uniform)
 	for wave in Information.waves(s):
 		if not wave.has("propagation"): continue
 		for owner in s.civs.size():
@@ -193,7 +197,7 @@ static func resolve(s: GameState, events: Array[Dictionary], dt: float) -> void:
 			if wave["id"]!=event["wave"]: continue
 			wave["propagation"]["received"][ship.id]=s.clock
 			if wave.has("sender"):
-				Information._hear(s,wave,civ,ship.pos)
+				Information._hear(s,wave,civ,ship.pos,s.clock)
 			else:
 				Signals.send(s,wave["owner"],ship.pos,wave["source_id"],"sensor",{
 					"type":"entity","scan":wave["id"],"source_id":wave["source_id"],"t_observed":s.clock,"epoch":s.space_epoch,

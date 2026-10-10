@@ -72,10 +72,10 @@ static func advance(s: GameState, duration: float) -> void:
 			dt = minf(dt, s.remap_until - s.clock)
 		dt = minf(dt, s.next_sensor_time - s.clock)
 		dt = minf(dt, next_completion(s))
-		var message_motions:=Signals.plan(s)
-		dt = minf(dt, Signals.next_arrival(s,message_motions))
-		# 光速处处相同时，广播光线和消息过格子边界什么都不变，不在那里停。
+		# 广播光线和消息过光速不同的边界时，在子步里自己分段走（Hazards.light_travel），不让整个世界停下。
 		var uniform := Hazards.uniform_light(s)
+		var message_motions:=Signals.plan(s,uniform)
+		dt = minf(dt, Signals.next_arrival(s,message_motions))
 		dt = minf(dt, Information.next_change(s, uniform))
 		var detail:=Time.get_ticks_usec() if s.profiling else 0
 		var motions := {}
@@ -104,10 +104,6 @@ static func advance(s: GameState, duration: float) -> void:
 				if speed > 0.0:
 					dt = minf(dt, shot["remaining"] / speed)
 				dt = minf(dt, Hazards.next_boundary(s, Combat.projectile_motion(s, shot), dt))
-		if not uniform:
-			for message in s.messages:
-				var m: Dictionary = message_motions[message["id"]]
-				dt = minf(dt, Hazards.next_boundary(s, {"pos": message["pos"], "velocity": m["velocity"], "acceleration": Vector3.ZERO}, dt))
 		if s.profiling:
 			detail=s._lap("细分/移动与环境边界",detail)
 		dt = minf(dt, TacticalEvents.next_change(s, motions, dt))
@@ -115,7 +111,7 @@ static func advance(s: GameState, duration: float) -> void:
 		if s.profiling:
 			detail=s._lap("细分/压制与武器相交",detail)
 		var strategic := TacticalEvents.events_in(s, motions, maxf(dt, 0.0))
-		var light_events:=LightFront.events_in(s,motions,maxf(dt,0.0))
+		var light_events:=LightFront.events_in(s,motions,maxf(dt,0.0),uniform)
 		if s.profiling:
 			s._lap("细分/战略相交",detail)
 		for event in strategic:
@@ -128,8 +124,8 @@ static func advance(s: GameState, duration: float) -> void:
 		if s.profiling:
 			phase=s._lap("连续/边界与相交",phase)
 		var tactical_due := integrate(s, plans, dt)
-		Signals.advance(s, dt,message_motions)
-		Information.advance(s, dt)
+		Signals.advance(s, dt,message_motions,uniform)
+		Information.advance(s, dt, uniform)
 		SpaceEvents.advance(s, dt)
 		s._collapse_depth += 1
 		_move(s, motions, dt)

@@ -222,66 +222,168 @@ static func _memo(s: GameState) -> Variant:
 	return null if Hazards.any(s) else {}
 
 
-## uniform：全图光速处处相同（Hazards.uniform_light），这时光线只在到达时有变化。
+## 光线在一个子步里自己分段走（Hazards.light_travel），过光速不同的边界不让整个世界停下。
+## 广播光线的到达也不停：advance 记下准确的到达时刻，resolve 在子步末按那个时刻补做。
+## 扫描要在到达那一刻给格子拍快照，仍然在到达时停。uniform：全图光速处处相同（Hazards.uniform_light）。
 static func next_change(s: GameState, uniform := false) -> float:
 	var time := INF
 	var memo: Variant = _memo(s)
-	for wave in waves(s):
+	for wave in s.scans:
 		for sample in wave["samples"]:
 			if sample["done"]:
 				continue
-			var speed := _speed(s, sample["pos"], memo)
-			if speed > 0.0:
-				time = minf(time,sample["remaining"]/speed)
-				if uniform:
-					continue
-				var motion := {"pos":sample["pos"],"velocity":sample["direction"]*speed/s.physical_cell_size(),"acceleration":Vector3.ZERO}
-				time = minf(time,Hazards.next_boundary(s,motion,Balance.PHYSICS_MAX_DT))
+			if uniform:
+				var speed := _speed(s, sample["pos"], memo)
+				if speed > 0.0:
+					time = minf(time,sample["remaining"]/speed)
+			else:
+				time = minf(time,Hazards.light_travel(s,sample["pos"],sample["direction"],sample["remaining"],INF)["arrival"])
+	# 隐藏文明在 0.05 年的传感刻度上决定要不要出手，不为每个监听者单独停一次。
 	for listener in s.hidden_listen:
-		time = minf(time,maxf(0.0,listener["next_check"]-s.clock))
+		var tick: float = ceilf(listener["next_check"]/Balance.PHYSICS_MAX_DT - Balance.TIME_EPSILON)*Balance.PHYSICS_MAX_DT
+		time = minf(time,maxf(0.0,tick-s.clock))
 	return time
 
 
-static func advance(s: GameState, dt: float) -> void:
-	var env:=LightFront.environment(s) if not waves(s).is_empty() else {}
+## 没有黑域和死线时，光速只随格子变，而且只有在出事的那一刻才变；广播光线走到哪只取决于时间。
+## 这时不必每个子步逐条挪动光线：开始时按当时的光速表（LightFront.environment）算好每条光线的到达时刻 eta，
+## 按时间排好（order）；到了最早的到达时刻 due，只把到了的几条放到终点，其余光线停在 lazy_from 那一刻不动。
+## 光速表变了（有星系熄灭、换图等），先用旧表把所有光线推进到现在，再按新表重新排。
+static func advance(s: GameState, dt: float, uniform := false) -> void:
+	var env:=LightFront.environment(s,uniform) if not waves(s).is_empty() else {}
 	var memo: Variant = _memo(s)
+	var fixed := not Hazards.any(s)
 	for wave in waves(s):
 		LightFront.remember(wave,env,s.clock,s.clock+dt)
+		if fixed and wave.has("sender"):
+			if wave.has("medium") and wave["medium"] != env:
+				settle_wave(s, wave)
+			if not wave.has("medium"):
+				_lazy_begin(s, wave, env)
+			_lazy_arrive(s, wave, s.clock + dt)
+			var reach: float = wave["live_max"] + env["speed"]*(s.clock + dt - wave["lazy_from"])
+			wave["radius"] = maxf(wave.get("radius",0.0), reach/s.physical_cell_size())
+			continue
+		settle_wave(s, wave)
 		for sample in wave["samples"]:
 			if sample["done"]:
 				continue
-			var speed := _speed(s, sample["pos"], memo)
-			var distance: float = minf(sample["remaining"], speed*dt)
-			sample["leg_distance"] += distance
-			sample["pos"] = sample["leg_start"] + sample["direction"]*sample["leg_distance"]/s.physical_cell_size()
-			sample["remaining"] = maxf(0.0,sample["remaining"]-distance)
-			sample["distance"] += distance
-			wave["radius"] = maxf(wave.get("radius",0.0),sample["distance"]/s.physical_cell_size())
+			if uniform:
+				_step(s, wave, sample, _speed(s, sample["pos"], memo), dt, s.clock)
+			else:
+				var trip := Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], dt)
+				_move(s, wave, sample, trip["distance"], trip["arrival"], s.clock)
 
+
+static func _step(s: GameState, wave: Dictionary, sample: Dictionary, speed: float, dt: float, start: float) -> void:
+	var arrival: float = sample["remaining"]/speed if speed > 0.0 and sample["remaining"] <= speed*dt else INF
+	_move(s, wave, sample, minf(sample["remaining"], speed*dt), arrival, start)
+
+
+## 光线这一段走了 distance；arrival 是从 start 起到达终点用的时间，没到为 INF。
+static func _move(s: GameState, wave: Dictionary, sample: Dictionary, distance: float, arrival: float, start: float) -> void:
+	if arrival < INF:
+		sample["arrived_at"] = start + arrival
+	sample["leg_distance"] += distance
+	sample["pos"] = sample["leg_start"] + sample["direction"]*sample["leg_distance"]/s.physical_cell_size()
+	sample["remaining"] = maxf(0.0,sample["remaining"]-distance)
+	sample["distance"] += distance
+	wave["radius"] = maxf(wave.get("radius",0.0),sample["distance"]/s.physical_cell_size())
+
+
+## 光线从现在起照 table 走，多久到终点。
+static func _eta(s: GameState, sample: Dictionary, table: Dictionary) -> float:
+	if table["speeds"].is_empty():
+		return sample["remaining"]/table["speed"] if table["speed"] > 0.0 else INF
+	return Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], INF, table)["arrival"]
+
+
+static func _lazy_begin(s: GameState, wave: Dictionary, table: Dictionary) -> void:
+	var order := []
+	var live_max := 0.0
+	var samples: Array = wave["samples"]
+	for i in samples.size():
+		var sample: Dictionary = samples[i]
+		if sample["done"]:
+			continue
+		sample["eta"] = s.clock + _eta(s, sample, table)
+		order.append(i)
+		live_max = maxf(live_max, sample["distance"])
+	order.sort_custom(func(a, b): return samples[a]["eta"] < samples[b]["eta"] or (samples[a]["eta"] == samples[b]["eta"] and a < b))
+	wave["medium"] = table
+	wave["order"] = order
+	wave["cursor"] = 0
+	wave["lazy_from"] = s.clock
+	wave["live_max"] = live_max
+	wave["due"] = samples[order[0]]["eta"] if not order.is_empty() else INF
+
+
+## 把到 time 为止该到的光线放到终点，记下准确的到达时刻；resolve 看到 check 才去处理。
+static func _lazy_arrive(s: GameState, wave: Dictionary, time: float) -> void:
+	var samples: Array = wave["samples"]
+	var order: Array = wave["order"]
+	var cursor: int = wave["cursor"]
+	while cursor < order.size() and samples[order[cursor]]["eta"] <= time + Balance.TIME_EPSILON:
+		var sample: Dictionary = samples[order[cursor]]
+		_move(s, wave, sample, sample["remaining"], sample["eta"] - wave["lazy_from"], wave["lazy_from"])
+		wave["check"] = true
+		cursor += 1
+	wave["cursor"] = cursor
+	wave["due"] = samples[order[cursor]]["eta"] if cursor < order.size() else INF
+
+
+## 离开「到点才推进」之前（光速表变了、出现黑域或死线、换图），用旧表把还在路上的光线推进到现在。
+static func settle_wave(s: GameState, wave: Dictionary) -> void:
+	if not wave.has("medium"):
+		return
+	_lazy_arrive(s, wave, s.clock)
+	var table: Dictionary = wave["medium"]
+	var start: float = wave["lazy_from"]
+	var samples: Array = wave["samples"]
+	var order: Array = wave["order"]
+	for k in range(wave["cursor"], order.size()):
+		var sample: Dictionary = samples[order[k]]
+		if s.clock > start:
+			var trip := Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], s.clock - start, table)
+			_move(s, wave, sample, trip["distance"], trip["arrival"], start)
+		sample.erase("eta")
+	for key in ["medium", "order", "cursor", "lazy_from", "live_max", "due"]:
+		wave.erase(key)
+
+
+static func settle(s: GameState) -> void:
+	for wave in s.broadcasts:
+		settle_wave(s, wave)
 
 static func resolve(s: GameState) -> void:
 	if s.clock < s.remap_until:
 		return
 	for wave in s.broadcasts:
+		# 到点才推进的波，只有刚推进过才可能有光线到达。
+		if wave.has("lazy_from") and not wave.get("check", false):
+			continue
+		wave.erase("check")
 		for sample in wave["samples"]:
 			if sample["done"] or sample["remaining"] > Balance.COLLISION_EPSILON:
 				continue
 			sample["done"] = true
+			# 光速处处相同时到达不切子步，这里可能比到达晚一点；一律按准确的到达时刻记。
+			var at: float = minf(s.clock, sample.get("arrived_at", s.clock))
 			if sample.has("cell_id"):
-				wave["visited"][sample["cell_id"]] = s.clock
+				wave["visited"][sample["cell_id"]] = at
 				var civ := s.coord_owner(sample["cell"])
 				if civ != null and not civ.dormant_colonies.has(sample["cell"]) and (civ.has_tech("gravity") or civ.broadcasters.has(sample["cell"])):
-					_hear(s,wave,civ,sample["pos"])
+					_hear(s,wave,civ,sample["pos"],at)
 			elif sample.has("hidden"):
 				var index: int = sample["hidden"]
 				wave["hidden_heard"][index] = true
 				s.hidden_listen.append({"id":s.next_id(),"from":s.hidden[index],"target":wave["target"],
-					"left":Balance.HIDDEN_PATIENCE,"next_check":s.clock+1.0,"received":s.clock})
+					"left":Balance.HIDDEN_PATIENCE,"next_check":at+1.0,"received":at})
 			elif sample.has("ship_id"):
 				var civ: Civ = s.civs[sample["owner"]]
 				var ship := civ.ship_by_id(sample["ship_id"])
 				if ship != null and not ship.dead and not ship.dormant and ship.gravity and ship.pos.distance_to(sample["pos"])*s.physical_cell_size() <= Balance.COLLISION_EPSILON:
-					_hear(s,wave,civ,ship.pos)
+					_hear(s,wave,civ,ship.pos,at)
 	for wave in s.scans:
 		var civ: Civ = s.civs[wave["owner"]]
 		for sample in wave["samples"]:
@@ -300,17 +402,28 @@ static func resolve(s: GameState) -> void:
 				var target: Dictionary = targets[0]
 				body.merge({"type":"entity","data":{"id":target["id"],"owner":target["owner"],"kind":target["kind"],"pos":target["pos"],"velocity":target["velocity"],"hp":target["hp"]}})
 			Signals.send(s,wave["owner"],sample["pos"],wave["source_id"],"sensor",body)
-	s.broadcasts = s.broadcasts.filter(func(wave):return wave["samples"].any(func(sample):return not sample["done"]))
-	s.scans = s.scans.filter(func(wave):return wave["samples"].any(func(sample):return not sample["done"]))
+	s.broadcasts = s.broadcasts.filter(_live)
+	s.scans = s.scans.filter(_live)
 	_hidden_strikes(s)
 
 
-static func _hear(s: GameState, wave: Dictionary, civ: Civ, pos: Vector3) -> void:
+static func _live(wave: Dictionary) -> bool:
+	if wave.get("due", INF) < INF:
+		return true
+	for sample in wave["samples"]:
+		if not sample["done"]:
+			return true
+	return false
+
+
+## at：广播到达的准确时刻，可能略早于现在。回报照样从那一刻出发，先补走晚掉的那段路。
+static func _hear(s: GameState, wave: Dictionary, civ: Civ, pos: Vector3, at: float) -> void:
 	if civ == wave["sender"] or wave["heard"].has(civ) or not civ.alive:
 		return
 	wave["heard"][civ] = true
-	Signals.send(s,s.civs.find(civ),pos,Signals.controller(civ),"report",{"type":"broadcast","target":wave["target"],
-		"exposed":wave["exposed"],"has_exposure":wave["has_exposure"],"t_observed":s.clock,"epoch":s.space_epoch,"source_id":wave["id"]})
+	var message := Signals.send(s,s.civs.find(civ),pos,Signals.controller(civ),"report",{"type":"broadcast","target":wave["target"],
+		"exposed":wave["exposed"],"has_exposure":wave["has_exposure"],"t_observed":at,"epoch":s.space_epoch,"source_id":wave["id"]})
+	Signals.catch_up(s,message,s.clock-at)
 
 
 static func _hidden_strikes(s: GameState) -> void:

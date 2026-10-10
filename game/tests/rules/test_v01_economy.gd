@@ -489,8 +489,9 @@ func test_v01_landing_inherits_transport_dimension_not_controller_flag() -> void
 		me.reduced=transport_dim==3 # 控制锚点恰与运输船不同维度。
 		Assets.at(me,"anchor",me.home)[0]["entity_dim"]=2 if me.reduced else 3
 		check_eq(s.start_landing(me,transport.id)["error"],"","下令依据已收历史，隐藏前沿不提前改变按钮")
-		Signals.advance(s,1.0)
-		s.clock+=1.0
+		# 后半格是二维格子，光速 0.6：命令要 0.5 + 0.5/0.6 ≈ 1.33 年才到。
+		Signals.advance(s,1.5)
+		s.clock+=1.5
 		Signals.receive_due(s)
 		if transport_dim==2:
 			check(not me.pending.is_empty(),"运输船已适配二维，母星仍三维不应禁止合法施工")

@@ -63,6 +63,7 @@ static func commit(s: GameState, to_line: bool) -> void:
 	var mapping := {}
 	for cell in old.cells():
 		mapping[cell] = map_cell(cell, anchor, to_line)
+	Information.settle(s)
 	LightFront.remap(s,anchor,to_line,old,mapping)
 	for field in ["stars", "rocky", "gas", "habitable"]:
 		var data: Dictionary = old.get(field).duplicate(true)

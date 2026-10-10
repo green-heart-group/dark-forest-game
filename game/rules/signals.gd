@@ -39,36 +39,69 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 	return message
 
 
+## 消息其实在 lag 年前就该出发（事件在子步中间发生、到子步末才处理时）：先补走这段路，送达时刻就和准时出发一样。
+static func catch_up(s: GameState, message: Dictionary, lag: float) -> void:
+	if lag <= 0.0:
+		return
+	_fly(s, message, motion(s, message), lag)
+	message["sent"] -= lag
+
+
 static func motion(s: GameState, message: Dictionary) -> Dictionary:
 	var receiver := entity(s, message["owner"], message["recipient"])
 	return _motion(s,message,receiver)
 
 
-static func _motion(s: GameState,message: Dictionary,receiver: Dictionary) -> Dictionary:
+## known_speed >= 0：调用方已知全图光速处处相同，消息一路都是这个光速，arrival 就是准确的到达时间。
+## 否则 arrival 只按起点光速估算，要准确的到达和这一段走多远用 _trip（Hazards.light_travel 分段走）。
+static func _motion(s: GameState,message: Dictionary,receiver: Dictionary,known_speed := -1.0) -> Dictionary:
 	var target: Vector3 = receiver["pos"] if not receiver.is_empty() else message["target"]
 	var delta: Vector3 = target - message["pos"]
-	var length := delta.length() * s.physical_cell_size()
-	var speed := s.light_speed_at(message["pos"])
-	return {"arrival": length / speed if speed > 0 else INF, "speed": speed,
-			"velocity": delta.normalized() * speed / s.physical_cell_size()}
+	var size := s.physical_cell_size()
+	var length := delta.length() * size
+	var speed := known_speed if known_speed >= 0.0 else s.light_speed_at(message["pos"])
+	var direction := delta.normalized()
+	return {"arrival": length / speed if speed > 0 else INF, "speed": speed, "length": length,
+			"direction": direction, "uniform": known_speed >= 0.0,
+			"velocity": direction * speed / size}
 
 
-## 一个物理子步中位置尚未变化；同一收件者和同一消息轨迹只查算一次。
-static func plan(s: GameState) -> Dictionary:
+## 这一段 duration 年里走多远、多久到；光速处处相同时直接算，否则过光速不同的边界时分段。
+static func _trip(s: GameState, message: Dictionary, m: Dictionary, duration: float) -> Dictionary:
+	# 这一段连格子边界都碰不到时，光速一路不变（没有黑域和死线时光速只随格子变），直接按起点光速算。
+	if m["uniform"] or (not Hazards.any(s) and Kinematics.next_cell_boundary({"pos": message["pos"], "velocity": m["velocity"], "acceleration": Vector3.ZERO}) > minf(duration, m["arrival"])):
+		return {"distance": minf(m["length"], m["speed"] * duration), "arrival": m["arrival"] if m["arrival"] <= duration else INF}
+	return Hazards.light_travel(s, message["pos"], m["direction"], m["length"], duration)
+
+
+static func _fly(s: GameState, message: Dictionary, m: Dictionary, duration: float) -> void:
+	var trip := _trip(s, message, m, duration)
+	message["pos"] += m["direction"] * trip["distance"] / s.physical_cell_size()
+	message["distance"] += trip["distance"]
+	if trip["arrival"] <= duration + Balance.TIME_EPSILON:
+		# 已经飞到；收件者在动时，之后每段都跟到它身边，等刻度到了再拆开。
+		message["arrived"] = true
+
+## 子步开始、还没有东西移动时，先算好要准时处理的那几种消息（EXACT_KINDS）的轨迹，用来定子步多长。
+## 其余情报消息不影响子步长短，留到 advance 里边走边算，省得每个子步给上千条消息各建一份轨迹。
+## uniform：全图光速处处相同，每条消息的光速都是背景光速，不用逐条现查。
+static func plan(s: GameState, uniform := false) -> Dictionary:
 	var receivers: Dictionary={}
 	var motions: Dictionary={}
 	for message in s.messages:
-		if message["dead"]:
+		if message["dead"] or not message["kind"] in EXACT_KINDS:
 			continue
-		var key: Array=[message["owner"],message["recipient"]]
+		var key: int=message["owner"]*RECEIVER_KEY+message["recipient"]
 		if not receivers.has(key):
-			receivers[key]=entity(s,key[0],key[1])
-		motions[message["id"]]=_motion(s,message,receivers[key])
+			receivers[key]=entity(s,message["owner"],message["recipient"])
+		motions[message["id"]]=_motion(s,message,receivers[key],s.background_light() if uniform else -1.0)
 	return motions
 
 
 ## 这几种消息到了就改动实体或执行命令，要在到达的那一刻处理。
 const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]
+## 收件者缓存的整数键：文明序号乘它再加收件者 ID（ID 远小于它，-1 也不会撞）。
+const RECEIVER_KEY := 1 << 32
 
 
 ## 只有命令类消息的到达要让整个世界停下来。其余的情报（传感、回报）照样按光速飞到、停在收件者那里，
@@ -82,20 +115,57 @@ static func next_arrival(s: GameState,prepared: Dictionary = {}) -> float:
 	for message in s.messages:
 		if not message["dead"] and exact(message):
 			var m: Dictionary=prepared[message["id"]] if prepared.has(message["id"]) else motion(s,message)
-			next = minf(next, m["arrival"])
+			next = minf(next, _trip(s, message, m, INF)["arrival"])
 	return next
 
 
-static func advance(s: GameState, duration: float,prepared: Dictionary = {}) -> void:
+## prepared 里没有的消息在这里现算轨迹；收件者此时还没移动，和子步开始时算的一样。
+## 消息常有上千条，每个子步都要走一遍，所以没有黑域和死线时不为每条消息建轨迹字典，直接算：
+## 这时光速只随格子变，每格只查一次；这一段走完还在同一格里，就是匀速直线，否则交给 Hazards.light_travel 分段走。
+static func advance(s: GameState, duration: float,prepared: Dictionary = {},uniform := false) -> void:
+	var receivers: Dictionary={}
+	var size := s.physical_cell_size()
+	var fixed := uniform or not Hazards.any(s)
+	var cell_speed: Dictionary={}
 	for message in s.messages:
 		if message["dead"]:
 			continue
-		var m: Dictionary=prepared[message["id"]] if prepared.has(message["id"]) else motion(s,message)
-		var dt := minf(duration, m["arrival"])
-		message["pos"] += m["velocity"] * dt
-		message["distance"] += m["speed"] * dt
-		if m["arrival"] <= duration + Balance.TIME_EPSILON:
-			# 已经飞到；收件者在动时，之后每段都跟到它身边，等刻度到了再拆开。
+		if prepared.has(message["id"]):
+			_fly(s, message, prepared[message["id"]], duration)
+			continue
+		var key: int=message["owner"]*RECEIVER_KEY+message["recipient"]
+		if not receivers.has(key):
+			receivers[key]=entity(s,message["owner"],message["recipient"])
+		var receiver: Dictionary=receivers[key]
+		if not fixed:
+			_fly(s, message, _motion(s,message,receiver), duration)
+			continue
+		var pos: Vector3=message["pos"]
+		var target: Vector3 = receiver["pos"] if not receiver.is_empty() else message["target"]
+		var delta := target - pos
+		var length := delta.length() * size
+		var cell := Vector3i(pos.round())
+		var speed: float
+		if uniform:
+			speed=s.background_light()
+		else:
+			if not cell_speed.has(cell):
+				cell_speed[cell]=s.light_speed_at(pos)
+			speed=cell_speed[cell]
+		if speed <= 0.0:
+			continue
+		var direction := delta.normalized()
+		var distance := minf(length, speed * duration)
+		var arrival := length / speed
+		if arrival > duration:
+			arrival=INF
+		if not uniform and Vector3i((pos + direction * distance / size).round()) != cell:
+			var trip := Hazards.light_travel(s, pos, direction, length, duration)
+			distance=trip["distance"]
+			arrival=trip["arrival"]
+		message["pos"] = pos + direction * distance / size
+		message["distance"] += distance
+		if arrival <= duration + Balance.TIME_EPSILON:
 			message["arrived"] = true
 
 
@@ -108,16 +178,21 @@ static func receive_due(s: GameState, depth := 0) -> void:
 	# 这一刻采样后它已指向下一刻度，而采样当场发出、距离为零的本地回报也要在这一刻收到。
 	var ticks := s.clock / Balance.PHYSICS_MAX_DT
 	var on_tick := absf(ticks - roundf(ticks)) * Balance.PHYSICS_MAX_DT <= Balance.TIME_EPSILON
+	var size := s.physical_cell_size()
+	# 和「距离乘格子尺寸不超过碰撞容差」等价，只是省掉每条消息的开方。
+	var reach2 := (Balance.COLLISION_EPSILON / size) * (Balance.COLLISION_EPSILON / size)
+	# 每个子步要查好几遍，消息上千条时这一圈本身就很费时：先用最便宜的条件跳过，收件者按整数键只查一次。
 	for message in s.messages:
 		if message["dead"]:
 			continue
+		if not on_tick and not message["kind"] in EXACT_KINDS:
+			continue
 		if s.clock < message.get("not_before", -INF):
 			continue
-		if not on_tick and not exact(message):
-			continue
-		var key: Array=[message["owner"],message["recipient"]]
+		var owner: int=message["owner"]
+		var key: int=owner*RECEIVER_KEY+message["recipient"]
 		if not receivers.has(key):
-			receivers[key]=entity(s,key[0],key[1])
+			receivers[key]=entity(s,owner,message["recipient"])
 		var receiver: Dictionary=receivers[key]
 		if receiver.is_empty():
 			# 收件者死亡不能令远端命令在发送瞬间退款，从余额泄露真实战况。
@@ -127,13 +202,13 @@ static func receive_due(s: GameState, depth := 0) -> void:
 				if message["kind"] == "command":
 					s._receive_command(message, false)
 			continue
-		if message.get("arrived", false) or message["pos"].distance_to(receiver["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON:
+		if message.get("arrived", false) or message["pos"].distance_squared_to(receiver["pos"]) <= reach2:
 			message["dead"] = true
 			arrived.append(message)
 	for message in arrived:
 		_deliver(s, message)
-	s.messages = s.messages.filter(func(m): return not m["dead"])
 	if changed or not arrived.is_empty():
+		s.messages = s.messages.filter(func(m): return not m["dead"])
 		receive_due(s, depth + 1)
 
 
@@ -320,10 +395,16 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 		var contact: Dictionary = body["data"].duplicate(true)
 		contact.merge({"t_observed": body["t_observed"], "t_received": s.clock,
 				"source_id": body["source_id"], "epoch": body["epoch"], "turn": s.turn}, true)
-		for old in civ.sightings:
-			if old.get("id",-1)==contact["id"] and old.get("t_observed",-INF)>body["t_observed"]:
-				return
-		civ.sightings = civ.sightings.filter(func(old): return old.get("id", -1) != contact["id"])
+		# 一遍找出同一单位的旧记录：有更新的就不收，否则删掉旧的、新的放到末尾。
+		var same: Array[int]=[]
+		for i in civ.sightings.size():
+			var old: Dictionary=civ.sightings[i]
+			if old.get("id",-1)==contact["id"]:
+				if old.get("t_observed",-INF)>body["t_observed"]:
+					return
+				same.append(i)
+		for i in range(same.size()-1,-1,-1):
+			civ.sightings.remove_at(same[i])
 		civ.sightings.append(contact)
 		if body.get("contact",false):
 			civ.contacted=true
@@ -381,6 +462,19 @@ static func observers(s: GameState, civ: Civ) -> Array[Dictionary]:
 				"radius": base + civ.vision_bonus(), "angle": Balance.PROBE_ANGLE + civ.telescope * Balance.TELESCOPE_ANGLE_STEP,
 				"backward": civ.telescope * Balance.LINE_BACKWARD_PER_LEVEL if s.dimension == 1 else 0.0})
 	return result
+
+
+## in_view 能看到的点离观察者最远多少格（取平方），用来先便宜地排除远处的点；排除的点 in_view 一定也看不到。
+## 圆锥最远在边沿上：半径 ÷ cos(半张角)。一维时视野不受这个距离限制，返回 INF。
+static func view_reach2(s: GameState, observer: Dictionary) -> float:
+	var reach: float = observer["radius"]
+	if observer["dir"] != Vector3.ZERO:
+		var half := deg_to_rad(observer["angle"] * 0.5)
+		if s.dimension == 1 or half >= deg_to_rad(80.0):
+			return INF
+		reach = reach / cos(half) + Balance.COLLISION_EPSILON
+	reach = (reach + 1e-6) / s.physical_cell_size() * 1.0001
+	return reach * reach
 
 
 static func in_view(s: GameState, observer: Dictionary, pos: Vector3) -> bool:
@@ -466,8 +560,10 @@ static func sample(s: GameState, force := false) -> void:
 					if in_view(s,observer,Vector3(zone["center"])):
 						_emit(s,owner,observer,Vector3(zone["center"]),"%d:front:%d"%[observer["id"],zone.get("id",-1)],
 							{"type":"front","front_type":entry[0],"data":zone.duplicate(true)},true)
+			var origin_pos: Vector3 = observer["pos"]
+			var reach2 := view_reach2(s, observer)
 			for cell in s.system_cells:
-				if not in_view(s, observer, Vector3(cell)):
+				if (Vector3(cell) - origin_pos).length_squared() > reach2 or not in_view(s, observer, Vector3(cell)):
 					continue
 				var data := s.snapshot(cell)
 				data["cell_dim"] = s.cell_dims.get(s.cell_ids.get(cell,-1),s.dimension)
@@ -475,7 +571,7 @@ static func sample(s: GameState, force := false) -> void:
 				_emit(s, owner, observer, Vector3(cell), "%d:cell:%d" % [observer["id"], s.cell_ids.get(cell, -1)],
 						{"type": "cell", "cell": cell, "cell_id": s.cell_ids.get(cell, -1), "passive": true, "data": data, "contact": data["owner"] >= 0 and data["owner"] != owner and Vector3i(observer["pos"].round()) == cell}, true)
 			for target in entities:
-				if target["owner"] == owner or not in_view(s, observer, target["pos"]):
+				if target["owner"] == owner or (target["pos"] - origin_pos).length_squared() > reach2 or not in_view(s, observer, target["pos"]):
 					continue
 				var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
 						"pos": target["pos"], "velocity": target["velocity"], "acceleration": target["acceleration"], "hp": target["hp"]}

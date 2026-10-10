@@ -74,7 +74,7 @@ static func uniform_light(s: GameState) -> bool:
 	if any(s):
 		return false
 	for cell in s.cell_ids:
-		if s.cell_dims.get(s.cell_ids[cell], s.dimension) != s.dimension or s.light_at(cell) < 1.0:
+		if s.cell_dims.get(s.cell_ids[cell], s.dimension) != s.dimension or s.light_at(cell) != 1.0:
 			return false
 	return true
 
@@ -129,6 +129,66 @@ static func leave_deadline(s: GameState, a: Vector3, b: Vector3, ship: Ship, dur
 	s.deadlines.append({"id":s.next_id(),"source":ship.id,"a":a,"b":b,
 		"created":s.clock-duration,"ended":s.clock,"expires":piece["expires"],"turn":s.turn,"slot":slot,"epoch":s.space_epoch,"pieces":[piece]})
 
+
+## 一点的光速。table 是 LightFront.environment 存下的光速表（只在没有黑域和死线时用）：
+## 照那份表查，表里没有的格子是背景光速；不给 table 就查现在的局面。
+static func light_speed(s: GameState, table: Dictionary, pos: Vector3) -> float:
+	if table.is_empty():
+		return s.light_speed_at(pos)
+	return table["speeds"].get(Vector3i(pos.round()), table["speed"])
+
+
+## 光和消息（匀速直线）下一次真的换光速是什么时候，最多看 dt 年。
+## 没有黑域和死线时，每格光速固定；过边界后光速不变的，停下来什么都不变，就跳过去接着往前看。
+## 有黑域或死线时光速在格子里也会变，照旧用 next_boundary。
+static func next_light_edge(s: GameState, motion: Dictionary, dt: float, table := {}) -> float:
+	if table.is_empty() and any(s):
+		return next_boundary(s, motion, dt)
+	var velocity: Vector3 = motion["velocity"]
+	if velocity.length_squared() < 1e-20:
+		return INF
+	if not table.is_empty() and table["speeds"].is_empty():
+		return INF
+	var pos: Vector3 = motion["pos"]
+	var here := light_speed(s, table, pos)
+	var t := 0.0
+	for i in 8:
+		var edge := Kinematics.next_cell_boundary({"pos": pos, "velocity": velocity, "acceleration": Vector3.ZERO})
+		if t + edge > dt:
+			return INF
+		t += edge
+		pos = motion["pos"] + velocity * t
+		# 边界上的点按前进方向归到下一格。
+		if light_speed(s, table, pos + velocity.normalized() * 1e-6) != here:
+			return t
+	return t
+
+
+## 光或消息从 pos 沿 direction 走 duration 年，最多走 remaining（物理距离）。
+## 在一个子步里自己分段：每段用这一段起点的光速，到光速会变的地方（next_light_edge）换一段。
+## 返回走了多远（distance）、到达终点用了多久（arrival，没到为 INF）。光速为 0 的地方走不动。
+static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaining: float, duration: float, table := {}) -> Dictionary:
+	var size := s.physical_cell_size()
+	var t := 0.0
+	var moved := 0.0
+	for i in 256:
+		var need := remaining - moved
+		if need <= 0.0:
+			return {"distance": remaining, "arrival": t}
+		if t >= duration:
+			break
+		var at := pos + direction * moved / size
+		var speed := light_speed(s, table, at)
+		if speed <= 0.0:
+			break
+		var left := minf(duration - t, need / speed)
+		var edge := next_light_edge(s, {"pos": at, "velocity": direction * speed / size, "acceleration": Vector3.ZERO}, left, table)
+		var step := minf(left, maxf(edge, Balance.TIME_EPSILON))
+		if step >= need / speed:
+			return {"distance": remaining, "arrival": t + need / speed}
+		moved += speed * step
+		t += step
+	return {"distance": moved, "arrival": INF}
 
 ## 局部光速的不连续边界必须分段；场内连续权重使用最大步长积分并做减半收敛测试。
 static func next_boundary(s: GameState, motion: Dictionary, dt: float) -> float:

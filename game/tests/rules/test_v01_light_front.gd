@@ -48,10 +48,26 @@ func test_v01_uniform_light_does_not_stop_waves_at_cell_edges() -> void:
 	var arrival:=INF
 	for sample in s.broadcasts[0]["samples"]:
 		arrival=minf(arrival,sample["remaining"]/s.light_speed_at(sample["pos"]))
-	check_eq(Information.next_change(s,true),arrival,"光速处处相同时，下一次变化是最早的到达，不在格子边界停")
+	check_eq(Information.next_change(s,true),INF,"光速处处相同时，广播光线过格子边界和到达都不让世界停下")
 	Hazards.activate(s,Vector3(6,6,6))
 	check(not Hazards.uniform_light(s),"有黑域时光速会变")
-	check(Information.next_change(s,false)<arrival,"有黑域时照旧在格子边界停，换成新格子的光速")
+	# 有黑域时光线在子步里自己分段换光速（Hazards.light_travel），也不让世界停下。
+	check_eq(Information.next_change(s,false),INF,"有黑域时广播光线过格子边界也不让世界停下")
+
+
+## 规则：广播和隐藏文明
+func test_v01_uniform_light_records_exact_arrival() -> void:
+	var s:=_wave_match()
+	s.hidden=[Vector3i(-2,1,0)]
+	var origin:=Vector3(0.1,0.2,0.3)
+	var t0:=s.clock
+	Information.broadcast(s,s.human(),origin,Vector3i(4,4,4),GameState.NO_HIT)
+	var exact:=t0+origin.distance_to(Vector3(s.hidden[0]))*s.physical_cell_size()/s.background_light()
+	WorldTime.advance(s,3.0)
+	check_eq(s.hidden_listen.size(),1,"隐藏文明听到了广播")
+	# 到达不切子步，是在子步末补做的；记下的仍是准确的到达时刻，不是子步末。
+	check(absf(s.hidden_listen[0]["received"]-exact)<1e-9,"按准确的到达时刻记，实际 %s，应为 %s" % [s.hidden_listen[0]["received"],exact])
+	check(absf(s.hidden_listen[0]["next_check"]-exact-1.0)<1e-9,"下一次决定也从准确的到达时刻起算")
 
 
 ## 规则：广播和隐藏文明
