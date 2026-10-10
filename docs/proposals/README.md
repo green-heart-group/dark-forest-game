@@ -2,6 +2,8 @@
 
 团队成员提出的新想法、改动方案、试玩意见，都放这里。每次一个新文件。
 
+2026-10-10 全量复核后的剩余工作见[群聊实施待办](discussion-todo.md)，科技数值候选与讨论的关系见[实验实现对照](v01-branch-comparison.md)。讨论过程继续在原有主题提议和[来源记录](chat-direction-sources.md)中保存。
+
 ## 怎么写
 
 - 文件名用简短的英文主题，不带日期，例如 `warp-drive.md`。试玩意见用 `feedback-` 开头，
@@ -55,5 +57,7 @@
 | 2026-10-08～10-10 | [chat-direction-sources.md](chat-direction-sources.md) | 群聊参与者 | 已整理 | 讨论摘录、时间、来源、媒体与版本冲突。 |
 | 2026-10-09 | [tech-tree-revision.md](tech-tree-revision.md) | E7F6 | 讨论中 | 科技、建造、调度 Word 的完整文字转换稿。 |
 | 2026-10-09 | [balance-v01.md](balance-v01.md) | ccl 分享的候选文档 | 讨论中 | 数值闭环 V0.1 的完整 Markdown 转换稿，保留表格字段、公式和外置图片。 |
+| 2026-10-10 | [discussion-todo.md](discussion-todo.md) | 群聊整理 | 待实施 | 全量复核后的具体剩余工作、来源与验收，剔除已完成项。 |
+| 2026-10-10 | [v01-branch-comparison.md](v01-branch-comparison.md) | 实现对照 | 待评审 | 科技数值实验快照与群聊方向的对应、差额、冲突与验证边界。 |
 
 2026-10-10 的科技与数值实现范围补入[科技修订原文](tech-tree-revision.md#整理补充科技与数值的实现范围)，动画回退与后续规则补入[降维后续提议](dimension-followup-tasks.md#补充意见动画回退与后续降维规则)。Mac 实机试玩与联机方向在[路线图](../roadmap.md)维护，不另设群聊方向总览。
