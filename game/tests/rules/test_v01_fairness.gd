@@ -16,7 +16,6 @@ func remote_match() -> GameState:
 	for civ in s.civs:
 		Assets.ensure(s,civ)
 	Knowledge.report_site(s,me,remote)
-	Signals.advance(s,4.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	return s
@@ -49,11 +48,9 @@ func test_v01_remote_income_permission_waits_for_all_source_reports() -> void:
 	b._refresh_permissions(b.human())
 	check_eq(a.human().tier1_turn,b.human().tier1_turn,"名义产能变化未回报，权限不能先解锁")
 	check_eq(a.research_block_error(a.human(),"devourer"),b.research_block_error(b.human(),"devourer"),"玩家与AI调用的研究理由相同")
-	Signals.advance(b,3.9)
 	b.clock+=3.9
 	Signals.receive_due(b)
 	check_eq(b.human().tier1_turn,-1,"四光年来源的证明在3.9年后仍未收齐")
-	Signals.advance(b,0.1)
 	b.clock+=0.1
 	Signals.receive_due(b)
 	check(b.human().tier1_turn>=0,"收到全部本地产能证明后公开永久权限")
@@ -67,12 +64,10 @@ func test_v01_remote_telescope_completion_is_not_instant_upgrade() -> void:
 	var project:=WorkOrder.create(s.next_id(),"telescope",Vector3i(4,0,0),[3,3],1,"upgrade")
 	me.pending.append(project)
 	OrderControl.submit(s,me,project)
-	Signals.advance(s,4.0)
 	s.clock+=4.0
 	Signals.receive_due(s)
 	s._finish_pending(me,1.0)
 	check_eq(me.telescope,0,"远端升级完工不直接增加全局视距")
-	Signals.advance(s,4.0)
 	s.clock+=4.0
 	Signals.receive_due(s)
 	check_eq(me.telescope,1,"完成回报送达后升级生效")
@@ -87,7 +82,6 @@ func test_v01_remote_hit_does_not_change_ai_defense_before_receipt() -> void:
 	TacticalEvents.resolve(s,[{"kind":"grain","at":remote,"ship":grain,"owner":1,"victim":0}])
 	check_eq(me.times_hit,0,"远端遇袭次数未回报前不改变AI防御分数")
 	check(me.hit_dirs.is_empty(),"远端受袭方向不能提前回传")
-	Signals.advance(s,4.0)
 	s.clock+=4.0
 	Signals.receive_due(s)
 	check_eq(me.times_hit,1,"四年后收到一次遇袭报告")
@@ -118,7 +112,6 @@ func battle_match(full_view: bool,remote_base: bool,bunker:=false) -> GameState:
 	var grain:=_ship(s,me,Ship.GRAIN,Vector3(1,0,0),Vector3.RIGHT)
 	TacticalEvents.resolve(s,[{"kind":"grain","at":Vector3i(1,0,0),"ship":grain,"owner":0,"victim":1}])
 	Information.observe_battles(s)
-	Signals.advance(s,15.0)
 	s.clock=15.0
 	Signals.receive_due(s)
 	return s
@@ -214,7 +207,6 @@ func test_v01_survey_query_needs_finite_route_and_surviving_sensor() -> void:
 	var me:=s.human()
 	var probe:=_ship(s,me,Ship.PROBE,Vector3(2,0,0))
 	Signals.report_ship(s,me,probe)
-	Signals.advance(s,2.0)
 	s.clock+=2.0
 	Signals.receive_due(s)
 	var secret:=_ship(s,me,Ship.PROBE,Vector3(7,0,0))
@@ -225,10 +217,8 @@ func test_v01_survey_query_needs_finite_route_and_surviving_sensor() -> void:
 	Signals.receive_due(s)
 	check(me.battle_surveys.is_empty(),"远方缓存不能由控制端直接读取")
 	probe.dead=true
-	Signals.advance(s,2.0)
 	s.clock+=2.0
 	Signals.receive_due(s)
-	Signals.advance(s,2.0)
 	s.clock+=2.0
 	Signals.receive_due(s)
 	check(me.battle_surveys.is_empty(),"查询抵达前传感器被毁，文明全局不能代答录像")
@@ -246,13 +236,11 @@ func test_v01_hidden_jammer_cannot_change_broadcast_choice_or_refund_early() -> 
 	check(AI._try_broadcast(a,a.human()) and AI._try_broadcast(b,b.human()),"两个AI均可按已知远端广播器下令")
 	check_eq(a.history,b.history,"下达完全相同命令")
 	for s in [a,b]:
-		Signals.advance(s,4.0)
 		s.clock=8.0
 		Signals.receive_due(s)
 	# 真正执行广播的分支会抽暴露率；物理RNG不是玩家信息，下一次决策配对另固定RNG。
 	check_eq(observed(a,false),observed(b,false),"命令已到达但回执未返回：隐藏阻塞不提前退款或改可用状态")
 	for s in [a,b]:
-		Signals.advance(s,4.0)
 		s.clock=12.0
 		Signals.receive_due(s)
 	check(a.human().command_results[-1]["executed"],"无封锁时真实执行")
@@ -321,7 +309,6 @@ func test_v01_remote_ammo_completion_is_disclosed_by_receipt() -> void:
 	var before_log:=s.log_lines.duplicate()
 	var result:=s.build(me,"dimension_weapon",Vector3i(4,0,0))
 	check_eq(result["error"],"","已知宿主接受弹药订单")
-	Signals.advance(s,4.0)
 	s.clock=8.0
 	Signals.receive_due(s)
 	var project: Dictionary=me.pending[0]
@@ -329,7 +316,6 @@ func test_v01_remote_ammo_completion_is_disclosed_by_receipt() -> void:
 	s._finish_pending(me,0.0)
 	check_eq(me.dimension_ammo,0,"远端真实完工不提前增加下令弹药列表")
 	check(not s.log_lines.any(func(line):return line.contains("完成回报")),"完工日志不能抢跑回执")
-	Signals.advance(s,4.0)
 	s.clock=12.0
 	Signals.receive_due(s)
 	check_eq(me.dimension_ammo,1,"完成回执到达后仅发放一次弹药")

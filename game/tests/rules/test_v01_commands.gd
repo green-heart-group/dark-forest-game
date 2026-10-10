@@ -15,7 +15,6 @@ func test_v01_command_travels_and_dead_remote_does_not_leak() -> void:
 	var me := s.human()
 	var ship := _ship(s, me, Ship.WARSHIP, Vector3(2, 0, 0))
 	Signals.report_ship(s, me, ship)
-	Signals.advance(s, 2.0)
 	s.clock = 2.0
 	Signals.receive_due(s)
 	check(Signals.reported_ship(s, me, ship.id) != null, "只有状态回传后远方单位进入已知操作集合")
@@ -26,11 +25,9 @@ func test_v01_command_travels_and_dead_remote_does_not_leak() -> void:
 	ship.dead = true
 	Signals.receive_due(s)
 	check_eq(me.energy, money - 4.0, "真实死亡不能令发出时马上退款而泄露战况")
-	Signals.advance(s, 2.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	check_eq(me.energy, money - 4.0, "失败收据还要从远方返回")
-	Signals.advance(s, 2.0)
 	s.clock = 6.0
 	Signals.receive_due(s)
 	check_eq([me.energy, me.actions_left], [money, Balance.ACTION_BASE-1], "往返四年后释放未用资源，AP不退款")
@@ -62,18 +59,15 @@ func test_v01_remote_build_checks_actual_site_and_refunds_after_receipt() -> voi
 	me.colonies.append(at)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,at)
-	Signals.advance(s,2.0)
 	s.clock=2.0
 	Signals.receive_due(s)
 	check_eq(s.build(me,"miner",at)["error"],"","按已收到的真实矿点信息下单")
 	var paid:=me.mineral
 	s.map.rocky[at]=0 # 命令飞行期间矿点消失，锚点仍活着。
-	Signals.advance(s,2.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	check(me.pending.is_empty(),"开工抵达必须检查真实矿点，不能造幽灵矿船")
 	check_eq(me.mineral,paid,"远端失败退款要等回执，不能立即暴露")
-	Signals.advance(s,2.0)
 	s.clock=6.0
 	Signals.receive_due(s)
 	check_eq(me.mineral,paid+3.0,"未开工的3M托管随失败回执全额返回")

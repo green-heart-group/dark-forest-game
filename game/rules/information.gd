@@ -422,7 +422,7 @@ static func _hear(s: GameState, wave: Dictionary, civ: Civ, pos: Vector3, at: fl
 		return
 	wave["heard"][civ] = true
 	var message := Signals.send(s,s.civs.find(civ),pos,Signals.controller(civ),"report",{"type":"broadcast","target":wave["target"],
-		"exposed":wave["exposed"],"has_exposure":wave["has_exposure"],"t_observed":at,"epoch":s.space_epoch,"source_id":wave["id"]})
+		"exposed":wave["exposed"],"has_exposure":wave["has_exposure"],"t_observed":at,"epoch":s.space_epoch,"source_id":wave["id"]},0,false)
 	Signals.catch_up(s,message,s.clock-at)
 
 

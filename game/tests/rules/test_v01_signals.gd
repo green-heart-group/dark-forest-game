@@ -12,12 +12,10 @@ func test_v01_remote_sensor_two_leg_latency() -> void:
 	var body := {"type": "cell", "cell": cell,"cell_id":s.cell_ids[cell], "data": {"owner": 1, "stars": 1, "turn": 0},
 			"t_observed": 0.0, "source_id": observer.id, "epoch": 0}
 	Signals.send(s, 0, Vector3(cell), observer.id, "sensor", body)
-	Signals.advance(s, 1.0)
 	s.clock = 1.0
 	Signals.receive_due(s)
 	check(not me.intel.has(cell), "目标光先到远程探测器，不能同刻进入母星地图")
 	check_eq(s.messages.size(), 1, "接收后从探测器发送独立回传")
-	Signals.advance(s, 2.0)
 	s.clock = 3.0
 	Signals.receive_due(s)
 	check(me.intel.has(cell), "再传播2年后母星收到")
@@ -31,13 +29,13 @@ func test_v01_signal_pauses_and_resumes_without_restarting() -> void:
 	Assets.ensure(s, me)
 	var message := Signals.send(s, 0, Vector3(2, 0, 0), Signals.controller(me), "report",
 			{"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0})
-	Signals.advance(s, 0.5)
 	var pos: Vector3 = message["pos"]
 	s.set_light_at(Vector3i(pos.round()), 0.0)
-	Signals.advance(s, 20.0)
-	check_eq([message["pos"], message["distance"]], [pos, 0.5], "零光速暂停，不清空或从源头重发")
+	Signals.retime(s)
+	check_eq([s.messages.size(), message["eta"]], [1, INF], "零光速暂停，不清空，也算不出到达时间")
 	s.set_light_at(Vector3i(pos.round()), 1.0)
-	Signals.advance(s, 1.5)
+	Signals.retime(s)
+	check(message["eta"] < 22.0, "光速恢复后从原处接着走")
 	s.clock = 22.0
 	Signals.receive_due(s)
 	check(me.telemetry.has(999) and s.messages.is_empty(), "恢复后继续剩余路径并只送达一次")
@@ -68,11 +66,9 @@ func test_v01_known_wake_waits_for_sensor_and_return_and_keeps_history() -> void
 	Signals.sample(s,true)
 	var view:=Knowledge.presentation(s,me)
 	check(view.wakes.is_empty(),"曲率航迹尚未传感和回传，普通画面不读取物理死线")
-	Signals.advance(s,2.0) # 端点位于曲率死线内，初始有效光速也会减慢。
 	s.clock=2.0
 	Signals.receive_due(s)
 	check(Knowledge.presentation(s,me).wakes.is_empty(),"侦察器已收到，但控制端还需等第二程")
-	Signals.advance(s,2.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	view=Knowledge.presentation(s,me)
@@ -91,10 +87,8 @@ func test_v01_known_wake_requires_both_received_endpoints() -> void:
 	_ship(s,me,Ship.PROBE,Vector3(2,0,0))
 	s.deadlines.append({"id":9999,"a":Vector3(2.9,0,0),"b":Vector3(3.1,0,0),"expires":20.0})
 	Signals.sample(s,true)
-	Signals.advance(s,2.0)
 	s.clock=2.0
 	Signals.receive_due(s)
-	Signals.advance(s,2.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	check(me.wake_reports.has(9999) and me.wake_reports[9999].has(0),"近端已完整传回")

@@ -203,8 +203,8 @@ func refresh(me: Civ) -> void:
 	_refresh_completed_units(me)
 	actions.refresh(me)
 	var finished := state.is_over() and not state.collapse_pending()
-	_end.text = "🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合"
-	_end.disabled = main.saves.busy or (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
+	_end.text = "⏳ 正在结算这一回合……" if main.turning() else ("🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合")
+	_end.disabled = main.saves.busy or main.turning() or (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
 
 	_refresh_resources(me)
 	_res_values["actions"].text = "%d / %d" % [me.actions_left, me.action_points(state.map)]

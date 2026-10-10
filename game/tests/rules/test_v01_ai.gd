@@ -74,7 +74,6 @@ func test_v01_starship_only_ai_uses_paid_transport_and_landing() -> void:
 func _receive_telemetry(s: GameState, civ: Civ, ship: Ship) -> void:
 	Signals.report_ship(s, civ, ship)
 	var duration := ship.pos.distance_to(Vector3(civ.home)) * s.physical_cell_size() / s.background_light()
-	Signals.advance(s, duration)
 	s.clock += duration
 	Signals.receive_due(s)
 
@@ -199,13 +198,11 @@ func test_v01_ai_conversion_waits_for_ready_receipt() -> void:
 	me.mineral = 1000
 	var host := _ship(s, me, Ship.STARSHIP, Vector3(2, 0, 0))
 	Signals.report_ship(s,me,host)
-	Signals.advance(s,2.0)
 	s.clock+=2.0
 	Signals.receive_due(s)
 	check_eq(s.prepare_conversion(me, Conversion.roster(me, s.dimension), host.id, false, true)["error"], "", "远端锚点预付本级迁维准备工程")
 	var plan_id: int = me.pending[0]["id"]
 	check(not me.pending[0]["command_ready"],"远端宿主尚未收到开工命令")
-	Signals.advance(s,2.0)
 	s.clock += 2.0
 	Signals.receive_due(s)
 	s._finish_pending(me, WorkOrder.amount(me.pending[0]["work"]))
@@ -215,7 +212,6 @@ func test_v01_ai_conversion_waits_for_ready_receipt() -> void:
 	check(not AI._try_foil(s, me), "收到ready收据以前等待，不空发执行指令")
 	check_eq([me.energy_millis, me.mineral_millis, me.actions_left], before, "等待收据不重复付费或扣AP")
 	check(me.pending.is_empty(), "已有迁维计划时不新开同级准备工程")
-	Signals.advance(s, 2.0)
 	s.clock += 2.0
 	Signals.receive_due(s)
 	check(AI._try_foil(s, me), "收到本地控制锚点ready收据后执行迁维")
@@ -259,12 +255,10 @@ func test_v01_ai_retries_only_after_failed_command_receipt() -> void:
 		me.actions_left = 0
 		AI.take_turn(s, me)
 		check(tried.has(target), "远端真实死亡不能提前恢复目标")
-		Signals.advance(s, 2.0)
 		s.clock += 2.0
 		Signals.receive_due(s)
 		AI.take_turn(s, me)
 		check(tried.has(target), "命令已失败但回执仍在途中时继续等待")
-		Signals.advance(s, 2.0)
 		s.clock += 2.0
 		Signals.receive_due(s)
 		AI.take_turn(s, me)

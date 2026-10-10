@@ -66,7 +66,6 @@ func test_v01_progress_remote_hidden_state_pair() -> void:
 	me.colonies.append(remote)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,remote)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	var result := s.build(me,"miner",remote)

@@ -10,6 +10,8 @@ var survey_sequence := -1
 
 ## 仅供模拟统计；不参与规则状态或回放校验。
 signal civilization_eliminated(civ: Civ, cause: String)
+## 每写一行日志发一次（日志只留最近的，模拟统计要全部的就接这个）。
+signal line_logged(line: String)
 ## 一局游戏的全部规则状态。画面只读取它，通过它的方法来行动。
 ## 日志只写玩家应该知道的事：自己的行动、自己被打、有文明灭亡。
 ## AI 怎么行动在 ai.gd。
@@ -26,6 +28,13 @@ const NEVER := 1 << 30
 const FACILITIES := Construction.FACILITIES
 ## 调试时 dev_set 不能直接改的文明属性：直接改会让别处对不上（比如灭亡了却还占着星系）
 const DEV_SET_LOCKED := ["is_ai", "alive", "name", "home"]
+## 只增不减的记录各留多少（见 _trim_records）。只为让长局的内存和存档不一直变大。
+const LOG_KEEP := 200
+const EVENT_KEEP := 500
+const LEDGER_KEEP := 200
+const RESULT_KEEP := 64
+## 舰船和设施记着的当地目标，这么多年没有新观测就删掉（还看得见的目标每年至少重发一次）。
+const CONTACT_KEEP := 3.0
 ## 造好后停在星系里、要另外派出的单位
 const UNITS := Construction.UNITS
 const BUILD_NAMES := Construction.NAMES
@@ -57,6 +66,10 @@ var payloads: Array[Dictionary] = []
 var events: Array[Dictionary] = []
 var applied_hits: Dictionary[int, bool] = {}
 var messages: Array[Dictionary] = []
+## 上次算消息到达时间时的光速情况（Signals.medium）；变了就重新算（Signals.retime）。
+var message_medium: Array = []
+## 在途消息里最早的到达时刻：[命令类, 全部]。还没到就不用逐条检查（Signals.receive_due）；-INF 表示要重新查一遍。
+var message_due: Array = [-INF, -INF]
 var scans: Array[Dictionary] = []
 var neutral_assets: Array[Dictionary] = []
 var sensor_stamps: Dictionary = {}
@@ -402,6 +415,7 @@ func _end_turn() -> void:
 			if not is_over() and civ.is_ai and Balance.TECH_BURST_CHANCE>0.0 and rng.randf()<Balance.TECH_BURST_CHANCE:
 				_tech_burst(civ)
 			start_turn(civ)
+	_trim_records()
 	if not is_over():
 		turn += 1
 		add_log("第 %d 回合开始" % turn)
@@ -2013,11 +2027,54 @@ func _deliver_reports(civ: Civ) -> void:
 	_expire_intel(civ)
 
 
-## 太旧的目击记录删掉；预警只报这一回合的，清空。灭亡的文明不再收到新情报，旧的也照样过期。
+## 太旧的目击记录和预警删掉（还在预警范围里的目标每年至少重报一次）。
+## 灭亡的文明不再收到新情报，旧的也照样过期，预警直接清空。
 func _expire_intel(civ: Civ) -> void:
 	civ.sightings = civ.sightings.filter(func(x): return x["turn"] >= turn - Balance.SIGHTING_KEEP)
+	civ.alerts = civ.alerts.filter(func(x): return x["turn"] >= turn - Balance.SIGHTING_KEEP)
 	if not civ.alive:
 		civ.alerts.clear()
+
+
+## 只增不减的记录每回合修剪一次，长局里内存和存档不会一直变大。删的都是规则不再读的旧条目：
+## 日志、事件和命令回执只留最近的；账本把旧账并成一笔「结转」，总数不变；
+## 传感器签名过了一年本来就要重发，两年没用的删掉；很久没有新观测的当地目标删掉（星系的归属留着）。
+func _trim_records() -> void:
+	if log_lines.size() > LOG_KEEP:
+		log_lines = log_lines.slice(-LOG_KEEP)
+	if events.size() > EVENT_KEEP:
+		events = events.slice(-EVENT_KEEP)
+	for key in sensor_stamps.keys():
+		if clock - sensor_stamps[key]["time"] > 2.0:
+			sensor_stamps.erase(key)
+	for civ in civs:
+		if civ.ledger.size() > LEDGER_KEEP * 2:
+			var cut := civ.ledger.size() - LEDGER_KEEP
+			var total := [0, 0]
+			for entry in civ.ledger.slice(0, cut):
+				var delta: Array = entry.get("delta", [0, 0])
+				for i in 2:
+					total[i] += delta[i]
+			var t: float = civ.ledger[cut - 1]["t"]
+			civ.ledger = civ.ledger.slice(cut - 1)
+			civ.ledger[0] = {"t": t, "kind": "carried", "delta": total}
+		var drop := civ.command_results.size() - RESULT_KEEP
+		if drop > 0:
+			civ.command_results = civ.command_results.slice(drop)
+			civ.ai_receipt_cursor = maxi(0, civ.ai_receipt_cursor - drop)
+		for ship in civ.ships:
+			_forget_contacts(ship.local_contacts)
+		for source in civ.local_contacts_by_source.keys():
+			_forget_contacts(civ.local_contacts_by_source[source])
+			if civ.local_contacts_by_source[source].is_empty():
+				civ.local_contacts_by_source.erase(source)
+
+
+## 删掉 CONTACT_KEEP 年没有新观测的移动目标；星系归属（键是 cell:格子号）不过期。
+func _forget_contacts(contacts: Dictionary) -> void:
+	for key in contacts.keys():
+		if key is int and clock - contacts[key].get("t_received", clock) > CONTACT_KEEP:
+			contacts.erase(key)
 
 
 ## 预警系统：敌方的战舰、光粒、二向箔或单向著进入预警范围，报告它的位置（T12）。
@@ -2774,6 +2831,7 @@ func random_direction() -> Vector3:
 
 func add_log(line: String) -> void:
 	log_lines.append(line)
+	line_logged.emit(line)
 
 
 # ---------- V0.1 工程账本 ----------

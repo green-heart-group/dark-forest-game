@@ -94,7 +94,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	me.techs["dimension"]=true
 	var remote:=_ship(s,me,Ship.WARSHIP,Vector3(2,0,0))
 	Signals.report_ship(s,me,remote)
-	Signals.advance(s,2.0)
 	s.clock=2.0
 	Signals.receive_due(s)
 	var result:=s.prepare_conversion(me,Conversion.known_roster(s,me,3),Signals.controller(me),false,true)
@@ -107,7 +106,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	var rows: Array=conversion.known_ready(s,me,id)
 	check_eq([rows[0]["ready_at"],rows[0]["received_at"]],[7.0,7.0],"本地实体同刻确认准备到达")
 	check(not rows[1].has("ready_at"),"完工并不等于远方实体ready")
-	Signals.advance(s,2.0)
 	s.clock=9.0
 	Signals.receive_due(s)
 	check_eq(remote.ready["3>2"]["at"],9.0,"后端逐实体ready已有真实两年传播")
@@ -117,7 +115,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	remote.dead=true
 	check_eq(conversion.known_ready(s,me,id),pending,"未收到的失败或死亡不能改变准备展示")
 	remote.dead=false
-	Signals.advance(s,2.0)
 	s.clock=11.0
 	Signals.receive_due(s)
 	rows=conversion.known_ready(s,me,id)

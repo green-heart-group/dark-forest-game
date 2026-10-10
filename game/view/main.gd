@@ -15,6 +15,7 @@ const WebFiles := preload("res://view/web_files.gd")
 const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
 const MigrationPreview := preload("res://view/migration_preview.gd")
+const UnfoldingLayout := preload("res://rules/unfolding_layout.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -38,6 +39,13 @@ var reveal := CheckBox.new()
 var _layer := CanvasLayer.new()
 ## 自动存对局记录的位置（空：不存，画面测试用）
 var autosave_path := Replay.DIR.path_join("last.replay")
+## 结束回合时在后台线程里算一份复制品，画面不卡；算完再换上。这段时间画面照旧显示原来的局面，不能操作。
+## 画面测试设为 false，按下就算完；没有线程的网页版也只能直接算。
+var background_turns := OS.has_feature("threads")
+## 后台正在算的回合：任务号（没有时为 -1）、从哪个局面开始算、算出来的新局面。
+var _turn_task := -1
+var _turn_from: GameState = null
+var _turn_next: GameState = null
 
 
 func _ready() -> void:
@@ -119,6 +127,8 @@ func viewed() -> Civ:
 func locked_reason() -> String:
 	if saves.busy:
 		return "正在读取存档"
+	if turning():
+		return "正在结算这一回合，算完才能操作"
 	var reason := debug.locked_reason() if debug != null else ""
 	if reason == "" and viewed().is_ai:
 		reason = "%s 现在由 AI 控制（调试面板里可以接管）" % viewed().name
@@ -166,7 +176,7 @@ func autosave() -> void:
 
 ## 结束回合对所有文明都一样，在看别人的视角时也可以按（回放中不行）。对局结束后变成「再来一局」。
 func end_turn() -> void:
-	if saves.busy:
+	if saves.busy or turning():
 		return
 	if debug != null and (debug.replaying() or debug.seeking):
 		return
@@ -174,7 +184,48 @@ func end_turn() -> void:
 		new_game(randi() % 1000000)
 		return
 	panel.set_feedback("")
-	state.end_turn()
+	if not background_turns:
+		state.end_turn()
+		_after_turn()
+		return
+	_finish_turn()  # 换了局面以后被丢下的上一个任务，先等它结束
+	UnfoldingLayout._build()  # 规则用到的这份表第一次用时才建，先在这里建好，线程里只读
+	_turn_from = state
+	_turn_next = StateCopy.copy(state)
+	_turn_task = WorkerThreadPool.add_task(_turn_next.end_turn, false, "结束回合")
+	refresh()
+
+
+## 后台还在算「结束回合」。
+func turning() -> bool:
+	return _turn_task >= 0 and _turn_from == state
+
+
+## 等后台的回合算完。期间没换过局面（新开一局、读档、回放跳转）就换上算出来的局面，换过就丢掉。
+func _finish_turn() -> void:
+	if _turn_task < 0:
+		return
+	WorkerThreadPool.wait_for_task_completion(_turn_task)
+	_turn_task = -1
+	var next := _turn_next
+	var current := _turn_from == state
+	_turn_from = null
+	_turn_next = null
+	if current:
+		if panel._build_state == state:
+			panel._build_state = next  # 同一局接着走，不清掉还在等完工的建造
+		state = next
+		_after_turn()
+
+
+## 关窗口时后台还在算，等它算完再退出（算出的局面不要了）。
+func _exit_tree() -> void:
+	if _turn_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_turn_task)
+		_turn_task = -1
+
+
+func _after_turn() -> void:
 	if debug != null:
 		debug.remember_turn(state)
 	autosave()
@@ -209,6 +260,8 @@ func _on_map_click(c: Vector3i) -> void:
 
 ## 压平的动画放完以后，如果胜负已分但空间还没压完，每帧再压一步（不再有回合和收入）。
 func _process(delta: float) -> void:
+	if _turn_task >= 0 and WorkerThreadPool.is_task_completed(_turn_task):
+		_finish_turn()
 	if saves.busy:
 		return
 	if map.animating():

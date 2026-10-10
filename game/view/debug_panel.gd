@@ -832,6 +832,8 @@ func pause() -> void:
 
 
 func _on_tick() -> void:
+	if main.turning():
+		return  # 等「结束回合」在后台算完再接着播
 	if not step_forward(false):
 		pause()
 		refresh_panel()
@@ -841,7 +843,7 @@ func _on_tick() -> void:
 ## redraw 为 false 时不刷新画面（连续跳很多回合时只在最后刷新一次）。
 func step_forward(manual: bool, redraw := true) -> bool:
 	var s: GameState = main.state
-	if seeking:
+	if seeking or main.turning():
 		return false
 	if s.is_over():
 		_note = "对局已经结束"

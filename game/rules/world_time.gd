@@ -54,6 +54,10 @@ static func advance(s: GameState, duration: float) -> void:
 		var phase:=Time.get_ticks_usec() if s.profiling else 0
 		assert(guard < 100000, "连续事件不能在零时间重复触发")
 		Hazards.refresh(s)
+		var medium := Signals.medium(s)
+		if medium != s.message_medium:
+			Signals.retime(s)
+			s.message_medium = medium
 		var plans := {}
 		for civ in s.civs:
 			if civ.alive:
@@ -72,10 +76,9 @@ static func advance(s: GameState, duration: float) -> void:
 			dt = minf(dt, s.remap_until - s.clock)
 		dt = minf(dt, s.next_sensor_time - s.clock)
 		dt = minf(dt, next_completion(s))
-		# 广播光线和消息过光速不同的边界时，在子步里自己分段走（Hazards.light_travel），不让整个世界停下。
+		# 广播光线过光速不同的边界时，在子步里自己分段走（Hazards.light_travel），不让整个世界停下；消息发出时就算好了到达时刻。
 		var uniform := Hazards.uniform_light(s)
-		var message_motions:=Signals.plan(s,uniform)
-		dt = minf(dt, Signals.next_arrival(s,message_motions))
+		dt = minf(dt, Signals.next_arrival(s))
 		dt = minf(dt, Information.next_change(s, uniform))
 		var detail:=Time.get_ticks_usec() if s.profiling else 0
 		var motions := {}
@@ -124,7 +127,6 @@ static func advance(s: GameState, duration: float) -> void:
 		if s.profiling:
 			phase=s._lap("连续/边界与相交",phase)
 		var tactical_due := integrate(s, plans, dt)
-		Signals.advance(s, dt,message_motions,uniform)
 		Information.advance(s, dt, uniform)
 		SpaceEvents.advance(s, dt)
 		s._collapse_depth += 1

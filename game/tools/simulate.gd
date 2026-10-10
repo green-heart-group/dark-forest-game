@@ -132,6 +132,9 @@ func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
 	s.profiling = profiling
 	var eliminations := {}
 	s.civilization_eliminated.connect(func(_civ, cause): eliminations[cause] = eliminations.get(cause, 0) + 1)
+	# 局面里的日志只留最近几百行，打击结果要数全部的，就边写边收。
+	var lines: Array[String] = []
+	s.line_logged.connect(func(line): lines.append(line))
 	var dimensions := {"3": 1}
 	var tier_durations := []
 	for c in s.civs:
@@ -179,7 +182,7 @@ func _play(seed_value: int, max_turns: int, profiling: bool) -> Dictionary:
 		for id in c.techs:
 			techs[id] = techs.get(id, 0) + 1
 	var causes := {}
-	for line in s.log_lines:
+	for line in lines:
 		for key in ["光粒", "战舰", "二向箔", "黑域", "压缩"]:
 			if line.contains(key) and (line.contains("灭亡") or line.contains("抹掉") or line.contains("压缩")):
 				causes[key] = causes.get(key, 0) + 1

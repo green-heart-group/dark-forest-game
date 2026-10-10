@@ -166,7 +166,7 @@ static func next_light_edge(s: GameState, motion: Dictionary, dt: float, table :
 
 ## 光或消息从 pos 沿 direction 走 duration 年，最多走 remaining（物理距离）。
 ## 在一个子步里自己分段：每段用这一段起点的光速，到光速会变的地方（next_light_edge）换一段。
-## 返回走了多远（distance）、到达终点用了多久（arrival，没到为 INF）。光速为 0 的地方走不动。
+## 返回走了多远（distance）、到达终点用了多久（arrival，没到为 INF）、实际走了多久（time）。光速为 0 的地方走不动。
 static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaining: float, duration: float, table := {}) -> Dictionary:
 	var size := s.physical_cell_size()
 	var t := 0.0
@@ -188,7 +188,7 @@ static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaini
 			return {"distance": remaining, "arrival": t + need / speed}
 		moved += speed * step
 		t += step
-	return {"distance": moved, "arrival": INF}
+	return {"distance": moved, "arrival": INF, "time": t}
 
 ## 局部光速的不连续边界必须分段；场内连续权重使用最大步长积分并做减半收敛测试。
 static func next_boundary(s: GameState, motion: Dictionary, dt: float) -> float:

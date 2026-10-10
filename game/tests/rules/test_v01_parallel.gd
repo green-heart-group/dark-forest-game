@@ -155,7 +155,6 @@ func test_v01_parallel_home_identity_and_docked_starship() -> void:
 	me.colonies.append(colony)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,colony)
-	Signals.advance(s,2.0)
 	s.clock = 2.0
 	Signals.receive_due(s)
 	me.actions_left = 3
@@ -197,21 +196,18 @@ func test_v01_parallel_remote_receipt_does_not_release_other_slot() -> void:
 	me.colonies.append(at)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,at)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	s.build(me,"miner")
 	s.build(me,"miner")
 	var remote := s.build(me,"probe",at)
 	check_eq(remote["error"],"","母星两槽和殖民槽独立受理")
-	Signals.advance(s,4.0)
 	s.clock += 4.0
 	Signals.receive_due(s)
 	s._finish_pending(me,1.0)
 	check_eq(me.count(Ship.PROBE),1,"远端已实际完成探测器")
 	check(s.construction_busy(me,at,-1),"未收完工报告不能释放远端槽")
 	check(s.construction_busy(me,me.home,-1),"远端完工不释放母星的两项工程")
-	Signals.advance(s,4.0)
 	s.clock += 4.0
 	Signals.receive_due(s)
 	check(not s.construction_busy(me,at,-1),"收到该ID完工报告才释放远端槽")
@@ -289,7 +285,6 @@ func test_v01_parallel_remote_mother_cancel_and_hidden_state() -> void:
 	Assets.ensure(s,me)
 	me.home = control # 控制点搬迁，原母星资格仍按永久锚点ID保留。
 	Knowledge.report_site(s,me,mother)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	var a := s.build(me,"miner",mother)
@@ -302,7 +297,6 @@ func test_v01_parallel_remote_mother_cancel_and_hidden_state() -> void:
 	check_eq(s.cancel_order(me,a.get("order",-1))["error"],"","指定取消远端第一项")
 	check_eq([me.energy,me.mineral],before,"取消发送不立即退款")
 	check(s.construction_busy(me,mother,-1),"取消发送不提前释放槽位")
-	Signals.advance(s,4.0)
 	s.clock += 4.0
 	Signals.receive_due(s)
 	check_eq(me.pending.size(),1,"取消到达只中止该订单")
@@ -310,7 +304,6 @@ func test_v01_parallel_remote_mother_cancel_and_hidden_state() -> void:
 		check_eq(me.pending[0]["id"],b.get("order",-1),"第二项仍独立存续")
 	check_eq([me.energy,me.mineral],before,"远端执行后仍等待退款回执")
 	check(s.construction_busy(me,mother,-1),"未收取消回执仍占满两槽")
-	Signals.advance(s,4.0)
 	s.clock += 4.0
 	Signals.receive_due(s)
 	check_eq(me.mineral,before[1]+3.0,"零施工进度只退第一项3M")

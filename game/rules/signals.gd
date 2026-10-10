@@ -28,74 +28,120 @@ static func controller(civ: Civ) -> int:
 	return ship.id if ship != null else -1
 
 
-static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind: String, body: Dictionary, private_id:=0) -> Dictionary:
+## 消息不在每个子步里挪动：发出时就按途经各格的光速算好什么时候到（eta），到时才收。
+## source 是这一段的起点，target 是这一段瞄准的位置，sent 是从 source 出发的时刻。
+## 收件者在动时瞄的是它发出那一刻的位置；到了发现它已经走开，就从那里再追一段（见 receive_due）。
+## 这样只会比真实的拦截晚到，不会早到，玩家拿不到光还没送到的情报。
+## 同一刻从同一处发给同一收件者的情报走的是同一条路、同一刻到，合成一条（内容放进 more），收到时逐条拆开。
+## merge 为 false：调用方之后还要单独改这条消息（比如 catch_up 改出发时刻），不能和别的合在一起。
+static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind: String, body: Dictionary, private_id:=0, merge := true) -> Dictionary:
+	if merge and private_id == 0 and kind in MERGE_KINDS:
+		var host := _merge_host(s, owner, source, recipient, kind)
+		if not host.is_empty():
+			host["more"].append(body.duplicate(true))
+			return host
 	var receiver := entity(s, owner, recipient)
 	var fallback: Vector3 = body.get("recipient_pos", source)
 	var message := {"id": s.next_id() if private_id==0 else private_id, "owner": owner, "pos": source, "source": source,
 			"recipient": recipient, "kind": kind, "body": body.duplicate(true),
 			"sent": s.clock, "distance": 0.0, "epoch": s.space_epoch, "dead": false,
 			"target": receiver["pos"] if not receiver.is_empty() else fallback}
+	message["eta"] = s.clock + travel_time(s, source, message["target"])
+	if merge and private_id == 0 and kind in MERGE_KINDS:
+		message["more"] = []
+	_expect(s, message)
 	s.messages.append(message)
 	return message
 
+## 可以合并的消息种类：只是情报，收到后不改动实体。
+const MERGE_KINDS := ["sensor", "report"]
 
-## 消息其实在 lag 年前就该出发（事件在子步中间发生、到子步末才处理时）：先补走这段路，送达时刻就和准时出发一样。
+
+## 刚发出、还能并进去的同路消息。同一刻的发送通常一条接一条，所以只往回看最近几条。
+static func _merge_host(s: GameState, owner: int, source: Vector3, recipient: int, kind: String) -> Dictionary:
+	for i in range(s.messages.size() - 1, maxi(-1, s.messages.size() - 17), -1):
+		var m: Dictionary = s.messages[i]
+		if m["sent"] != s.clock:
+			break
+		if m.has("more") and not m["dead"] and m["owner"] == owner and m["recipient"] == recipient \
+				and m["kind"] == kind and m["source"] == source:
+			return m
+	return {}
+
+
+## 消息其实在 lag 年前就该出发（事件在子步中间发生、到子步末才处理时）：出发和到达时刻都往前挪，送达时刻就和准时出发一样。
 static func catch_up(s: GameState, message: Dictionary, lag: float) -> void:
 	if lag <= 0.0:
 		return
-	_fly(s, message, motion(s, message), lag)
 	message["sent"] -= lag
+	message["eta"] -= lag
+	_expect(s, message)
 
 
-static func motion(s: GameState, message: Dictionary) -> Dictionary:
-	var receiver := entity(s, message["owner"], message["recipient"])
-	return _motion(s,message,receiver)
+## 新消息或提前了的消息可能比记下的最早到达时刻还早。
+static func _expect(s: GameState, message: Dictionary) -> void:
+	if exact(message):
+		s.message_due[0] = minf(s.message_due[0], message["eta"])
+	s.message_due[1] = minf(s.message_due[1], message["eta"])
 
 
-## known_speed >= 0：调用方已知全图光速处处相同，消息一路都是这个光速，arrival 就是准确的到达时间。
-## 否则 arrival 只按起点光速估算，要准确的到达和这一段走多远用 _trip（Hazards.light_travel 分段走）。
-static func _motion(s: GameState,message: Dictionary,receiver: Dictionary,known_speed := -1.0) -> Dictionary:
-	var target: Vector3 = receiver["pos"] if not receiver.is_empty() else message["target"]
-	var delta: Vector3 = target - message["pos"]
+## 光从 from 走到 to 要多少年：按途经各格（以及黑域、死线）的光速分段算。路上有光速为 0 的地方、走不过去时为 INF。
+static func travel_time(s: GameState, from: Vector3, to: Vector3) -> float:
 	var size := s.physical_cell_size()
-	var length := delta.length() * size
-	var speed := known_speed if known_speed >= 0.0 else s.light_speed_at(message["pos"])
-	var direction := delta.normalized()
-	return {"arrival": length / speed if speed > 0 else INF, "speed": speed, "length": length,
-			"direction": direction, "uniform": known_speed >= 0.0,
-			"velocity": direction * speed / size}
+	var length := from.distance_to(to) * size
+	if length <= Balance.COLLISION_EPSILON:
+		return 0.0
+	var direction := (to - from).normalized()
+	var moved := 0.0
+	var time := 0.0
+	# light_travel 一次最多分 256 段，路很长、边界很多时接着再走。
+	for i in 64:
+		var trip := Hazards.light_travel(s, from + direction * moved / size, direction, length - moved, INF)
+		if trip["arrival"] != INF:
+			return time + trip["arrival"]
+		if trip["distance"] <= 0.0:
+			return INF
+		moved += trip["distance"]
+		time += trip["time"]
+	return INF
 
 
-## 这一段 duration 年里走多远、多久到；光速处处相同时直接算，否则过光速不同的边界时分段。
-static func _trip(s: GameState, message: Dictionary, m: Dictionary, duration: float) -> Dictionary:
-	# 这一段连格子边界都碰不到时，光速一路不变（没有黑域和死线时光速只随格子变），直接按起点光速算。
-	if m["uniform"] or (not Hazards.any(s) and Kinematics.next_cell_boundary({"pos": message["pos"], "velocity": m["velocity"], "acceleration": Vector3.ZERO}) > minf(duration, m["arrival"])):
-		return {"distance": minf(m["length"], m["speed"] * duration), "arrival": m["arrival"] if m["arrival"] <= duration else INF}
-	return Hazards.light_travel(s, message["pos"], m["direction"], m["length"], duration)
+## 消息现在大约在哪：在这一段起点和瞄准点之间，按已经过去的时间比例取点。只在换图、重新算到达时间时用。
+static func position(s: GameState, message: Dictionary) -> Vector3:
+	if not message.has("eta"):
+		return message["pos"] # 旧存档：消息还是逐步挪的，pos 就是现在的位置。
+	var eta: float = message["eta"]
+	if eta == INF or eta <= message["sent"]:
+		return message["source"] if eta == INF else message["target"]
+	var f := clampf((s.clock - message["sent"]) / (eta - message["sent"]), 0.0, 1.0)
+	return message["source"].lerp(message["target"], f)
 
 
-static func _fly(s: GameState, message: Dictionary, m: Dictionary, duration: float) -> void:
-	var trip := _trip(s, message, m, duration)
-	message["pos"] += m["direction"] * trip["distance"] / s.physical_cell_size()
-	message["distance"] += trip["distance"]
-	if trip["arrival"] <= duration + Balance.TIME_EPSILON:
-		# 已经飞到；收件者在动时，之后每段都跟到它身边，等刻度到了再拆开。
-		message["arrived"] = true
-
-## 子步开始、还没有东西移动时，先算好要准时处理的那几种消息（EXACT_KINDS）的轨迹，用来定子步多长。
-## 其余情报消息不影响子步长短，留到 advance 里边走边算，省得每个子步给上千条消息各建一份轨迹。
-## uniform：全图光速处处相同，每条消息的光速都是背景光速，不用逐条现查。
-static func plan(s: GameState, uniform := false) -> Dictionary:
-	var receivers: Dictionary={}
-	var motions: Dictionary={}
+## 把每条消息的起点挪到它现在大约在的位置、出发时刻改成现在。换图前先做，坐标才能跟着迁移。
+static func rebase(s: GameState) -> void:
 	for message in s.messages:
-		if message["dead"] or not message["kind"] in EXACT_KINDS:
+		if message["dead"]:
 			continue
-		var key: int=message["owner"]*RECEIVER_KEY+message["recipient"]
-		if not receivers.has(key):
-			receivers[key]=entity(s,message["owner"],message["recipient"])
-		motions[message["id"]]=_motion(s,message,receivers[key],s.background_light() if uniform else -1.0)
-	return motions
+		var at := position(s, message)
+		message["pos"] = at
+		message["source"] = at
+		message["sent"] = s.clock
+
+
+## 光速变了（黑域、死线、格子光速、换图）：从现在的位置按新的光速重新算到达时间。
+static func retime(s: GameState) -> void:
+	rebase(s)
+	for message in s.messages:
+		if not message["dead"]:
+			message["eta"] = s.clock + travel_time(s, message["source"], message["target"])
+	s.message_due = [-INF, -INF]
+
+
+## 决定什么时候要重新算到达时间：这些东西变了，光速就可能变了。
+## 有黑域或死线时它们还会随时间扩散、消失，所以每年再算一次。
+static func medium(s: GameState) -> Array:
+	return [s.space_epoch, s.dimension, hash(s.light), hash(s.cell_dims), s.black_domains.size(), s.deadlines.size(),
+			s.domain_cells.size(), floori(s.clock) if Hazards.any(s) else 0]
 
 
 ## 这几种消息到了就改动实体或执行命令，要在到达的那一刻处理。
@@ -104,69 +150,20 @@ const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]
 const RECEIVER_KEY := 1 << 32
 
 
-## 只有命令类消息的到达要让整个世界停下来。其余的情报（传感、回报）照样按光速飞到、停在收件者那里，
-## 但等到下一个 0.05 年的传感刻度才拆开（固定节拍处理，见 receive_due），不再每到一条就切一个子步。
+## 只有命令类消息的到达要让整个世界停下来。其余的情报（传感、回报）到了以后
+## 等到下一个 0.05 年的传感刻度才拆开（固定节拍处理，见 receive_due），不再每到一条就切一个子步。
 static func exact(message: Dictionary) -> bool:
 	return message["kind"] in EXACT_KINDS
 
 
-static func next_arrival(s: GameState,prepared: Dictionary = {}) -> float:
+## 下一条命令类消息还要多久到（换图后要等到 not_before 才收）。
+static func next_arrival(s: GameState) -> float:
 	var next := INF
 	for message in s.messages:
 		if not message["dead"] and exact(message):
-			var m: Dictionary=prepared[message["id"]] if prepared.has(message["id"]) else motion(s,message)
-			next = minf(next, _trip(s, message, m, INF)["arrival"])
+			var at: float = maxf(message.get("eta", INF), message.get("not_before", -INF))
+			next = minf(next, maxf(0.0, at - s.clock))
 	return next
-
-
-## prepared 里没有的消息在这里现算轨迹；收件者此时还没移动，和子步开始时算的一样。
-## 消息常有上千条，每个子步都要走一遍，所以没有黑域和死线时不为每条消息建轨迹字典，直接算：
-## 这时光速只随格子变，每格只查一次；这一段走完还在同一格里，就是匀速直线，否则交给 Hazards.light_travel 分段走。
-static func advance(s: GameState, duration: float,prepared: Dictionary = {},uniform := false) -> void:
-	var receivers: Dictionary={}
-	var size := s.physical_cell_size()
-	var fixed := uniform or not Hazards.any(s)
-	var cell_speed: Dictionary={}
-	for message in s.messages:
-		if message["dead"]:
-			continue
-		if prepared.has(message["id"]):
-			_fly(s, message, prepared[message["id"]], duration)
-			continue
-		var key: int=message["owner"]*RECEIVER_KEY+message["recipient"]
-		if not receivers.has(key):
-			receivers[key]=entity(s,message["owner"],message["recipient"])
-		var receiver: Dictionary=receivers[key]
-		if not fixed:
-			_fly(s, message, _motion(s,message,receiver), duration)
-			continue
-		var pos: Vector3=message["pos"]
-		var target: Vector3 = receiver["pos"] if not receiver.is_empty() else message["target"]
-		var delta := target - pos
-		var length := delta.length() * size
-		var cell := Vector3i(pos.round())
-		var speed: float
-		if uniform:
-			speed=s.background_light()
-		else:
-			if not cell_speed.has(cell):
-				cell_speed[cell]=s.light_speed_at(pos)
-			speed=cell_speed[cell]
-		if speed <= 0.0:
-			continue
-		var direction := delta.normalized()
-		var distance := minf(length, speed * duration)
-		var arrival := length / speed
-		if arrival > duration:
-			arrival=INF
-		if not uniform and Vector3i((pos + direction * distance / size).round()) != cell:
-			var trip := Hazards.light_travel(s, pos, direction, length, duration)
-			distance=trip["distance"]
-			arrival=trip["arrival"]
-		message["pos"] = pos + direction * distance / size
-		message["distance"] += distance
-		if arrival <= duration + Balance.TIME_EPSILON:
-			message["arrived"] = true
 
 
 static func receive_due(s: GameState, depth := 0) -> void:
@@ -179,34 +176,65 @@ static func receive_due(s: GameState, depth := 0) -> void:
 	var ticks := s.clock / Balance.PHYSICS_MAX_DT
 	var on_tick := absf(ticks - roundf(ticks)) * Balance.PHYSICS_MAX_DT <= Balance.TIME_EPSILON
 	var size := s.physical_cell_size()
-	# 和「距离乘格子尺寸不超过碰撞容差」等价，只是省掉每条消息的开方。
 	var reach2 := (Balance.COLLISION_EPSILON / size) * (Balance.COLLISION_EPSILON / size)
-	# 每个子步要查好几遍，消息上千条时这一圈本身就很费时：先用最便宜的条件跳过，收件者按整数键只查一次。
+	var due := s.clock + Balance.TIME_EPSILON
+	# 最早的一条都还没到（不在刻度上时只看命令类），这一遍不用逐条看。
+	if s.message_due[1 if on_tick else 0] > due:
+		return
+	var next_exact := INF
+	var next_any := INF
 	for message in s.messages:
 		if message["dead"]:
 			continue
-		if not on_tick and not message["kind"] in EXACT_KINDS:
+		var eta: float = message.get("eta", INF)
+		if eta > due:
+			next_any = minf(next_any, eta)
+			if message["kind"] in EXACT_KINDS:
+				next_exact = minf(next_exact, eta)
 			continue
-		if s.clock < message.get("not_before", -INF):
+		var is_exact: bool = message["kind"] in EXACT_KINDS
+		if (not on_tick and not is_exact) or s.clock < message.get("not_before", -INF):
+			# 已经到了，只是还要等刻度或换图结束：下次照样要看它。
+			next_any = minf(next_any, eta)
+			if is_exact:
+				next_exact = minf(next_exact, eta)
 			continue
 		var owner: int=message["owner"]
 		var key: int=owner*RECEIVER_KEY+message["recipient"]
 		if not receivers.has(key):
 			receivers[key]=entity(s,owner,message["recipient"])
 		var receiver: Dictionary=receivers[key]
+		message["pos"] = message["target"]
 		if receiver.is_empty():
 			# 收件者死亡不能令远端命令在发送瞬间退款，从余额泄露真实战况。
-			if message["pos"].distance_to(message["target"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON:
-				message["dead"] = true
-				changed = true
-				if message["kind"] == "command":
-					s._receive_command(message, false)
-			continue
-		if message.get("arrived", false) or message["pos"].distance_squared_to(receiver["pos"]) <= reach2:
 			message["dead"] = true
-			arrived.append(message)
+			changed = true
+			if message["kind"] == "command":
+				s._receive_command(message, false)
+			continue
+		if receiver["pos"].distance_squared_to(message["target"]) > reach2:
+			# 收件者已经走开：从瞄准点出发，再追到它现在的位置。
+			message["source"] = message["target"]
+			message["sent"] = message["eta"]
+			message["target"] = receiver["pos"]
+			message["eta"] += travel_time(s, message["source"], receiver["pos"])
+			if message["eta"] > due:
+				next_any = minf(next_any, message["eta"])
+				if is_exact:
+					next_exact = minf(next_exact, message["eta"])
+				continue
+			message["pos"] = receiver["pos"]
+		message["dead"] = true
+		arrived.append(message)
+	# 先记下剩下的消息里最早的到达时刻；下面收消息时新发出的消息会再往前更新（_expect）。
+	s.message_due = [next_exact, next_any]
 	for message in arrived:
 		_deliver(s, message)
+		for body in message.get("more", []):
+			var part: Dictionary = message.duplicate()
+			part["body"] = body
+			part.erase("more")
+			_deliver(s, part)
 	if changed or not arrived.is_empty():
 		s.messages = s.messages.filter(func(m): return not m["dead"])
 		receive_due(s, depth + 1)

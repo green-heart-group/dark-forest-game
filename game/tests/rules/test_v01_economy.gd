@@ -294,7 +294,6 @@ func test_v01_transport_landing_separate_escrow() -> void:
 	check_eq(s.call("start_landing", me, transport.id)["error"], "", "无主星系由运输船作为在制宿主")
 	check_eq([me.energy, me.mineral], [stock[0]-3.0, stock[1]-4.0], "单独支付3E4M")
 	check(not me.pending[0]["command_ready"],"远端开工指令仍在途中")
-	Signals.advance(s,1.0)
 	s.clock += 1.0
 	Signals.receive_due(s)
 	_turns(s, 3)
@@ -316,7 +315,6 @@ func test_v01_mobile_host_burns_all_projects() -> void:
 	_received_landing_site(s,me,ship)
 	var order := s.start_landing(me, ship.id)
 	check_eq(order["error"], "", "落地在制订单建立")
-	Signals.advance(s,1.0)
 	s.clock+=1.0
 	Signals.receive_due(s)
 	check(me.pending[0]["command_ready"],"先让落地开工命令实际抵达，再检验在制工程损毁")
@@ -325,7 +323,6 @@ func test_v01_mobile_host_burns_all_projects() -> void:
 	check(me.pending.is_empty(), "运输船毁灭立即烧毁工程，不能等回合末才中止")
 	check_eq(s.cancel_order(me, order["order"])["error"],"", "远端死亡尚未回传时仍可发出取消请求")
 	check_eq([me.energy, me.mineral], stock, "无幽灵宿主退款")
-	Signals.advance(s,1.0)
 	s.clock+=1.0
 	Signals.receive_due(s)
 	check(s.cancel_order(me,order["order"])["error"]!="","损毁收据到达后禁止重发取消")
@@ -337,7 +334,6 @@ func _received_landing_site(s: GameState,me: Civ,ship: Ship) -> void:
 	Assets.ensure(s,me)
 	Signals.report_ship(s,me,ship)
 	Signals.send(s,0,ship.pos,Signals.controller(me),"report",{"type":"cell","cell":ship.cell(),"data":s.snapshot(ship.cell()),"t_observed":s.clock,"source_id":ship.id,"epoch":s.space_epoch})
-	Signals.advance(s,1.0)
 	s.clock += 1.0
 	Signals.receive_due(s)
 
@@ -357,7 +353,6 @@ func _landing_refund_match() -> GameState:
 
 
 func _landing_messages(s: GameState, duration: float) -> void:
-	Signals.advance(s,duration)
 	s.clock += duration
 	Signals.receive_due(s)
 
@@ -490,7 +485,6 @@ func test_v01_landing_inherits_transport_dimension_not_controller_flag() -> void
 		Assets.at(me,"anchor",me.home)[0]["entity_dim"]=2 if me.reduced else 3
 		check_eq(s.start_landing(me,transport.id)["error"],"","下令依据已收历史，隐藏前沿不提前改变按钮")
 		# 后半格是二维格子，光速 0.6：命令要 0.5 + 0.5/0.6 ≈ 1.33 年才到。
-		Signals.advance(s,1.5)
 		s.clock+=1.5
 		Signals.receive_due(s)
 		if transport_dim==2:

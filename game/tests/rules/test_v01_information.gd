@@ -63,7 +63,6 @@ func test_v01_scan_is_round_trip_and_original_mother_only() -> void:
 	me.colonies.append(backup)
 	Assets.ensure(s,me)
 	s._lose_system(me.original_home,me)
-	Signals.advance(s,2.0)
 	s.clock = 12.0
 	Signals.receive_due(s)
 	check(s.scan_error(me,Vector3.RIGHT)!="","后继殖民地不能冒充原母星扫描器")

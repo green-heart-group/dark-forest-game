@@ -91,6 +91,7 @@ func run_tests() -> void:
 	view = load("res://view/main.tscn").instantiate()
 	root.add_child(view)
 	view.autosave_path = ""  # 不覆盖玩家自己的 last.replay
+	view.background_turns = false  # 按下结束回合就算完，后面的检查马上能看到新回合
 	map = view.map
 	panel = view.panel
 	actions = view.panel.actions
@@ -129,6 +130,7 @@ func run_tests() -> void:
 	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
 	await run(test_restart)
+	await run(test_end_turn_in_background)
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
@@ -455,7 +457,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	s.system_cells.append(at)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,at)
-	Signals.advance(s,4.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	show_state(s)
@@ -465,7 +466,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	view.refresh()
 	panel._origin_pick.select(1)
 	panel._build_tiles["probe"].pressed.emit()
-	Signals.advance(s,4.0)
 	s.clock=8.0
 	Signals.receive_due(s)
 	WorkOrder.advance(me.pending[0],100.0)
@@ -473,7 +473,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	view.refresh()
 	check(panel._build_tiles["probe"].disabled,"远端真实完工未回报前，建造按钮仍等待确认")
 	check(actions._selected_unit()!=null and actions._selected_unit().id==existing.id,"远端真实完工未回报时保留现有选择")
-	Signals.advance(s,4.0)
 	s.clock=12.0
 	Signals.receive_due(s)
 	view.refresh()
@@ -1178,6 +1177,24 @@ func test_post_victory_collapse() -> void:
 	await capture("post-victory-collapse")
 
 
+## 规则：界面和操作
+## 结束回合在后台算：算的时候画面照旧、不能操作，算完换上新局面，结果和直接算的一样。
+func test_end_turn_in_background() -> void:
+	var s := fixture()
+	show_state(s)
+	view.background_turns = true
+	panel._end.pressed.emit()
+	check(view.turning() and panel._end.disabled and view.locked_reason() != "", "后台结算时按钮变灰、不能操作")
+	check(view.state == s, "算完之前画面还是原来的局面")
+	var started := Time.get_ticks_msec()
+	while view.turning() and Time.get_ticks_msec() - started < 60000:
+		await process_frame
+	view.background_turns = false
+	check(not view.turning() and view.state != s and not panel._end.disabled, "算完换上新局面，按钮恢复")
+	s.end_turn()
+	check_eq([view.state.turn, view.state.checksum()], [s.turn, s.checksum()], "后台算出的和直接算的一样")
+
+
 ## 重开一局：对局中途要先确认；结束以后「结束回合」变成「再来一局」。
 func test_restart() -> void:
 	show_state(GameState.new_game(5))
@@ -1517,7 +1534,6 @@ func test_v01_shared_information_view() -> void:
 	me.ships.append(ship)
 	Knowledge.report_site(a,me,remote)
 	Signals.report_ship(a,me,ship)
-	Signals.advance(a,5.0)
 	a.clock=5.0
 	Signals.receive_due(a)
 	var b:=StateCopy.copy(a)
@@ -1574,7 +1590,6 @@ func test_v01_ui_resource_preview() -> void:
 	me.miners[remote] = 1
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,remote)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	show_state(s)

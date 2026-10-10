@@ -16,7 +16,6 @@ func test_v01_conversion_frozen_roster_and_remote_ready() -> void:
 	var me := s.human()
 	var remote := _ship(s, me, Ship.WARSHIP, Vector3(2, 0, 0))
 	Signals.report_ship(s,me,remote)
-	Signals.advance(s,2.0)
 	s.clock=2.0
 	Signals.receive_due(s)
 	var ids := Conversion.roster(me, 3)
@@ -32,7 +31,6 @@ func test_v01_conversion_frozen_roster_and_remote_ready() -> void:
 	Signals.receive_due(s)
 	check(not me.conversions[result["order"]]["roster"].has(added.id), "后来建造的资产不混入冻结名册")
 	check(not remote.ready.has("3>2"), "远方舰船不能瞬间ready")
-	Signals.advance(s, 2.0)
 	s.clock = 9.0
 	Signals.receive_due(s)
 	check_eq(remote.ready["3>2"]["at"], 9.0, "准备完成后的两光年指令真实传播两年")
