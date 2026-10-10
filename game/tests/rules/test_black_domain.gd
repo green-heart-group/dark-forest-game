@@ -18,7 +18,7 @@ func test_black_domain_payload_activation_radius_and_expiry() -> void:
 	me.techs["domain"]=true
 	check(s.launch_black_domain(me,Vector3i(5,0,0))["error"]!="","没有已收情报与覆盖的目标拒绝")
 	check_eq(s.launch_black_domain(me,center)["error"],"","公开入口投放")
-	check_eq([me.energy,me.mineral,me.actions_left],[52.0,88.0,1],"48E12M及1AP预付")
+	check_eq([me.energy,me.mineral,me.actions_left],[52.0,88.0,Balance.ACTION_BASE-1],"48E12M及1AP预付")
 	check(s.launch_black_domain(me,center)["error"]!="","20年冷却生效")
 	WorldTime.advance(s,4.2)
 	check(s.black_domains.is_empty(),"2ly/.9c飞行后还需2年激活")

@@ -181,6 +181,8 @@ func test_reduce_takes_work_freezes_roster_and_executes_separately() -> void:
 	var result:=s.start_reduce(me)
 	check_eq(result["error"],"","准备冻结两实体名册")
 	check_eq([me.energy,me.mineral],[stock[0]-18,stock[1]-12],"12E8M基础加每实体3E2M")
+	# 母星有两个施工槽：迁维占一个，另一个还能建一个探测器（1E3M），再建就满了。
+	check_eq(s.build(me,"probe")["error"],"","迁维只占母星一个施工槽")
 	check(s.build(me,"probe")["error"]!="","同一宿主在制迁维占用建造队列")
 	_turns(s,4)
 	check(not me.reduced and not me.pending.is_empty(),"5W在4年时尚未完成")
@@ -188,16 +190,18 @@ func test_reduce_takes_work_freezes_roster_and_executes_separately() -> void:
 	check(not me.reduced and probe.entity_dim==3,"准备完成只发ready，不立即降维")
 	check_eq(s.execute_conversion(me,result["order"])["error"],"","收到回执后执行")
 	check(me.reduced and probe.entity_dim==2,"名册内的原地实体已转换")
-	check_eq(me.energy,61.5,"准备后剩82E，在首次执行时保留75%")
+	check_eq(me.energy,60.75,"准备并建探测器后剩81E，在首次执行时保留75%")
 
 
 ## 规则：自身降维
 func test_reduce_waits_for_host_construction() -> void:
 	var s:=_two_civs(Vector3i(8,8,8))
 	var me:=s.human()
-	_give(me,["dimension","miner"])
+	_give(me,["dimension","miner","probe"])
 	s.map.rocky[me.home]=1
 	check_eq(s.build(me,"miner")["error"],"","合法矿点开工")
+	# 母星有两个施工槽，两个都占上才算宿主忙。
+	check_eq(s.build(me,"probe")["error"],"","母星第二个槽建探测器")
 	var e:=me.energy
 	check(s.start_reduce(me)["error"]!="" and me.energy==e,"同一宿主在制工程阻止迁维，不额外扣费")
 	_turns(s,2)

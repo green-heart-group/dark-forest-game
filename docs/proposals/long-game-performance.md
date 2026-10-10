@@ -332,3 +332,5 @@ Robert Nystrom 的《游戏编程模式》（Game Programming Patterns）可以�
 - `test_foil.test_reduce_takes_work_freezes_roster_and_executes_separately`
 - `test_black_domain.test_black_domain_payload_activation_radius_and_expiry`
 - `test_units.test_colony_ship_requires_paid_landing_after_arrival`
+
+原因是实验分支改了规则，这几个测试没跟着改：每年的行动点从 2 变成 3，母星有两个施工槽（其他星系一个），运输船按当地光速分档后每年加速 0.08 倍光速、1 光年约 5 年飞到。第五批之后按这三条改了测试的预期，规则没动，现在全部规则测试 0 个失败。

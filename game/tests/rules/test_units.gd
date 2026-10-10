@@ -27,10 +27,11 @@ func test_colony_ship_requires_paid_landing_after_arrival() -> void:
 	check_eq(s.send_colony(me,ship.id,Vector3i(1,0,0))["error"],"","派出正式运输船")
 	check_eq(me.energy,e,"派出不另花能量")
 	check(s.send_colony(me,ship.id,Vector3i(2,0,0))["error"]!="","在途命令禁止重复派出")
-	_turns(s,20)
-	check(ship.pos.x<1 and me.colonies.size()==1,".005加速和.08限速使1ly航程超过20年")
+	# 运输船每年加速 0.08 倍光速，从静止飞 1 光年要 5 年（还到不了 0.4 倍光速的上限）。
+	_turns(s,4)
+	check(ship.pos.x<1 and ship.moving() and me.colonies.size()==1,"4 年后还在路上")
 	_turns(s,2)
-	check(ship.pos.is_equal_approx(Vector3(1,0,0)) and not ship.moving(),"21年内抵达，随后等遥测返回")
+	check(ship.pos.distance_to(Vector3(1,0,0))<1e-3 and not ship.moving(),"6 年内抵达，随后等遥测返回")
 	check(me.colonies.size()==1 and not ship.dead,"到达本身不免费殖民")
 	var stock:=[me.energy,me.mineral]
 	check_eq(s.start_landing(me,ship.id)["error"],"","109正式提交落地")
