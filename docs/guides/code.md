@@ -132,6 +132,9 @@
   工具负责数值声明同步、网页字体、导入、导出、ZIP 打包和网页开发者入口；发布流程只负责上传和发布。
   GitHub 测试流程在 Windows、macOS、Linux 上检查工具逻辑；发布流程在 Linux 上实际导出游戏。
   Godot 预设仍在 `game/export_presets.cfg` 中维护，不在脚本里重复平台设置。
+  共用的 CI 环境固定 Python 3.11；发布前检查测试生成的文档和数值声明已提交，导出到 `build/release/`，缺少产物时上传失败。
+  手动运行只保存导出产物；版本标签触发 Release 和网页版部署，含连字符的标签标为预发布。Release 元数据使用触发标签的提交作为来源。
+  Actions 下载产物按运行编号命名，避免分支名中的斜杠导致上传失败；uv 缓存按 Python 工具中的脚本依赖声明更新。
 
 - 导出设置有五个：`Windows Desktop`（普通版 exe）、`Windows Desktop (dev)`（开发者版 exe）、`Web`、`macOS (Intel)`、`macOS (Apple Silicon)`。
   开发者版和普通版只差一个 `dev` 标记（导出设置的「自定义特性」），`main.gd` 看到它就打开调试面板，等于带了 `-- debug`。

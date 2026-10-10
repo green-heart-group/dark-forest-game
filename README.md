@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [**在浏览器里玩**](https://green-heart-group.github.io/dark-forest-game/) ·
-[下载 Windows 版](https://github.com/green-heart-group/dark-forest-game/releases) ·
+[下载桌面版](https://github.com/green-heart-group/dark-forest-game/releases) ·
 [完整规则](docs/design/current-rules.md)
 
 <table>
@@ -170,6 +170,9 @@ godot_console --headless --path game --script res://tools/simulate.gd -- PRESET=
 - 网页版发到 <https://green-heart-group.github.io/dark-forest-game/>；
   带调试面板的网页版在 <https://green-heart-group.github.io/dark-forest-game/dev/>（见 [调试模式](docs/guides/debug-tools.md#怎么打开)）。
 - 标签里带「-」（如 `v0.1.0-test`）的标成预发布。步骤写在 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
+
+也可以在 GitHub Actions 的「发布」页面手动选择分支运行：只检查和导出，不创建 Release 或部署网页；完成后在运行页面下载产物。
+CI 导出到 `build/release/`，发布前检查测试生成的文档和数值声明是否已提交，全部导出成功才上传。
 
 ```bash
 git tag v0.1.0
