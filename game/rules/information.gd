@@ -204,15 +204,33 @@ static func waves(s: GameState) -> Array:
 	return result
 
 
-static func next_change(s: GameState) -> float:
+## 没有黑域和死线时，同一格里的光速相同：一次调用内按格子记下，和逐点现查是同一个数。
+static func _speed(s: GameState, pos: Vector3, memo: Variant) -> float:
+	if memo == null:
+		return s.light_speed_at(pos)
+	var cell := Vector3i(pos.round())
+	if not memo.has(cell):
+		memo[cell] = s.light_speed_at(pos)
+	return memo[cell]
+
+
+static func _memo(s: GameState) -> Variant:
+	return null if Hazards.any(s) else {}
+
+
+## uniform：全图光速处处相同（Hazards.uniform_light），这时光线只在到达时有变化。
+static func next_change(s: GameState, uniform := false) -> float:
 	var time := INF
+	var memo: Variant = _memo(s)
 	for wave in waves(s):
 		for sample in wave["samples"]:
 			if sample["done"]:
 				continue
-			var speed := s.light_speed_at(sample["pos"])
+			var speed := _speed(s, sample["pos"], memo)
 			if speed > 0.0:
 				time = minf(time,sample["remaining"]/speed)
+				if uniform:
+					continue
 				var motion := {"pos":sample["pos"],"velocity":sample["direction"]*speed/s.physical_cell_size(),"acceleration":Vector3.ZERO}
 				time = minf(time,Hazards.next_boundary(s,motion,Balance.PHYSICS_MAX_DT))
 	for listener in s.hidden_listen:
@@ -222,12 +240,13 @@ static func next_change(s: GameState) -> float:
 
 static func advance(s: GameState, dt: float) -> void:
 	var env:=LightFront.environment(s) if not waves(s).is_empty() else {}
+	var memo: Variant = _memo(s)
 	for wave in waves(s):
 		LightFront.remember(wave,env,s.clock,s.clock+dt)
 		for sample in wave["samples"]:
 			if sample["done"]:
 				continue
-			var speed := s.light_speed_at(sample["pos"])
+			var speed := _speed(s, sample["pos"], memo)
 			var distance: float = minf(sample["remaining"], speed*dt)
 			sample["leg_distance"] += distance
 			sample["pos"] = sample["leg_start"] + sample["direction"]*sample["leg_distance"]/s.physical_cell_size()

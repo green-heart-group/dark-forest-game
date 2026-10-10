@@ -39,6 +39,32 @@ func test_v01_broadcast_reaches_new_receiver_but_not_wave_tail() -> void:
 	check(s.broadcasts[0]["heard"].has(other),"发射后才出现、但仍在前沿之前的接收器会收到")
 
 
+## 规则：广播和隐藏文明
+func test_v01_uniform_light_does_not_stop_waves_at_cell_edges() -> void:
+	var s:=_wave_match()
+	# 发射点不在格心：朝 (0,0,1) 的光线先过 z=0.5 的格子边界，晚于它才到最近的格心。
+	Information.broadcast(s,s.human(),Vector3(0.1,0.2,0.3),Vector3i(4,4,4),GameState.NO_HIT)
+	check(Hazards.uniform_light(s),"没有黑域和死线，各格光速相同")
+	var arrival:=INF
+	for sample in s.broadcasts[0]["samples"]:
+		arrival=minf(arrival,sample["remaining"]/s.light_speed_at(sample["pos"]))
+	check_eq(Information.next_change(s,true),arrival,"光速处处相同时，下一次变化是最早的到达，不在格子边界停")
+	Hazards.activate(s,Vector3(6,6,6))
+	check(not Hazards.uniform_light(s),"有黑域时光速会变")
+	check(Information.next_change(s,false)<arrival,"有黑域时照旧在格子边界停，换成新格子的光速")
+
+
+## 规则：广播和隐藏文明
+func test_v01_uniform_light_keeps_broadcast_years_short() -> void:
+	var s:=_wave_match()
+	Information.broadcast(s,s.human(),Vector3(0.1,0.2,0.3),Vector3i(4,4,4),GameState.NO_HIT)
+	s.profiling=true
+	WorldTime.advance(s,1.0)
+	var steps: int=s.profile["连续/子步数"]
+	# 每条光线过一次格子边界就切一刀时，一年要切几百段。
+	check(steps<=2*roundi(1.0/Balance.PHYSICS_MAX_DT),"一年只切 %d 段，不随光线过格子边界的次数增加" % steps)
+
+
 ## 规则：情报传回
 func test_v01_scan_intercepts_new_moving_target_and_returns_later() -> void:
 	var s:=_wave_match()

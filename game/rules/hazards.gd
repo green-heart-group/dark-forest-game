@@ -63,7 +63,25 @@ static func segment_distance(point: Vector3, a: Vector3, b: Vector3) -> float:
 	return point.distance_to(a + part * d)
 
 
+## 场上有没有黑域或死线。都没有时，压制恒为 1，一点的光速只由所在格子决定。
+static func any(s: GameState) -> bool:
+	return not s.black_domains.is_empty() or not s.deadlines.is_empty()
+
+
+## 全图光速处处相同：没有黑域和死线，每格的维度和光速也都和背景一样。
+## 这时光走过格子边界什么都不变，不用在边界停下来。
+static func uniform_light(s: GameState) -> bool:
+	if any(s):
+		return false
+	for cell in s.cell_ids:
+		if s.cell_dims.get(s.cell_ids[cell], s.dimension) != s.dimension or s.light_at(cell) < 1.0:
+			return false
+	return true
+
+
 static func suppression(s: GameState, position: Vector3) -> float:
+	if not any(s):
+		return 1.0
 	var relative := 1.0
 	var cell := Vector3i(position.round())
 	var life: Dictionary = s.domain_cells.get(s.cell_ids.get(cell, -1), {})
