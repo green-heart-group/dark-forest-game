@@ -218,7 +218,8 @@ static func _memo(s: GameState) -> Variant:
 	return null if Hazards.any(s) else {}
 
 
-static func next_change(s: GameState) -> float:
+## uniform：全图光速处处相同（Hazards.uniform_light），这时光线只在到达时有变化。
+static func next_change(s: GameState, uniform := false) -> float:
 	var time := INF
 	var memo: Variant = _memo(s)
 	for wave in waves(s):
@@ -228,6 +229,8 @@ static func next_change(s: GameState) -> float:
 			var speed := _speed(s, sample["pos"], memo)
 			if speed > 0.0:
 				time = minf(time,sample["remaining"]/speed)
+				if uniform:
+					continue
 				var motion := {"pos":sample["pos"],"velocity":sample["direction"]*speed/s.physical_cell_size(),"acceleration":Vector3.ZERO}
 				time = minf(time,Hazards.next_boundary(s,motion,Balance.PHYSICS_MAX_DT))
 	for listener in s.hidden_listen:
