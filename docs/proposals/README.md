@@ -52,3 +52,8 @@
 | 2026-10-07 | [feedback-play-test-7.md](feedback-play-test-7.md) | E7F6（原著武器资料是 RainZL 找的） | 已整理（2026-10-07） | 战舰带反物质打战舰和星舰；以后加粒子束、星际鱼雷、次声波氢弹，之后造的战舰自动带上（整理成 T23，武器已定；带反物质还没定，见 [T24](../open-questions.md#t24-战舰带反物质)） |
 | 2026-10-08 | [dimension-followup-tasks.md](dimension-followup-tasks.md) | E7F6、RainZL、hrwu1、ccl | 大部分已采纳（2026-10-08） | 降维后续需求、验收条件与参考图。定下的是 U2～U6；做到哪一步见[路线图](../roadmap.md)；还没定的挪到 [E10～E13](../open-questions.md#一览) |
 | 2026-10-09 | [interface-clarity.md](interface-clarity.md) | 用户 | 已采纳 | 全屏横向科技树、图例默认收起、减少广播圈和中盘显示层次。 |
+
+| 2026-10-08～10-10 | [chat-directions.md](chat-directions.md) | E7F6、ccl、Gogo、RainZL | 讨论中 | 去除已完成事项后的实现范围与验收。 |
+| 2026-10-08～10-10 | [chat-direction-sources.md](chat-direction-sources.md) | 群聊参与者 | 已整理 | 讨论摘录、时间、来源、媒体与版本冲突。 |
+| 2026-10-09 | [tech-tree-revision.md](tech-tree-revision.md) | E7F6 | 讨论中 | 科技、建造、调度 Word 的完整文字转换稿。 |
+| 2026-10-09 | [balance-v01.md](balance-v01.md) | ccl 分享的候选文档 | 讨论中 | 数值闭环 V0.1 的完整 Markdown 转换稿，保留表格字段、公式和外置图片。 |
