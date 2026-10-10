@@ -147,3 +147,20 @@ static func next_cell_boundary(motion: Dictionary) -> float:
 		var distance_to_edge := absf(boundary - x)
 		best = minf(best, time_to_distance(distance_to_edge, absf(v), absf(a)))
 	return best
+
+
+## 匀速直线（没有加速度）时的 next_cell_boundary，结果相同。光和消息分段时每个子步要算几十万次，所以单独写一份不建字典的。
+static func straight_cell_exit(pos: Vector3, velocity: Vector3) -> float:
+	var best := INF
+	for axis in 3:
+		var v: float = velocity[axis]
+		if absf(v) <= 1e-15:
+			continue
+		var x: float = pos[axis]
+		var boundary := floorf(x + 0.5 + signf(v) * 1e-7) + (0.5 if v > 0.0 else -0.5)
+		var edge := absf(boundary - x)
+		if edge > 0.0:
+			best = minf(best, edge / absf(v))
+		else:
+			best = 0.0
+	return best

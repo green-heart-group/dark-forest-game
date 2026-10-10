@@ -15,6 +15,19 @@ static func environment(s: GameState, uniform := false) -> Dictionary:
 	if uniform and s.domain_cells.is_empty():
 		return {"size":s.physical_cell_size(),"speed":s.background_light(),"speeds":{},
 			"immunity":{},"domains":[],"lines":[],"epoch":s.space_epoch}
+	# 没有黑域、死线和黑域留下的格子时，光速表只跟各格维度和光速有关：这些没变就沿用上次那份（不要改动返回的表）。
+	var key := []
+	if s.domain_cells.is_empty() and not Hazards.any(s):
+		key = [s.space_epoch, s.dimension, hash(s.light), hash(s.cell_ids), hash(s.cell_dims)]
+		if s.environment_cache.get("key", []) == key:
+			return s.environment_cache["env"]
+	var env := _environment(s)
+	if not key.is_empty():
+		s.environment_cache = {"key": key, "env": env}
+	return env
+
+
+static func _environment(s: GameState) -> Dictionary:
 	var speeds := {}
 	var immunity := {}
 	for cell in s.cell_ids:

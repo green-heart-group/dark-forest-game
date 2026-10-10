@@ -142,6 +142,7 @@ static func convert_cell(s: GameState, cell: Vector3i) -> void:
 	if s.cell_dims[id] < s.dimension:
 		return
 	s.cell_dims[id] = s.dimension - 1
+	s.converted_cells.append(cell)
 	if s.dimension == 3:
 		s.flattened[cell] = s.flat_plane
 	elif s.dimension == 2:

@@ -191,10 +191,41 @@ func has_starship() -> bool:
 
 
 func ship_by_id(id: int) -> Ship:
-	for s in ships:
-		if s.id == id:
-			return s
+	var i: int = _ship_slots.get(id, -1)
+	if i >= 0 and i < ships.size() and ships[i].id == id:
+		return ships[i]
+	for k in ships.size():
+		if ships[k].id == id:
+			_ship_slots = _slots(ships)
+			return ships[k]
 	return null
+
+
+## 资产 ID 对应的资产（Assets.get_id 用），找不到时为空字典。
+func asset_by_id(id: int) -> Dictionary:
+	var i: int = _asset_slots.get(id, -1)
+	if i >= 0 and i < assets.size() and assets[i]["id"] == id:
+		return assets[i]
+	for k in assets.size():
+		if assets[k]["id"] == id:
+			_asset_slots = _slots(assets)
+			return assets[k]
+	return {}
+
+
+## 记下每个 ID 在列表里的位置，下次先看那个位置还是不是它，是就不用从头找。
+## 列表改了也没关系：位置上不是它时照旧从头找，找到后重记。
+## 只为算得快，不打包（StateCopy.SKIP）。
+var _ship_slots: Dictionary = {}
+var _asset_slots: Dictionary = {}
+
+
+static func _slots(items: Array) -> Dictionary:
+	var slots := {}
+	for k in range(items.size() - 1, -1, -1): # 倒着记，同一个 ID 出现两次时记前面那个，和从头找的结果一样
+		var item = items[k]
+		slots[item.id if item is Ship else item["id"]] = k
+	return slots
 
 
 ## 某种单位（不算光粒）有几个，含停着的。

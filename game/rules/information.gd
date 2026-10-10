@@ -256,7 +256,7 @@ static func advance(s: GameState, dt: float, uniform := false) -> void:
 	for wave in waves(s):
 		LightFront.remember(wave,env,s.clock,s.clock+dt)
 		if fixed and wave.has("sender"):
-			if wave.has("medium") and wave["medium"] != env:
+			if wave.has("medium") and wave["medium"] != env and not _swap_medium(s, wave, env):
 				settle_wave(s, wave)
 			if not wave.has("medium"):
 				_lazy_begin(s, wave, env)
@@ -299,7 +299,7 @@ static func _eta(s: GameState, sample: Dictionary, table: Dictionary) -> float:
 
 
 static func _lazy_begin(s: GameState, wave: Dictionary, table: Dictionary) -> void:
-	var order := []
+	var keyed := []
 	var live_max := 0.0
 	var samples: Array = wave["samples"]
 	for i in samples.size():
@@ -307,9 +307,11 @@ static func _lazy_begin(s: GameState, wave: Dictionary, table: Dictionary) -> vo
 		if sample["done"]:
 			continue
 		sample["eta"] = s.clock + _eta(s, sample, table)
-		order.append(i)
+		keyed.append([sample["eta"], i])
 		live_max = maxf(live_max, sample["distance"])
-	order.sort_custom(func(a, b): return samples[a]["eta"] < samples[b]["eta"] or (samples[a]["eta"] == samples[b]["eta"] and a < b))
+	# 按到达时刻排，同时到的按光线顺序。[时刻, 序号] 直接用内置排序比较，比逐对调用脚本函数快得多。
+	keyed.sort()
+	var order := keyed.map(func(pair): return pair[1])
 	wave["medium"] = table
 	wave["order"] = order
 	wave["cursor"] = 0
@@ -326,6 +328,7 @@ static func _lazy_arrive(s: GameState, wave: Dictionary, time: float) -> void:
 	while cursor < order.size() and samples[order[cursor]]["eta"] <= time + Balance.TIME_EPSILON:
 		var sample: Dictionary = samples[order[cursor]]
 		_move(s, wave, sample, sample["remaining"], sample["eta"] - wave["lazy_from"], wave["lazy_from"])
+		sample.erase("lazy_from")
 		wave["check"] = true
 		cursor += 1
 	wave["cursor"] = cursor
@@ -343,12 +346,59 @@ static func settle_wave(s: GameState, wave: Dictionary) -> void:
 	var order: Array = wave["order"]
 	for k in range(wave["cursor"], order.size()):
 		var sample: Dictionary = samples[order[k]]
-		if s.clock > start:
-			var trip := Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], s.clock - start, table)
-			_move(s, wave, sample, trip["distance"], trip["arrival"], start)
+		# 被 _swap_medium 单独推进过的光线从它自己那一刻接着推进。
+		var from: float = sample.get("lazy_from", start)
+		if s.clock > from:
+			var trip := Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], s.clock - from, table)
+			_move(s, wave, sample, trip["distance"], trip["arrival"], from)
 		sample.erase("eta")
+		sample.erase("lazy_from")
 	for key in ["medium", "order", "cursor", "lazy_from", "live_max", "due"]:
 		wave.erase(key)
+
+
+## 光速表只是几个格子的光速变了（比如有格子降了维）时，不用整条波重排：
+## 只把剩下的路线穿过这些格子的光线按旧表推进到现在，再按新表算到达时刻；其余光线一路光速没变，到达时刻照旧。
+## 别的东西也变了（格子大小、背景光速、换图、黑域、死线），或者变的格子太多，返回 false，由调用方整条重排。
+static func _swap_medium(s: GameState, wave: Dictionary, env: Dictionary) -> bool:
+	var old: Dictionary = wave["medium"]
+	for key in ["size", "speed", "epoch"]:
+		if old[key] != env[key]:
+			return false
+	for key in ["immunity", "domains", "lines"]:
+		if not old[key].is_empty() or not env[key].is_empty():
+			return false
+	var changed: Array[Vector3i] = []
+	for cell in old["speeds"]:
+		if env["speeds"].get(cell, env["speed"]) != old["speeds"][cell]:
+			changed.append(cell)
+	for cell in env["speeds"]:
+		if not old["speeds"].has(cell):
+			changed.append(cell)
+	if changed.size() > 64:
+		return false
+	_lazy_arrive(s, wave, s.clock)
+	var boxes := Geometry.cell_boxes(changed)
+	var start: float = wave["lazy_from"]
+	var samples: Array = wave["samples"]
+	var order: Array = wave["order"]
+	var keyed := []
+	for k in range(wave["cursor"], order.size()):
+		var i: int = order[k]
+		var sample: Dictionary = samples[i]
+		if Geometry.crosses_cells(boxes, sample["pos"], sample["target"]):
+			var from: float = sample.get("lazy_from", start)
+			if s.clock > from:
+				var trip := Hazards.light_travel(s, sample["pos"], sample["direction"], sample["remaining"], s.clock - from, old)
+				_move(s, wave, sample, trip["distance"], trip["arrival"], from)
+			sample["lazy_from"] = s.clock
+			sample["eta"] = s.clock + _eta(s, sample, env)
+		keyed.append([sample["eta"], i])
+	keyed.sort()
+	wave["order"] = order.slice(0, wave["cursor"]) + keyed.map(func(pair): return pair[1])
+	wave["medium"] = env
+	wave["due"] = samples[wave["order"][wave["cursor"]]]["eta"] if wave["cursor"] < wave["order"].size() else INF
+	return true
 
 
 static func settle(s: GameState) -> void:

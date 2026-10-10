@@ -49,6 +49,10 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 	message["eta"] = s.clock + travel_time(s, source, message["target"])
 	if merge and private_id == 0 and kind in MERGE_KINDS:
 		message["more"] = []
+	message["n"] = s.message_serial
+	s.message_serial += 1
+	if not s.message_index.is_empty() and exact(message):
+		s.message_index["exact"].append(message)
 	_expect(s, message)
 	s.messages.append(message)
 	return message
@@ -78,11 +82,49 @@ static func catch_up(s: GameState, message: Dictionary, lag: float) -> void:
 	_expect(s, message)
 
 
-## 新消息或提前了的消息可能比记下的最早到达时刻还早。
+## 新消息或提前了的消息可能比记下的最早到达时刻还早；同时把它放进新的到达刻度。
 static func _expect(s: GameState, message: Dictionary) -> void:
 	if exact(message):
 		s.message_due[0] = minf(s.message_due[0], message["eta"])
 	s.message_due[1] = minf(s.message_due[1], message["eta"])
+	if not s.message_index.is_empty():
+		_file(s.message_index, message)
+
+
+## 在途消息的索引：{"buckets": {刻度: [消息]}, "low": 可能还有消息的最小刻度, "exact": [命令类消息], "dead": 已收但还没从 messages 删掉的条数}。
+## 第 k 个刻度装到达时刻在 k×0.05 年到 (k+1)×0.05 年之间的消息。到达时刻改了就再放进新刻度，旧刻度里的那份收的时候认出来跳过。
+## 算不出到达时间的（光速为 0）不放进去：光速一变就整份重算（retime）。
+static func _indexed(s: GameState) -> Dictionary:
+	if s.message_index.is_empty():
+		var index := {"buckets": {}, "low": NEVER, "exact": [], "dead": 0}
+		for message in s.messages:
+			if not message.has("n"): # 旧存档
+				message["n"] = s.message_serial
+				s.message_serial += 1
+			if message["dead"]:
+				index["dead"] += 1
+				continue
+			if exact(message):
+				index["exact"].append(message)
+			_file(index, message)
+		s.message_index = index
+	return s.message_index
+
+
+## 比任何刻度都大，当作「没有」。
+const NEVER := 1 << 62
+
+
+static func _file(index: Dictionary, message: Dictionary) -> void:
+	var eta: float = message.get("eta", INF)
+	if eta > 1e12:
+		return
+	var tick := floori(eta / Balance.PHYSICS_MAX_DT)
+	var buckets: Dictionary = index["buckets"]
+	if not buckets.has(tick):
+		buckets[tick] = []
+	buckets[tick].append(message)
+	index["low"] = mini(index["low"], tick)
 
 
 ## 光从 from 走到 to 要多少年：按途经各格（以及黑域、死线）的光速分段算。路上有光速为 0 的地方、走不过去时为 INF。
@@ -106,43 +148,123 @@ static func travel_time(s: GameState, from: Vector3, to: Vector3) -> float:
 	return INF
 
 
-## 消息现在大约在哪：在这一段起点和瞄准点之间，按已经过去的时间比例取点。只在换图、重新算到达时间时用。
+## 消息现在在哪：从这一段的起点按现在的光速走了 (现在 − 出发时刻) 年的地方。只在换图、重新算到达时间时用。
+## 不按时间比例在直线上取点：路上光速不一样时（先慢后快），按比例取的点会比真实位置靠前，重算出来的到达时刻就早了。
+## 这一段出发以后光速只可能在上次重算之后才变（变了就会重算），所以按现在的光速走，最多差一个 0.05 年。
 static func position(s: GameState, message: Dictionary) -> Vector3:
 	if not message.has("eta"):
 		return message["pos"] # 旧存档：消息还是逐步挪的，pos 就是现在的位置。
 	var eta: float = message["eta"]
-	if eta == INF or eta <= message["sent"]:
-		return message["source"] if eta == INF else message["target"]
-	var f := clampf((s.clock - message["sent"]) / (eta - message["sent"]), 0.0, 1.0)
-	return message["source"].lerp(message["target"], f)
+	var source: Vector3 = message["source"]
+	var target: Vector3 = message["target"]
+	if eta != INF and s.clock >= eta:
+		return target
+	var elapsed: float = s.clock - message["sent"]
+	var size := s.physical_cell_size()
+	var length := source.distance_to(target) * size
+	if elapsed <= 0.0 or length <= Balance.COLLISION_EPSILON:
+		return source
+	var direction := (target - source).normalized()
+	var moved := 0.0
+	var time := 0.0
+	# light_travel 一次最多分 256 段，路很长、边界很多时接着再走。
+	for i in 64:
+		var trip := Hazards.light_travel(s, source + direction * moved / size, direction, length - moved, elapsed - time)
+		if trip["arrival"] != INF:
+			return target
+		moved += trip["distance"]
+		time += trip["time"]
+		if time >= elapsed - 1e-12 or trip["distance"] <= 0.0:
+			break
+	return source + direction * moved / size
 
 
-## 把每条消息的起点挪到它现在大约在的位置、出发时刻改成现在。换图前先做，坐标才能跟着迁移。
+## 把每条消息的起点挪到它现在所在的位置、出发时刻改成现在。换图前先做，坐标才能跟着迁移。
 static func rebase(s: GameState) -> void:
 	for message in s.messages:
-		if message["dead"]:
-			continue
-		var at := position(s, message)
-		message["pos"] = at
-		message["source"] = at
-		message["sent"] = s.clock
+		if not message["dead"]:
+			_rebase_one(s, message)
+
+
+static func _rebase_one(s: GameState, message: Dictionary) -> void:
+	var at := position(s, message)
+	message["pos"] = at
+	message["source"] = at
+	message["sent"] = s.clock
 
 
 ## 光速变了（黑域、死线、格子光速、换图）：从现在的位置按新的光速重新算到达时间。
-static func retime(s: GameState) -> void:
-	rebase(s)
-	for message in s.messages:
-		if not message["dead"]:
-			message["eta"] = s.clock + travel_time(s, message["source"], message["target"])
+## before 是上次算时的 medium。只是几个格子降了维、或者黑域在扩大、死线在延长（光速变化的范围变了，个数没变）时，
+## 只重算路线碰到这些地方的消息（_retime_near）；其余消息一路光速没变，到达时间照旧。别的变化全部重算。
+static func retime(s: GameState, before: Array = []) -> void:
+	var now := medium(s)
+	var near := before.size() == now.size()
+	for i in now.size() if near else 0:
+		if before[i] != now[i] and not (i == MEDIUM_TICK or (i == MEDIUM_CELLS and not s.converted_cells.is_empty())):
+			near = false
+	var shapes := hazard_shapes(s)
+	if near:
+		var cells: Array[Vector3i] = []
+		if before[MEDIUM_CELLS] != now[MEDIUM_CELLS]:
+			cells = s.converted_cells
+		_retime_near(s, cells, shapes + s.hazard_shapes)
+	else:
+		rebase(s)
+		for message in s.messages:
+			if not message["dead"]:
+				message["eta"] = s.clock + travel_time(s, message["source"], message["target"])
+	s.hazard_shapes = shapes
+	s.converted_cells.clear()
 	s.message_due = [-INF, -INF]
+	s.message_index.clear()
+
+
+## 黑域和死线影响光速的范围：[一端, 另一端, 半径]，单位是格。黑域取到下一个 0.05 年刻度时的半径（它一直在扩大）。
+static func hazard_shapes(s: GameState) -> Array:
+	var size := s.physical_cell_size()
+	var shapes := []
+	for source in s.black_domains:
+		var reach := Hazards.radius(s, source, s.clock + Balance.PHYSICS_MAX_DT) + 1e-6
+		shapes.append([source["pos"], source["pos"], reach / size])
+	for line in s.deadlines:
+		shapes.append([line["a"], line["b"], (Balance.DEADLINE_RADIUS + 1e-6) / size])
+	return shapes
+
+
+## 只重算剩下的路线碰到 cells 里某一格、或者碰到 shapes 里某一处范围的消息。
+static func _retime_near(s: GameState, cells: Array[Vector3i], shapes: Array) -> void:
+	var boxes := Geometry.cell_boxes(cells)
+	for message in s.messages:
+		if message["dead"]:
+			continue
+		# 先用整段（起点到瞄准点）粗筛，碰不到的不用算现在的位置。
+		if not _touches(boxes, shapes, message["source"], message["target"]):
+			continue
+		var at := position(s, message)
+		if _touches(boxes, shapes, at, message["target"]):
+			_rebase_one(s, message)
+			message["eta"] = s.clock + travel_time(s, at, message["target"])
+
+
+static func _touches(boxes: Array[AABB], shapes: Array, a: Vector3, b: Vector3) -> bool:
+	if Geometry.crosses_cells(boxes, a, b):
+		return true
+	for shape in shapes:
+		if Geometry.segment_distance(a, b, shape[0], shape[1]) <= shape[2]:
+			return true
+	return false
 
 
 ## 决定什么时候要重新算到达时间：这些东西变了，光速就可能变了。
-## 有黑域或死线时它们还会随时间扩散、消失，所以每年再算一次。
+## 有黑域或死线时，黑域会扩大、死线会延长，所以每个 0.05 年刻度再看一次（只重算附近的消息）。
+## medium 里第几项是各格维度、第几项是刻度（retime 据此认出可以只重算一部分的情况）。
+const MEDIUM_CELLS := 3
+const MEDIUM_TICK := 7
+
+
 static func medium(s: GameState) -> Array:
 	return [s.space_epoch, s.dimension, hash(s.light), hash(s.cell_dims), s.black_domains.size(), s.deadlines.size(),
-			s.domain_cells.size(), floori(s.clock) if Hazards.any(s) else 0]
-
+			s.domain_cells.size(), floori(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON) if Hazards.any(s) else 0]
 
 ## 这几种消息到了就改动实体或执行命令，要在到达的那一刻处理。
 const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]
@@ -159,8 +281,8 @@ static func exact(message: Dictionary) -> bool:
 ## 下一条命令类消息还要多久到（换图后要等到 not_before 才收）。
 static func next_arrival(s: GameState) -> float:
 	var next := INF
-	for message in s.messages:
-		if not message["dead"] and exact(message):
+	for message in _indexed(s)["exact"]:
+		if not message["dead"]:
 			var at: float = maxf(message.get("eta", INF), message.get("not_before", -INF))
 			next = minf(next, maxf(0.0, at - s.clock))
 	return next
@@ -181,23 +303,37 @@ static func receive_due(s: GameState, depth := 0) -> void:
 	# 最早的一条都还没到（不在刻度上时只看命令类），这一遍不用逐条看。
 	if s.message_due[1 if on_tick else 0] > due:
 		return
-	var next_exact := INF
-	var next_any := INF
-	for message in s.messages:
-		if message["dead"]:
+	# 只看到达刻度不晚于现在的消息，按发出的先后处理。没处理的（还没到、要等刻度、追收件者）放回索引。
+	var index := _indexed(s)
+	var buckets: Dictionary = index["buckets"]
+	var last := floori(due / Balance.PHYSICS_MAX_DT)
+	var found: Array[Dictionary] = []
+	for tick in range(index["low"], last + 1):
+		if buckets.has(tick):
+			found.append_array(buckets[tick])
+			buckets.erase(tick)
+	if index["low"] <= last:
+		index["low"] = NEVER
+		for tick in buckets:
+			index["low"] = mini(index["low"], tick)
+	found.sort_custom(func(a, b): return a["n"] < b["n"])
+	# 后面的刻度里的消息都不早于这个时刻。
+	var next_any := (last + 1) * Balance.PHYSICS_MAX_DT
+	var previous := {}
+	for message in found:
+		if message["dead"] or is_same(message, previous):
 			continue
+		previous = message
 		var eta: float = message.get("eta", INF)
 		if eta > due:
+			_file(index, message)
 			next_any = minf(next_any, eta)
-			if message["kind"] in EXACT_KINDS:
-				next_exact = minf(next_exact, eta)
 			continue
 		var is_exact: bool = message["kind"] in EXACT_KINDS
 		if (not on_tick and not is_exact) or s.clock < message.get("not_before", -INF):
 			# 已经到了，只是还要等刻度或换图结束：下次照样要看它。
+			_file(index, message)
 			next_any = minf(next_any, eta)
-			if is_exact:
-				next_exact = minf(next_exact, eta)
 			continue
 		var owner: int=message["owner"]
 		var key: int=owner*RECEIVER_KEY+message["recipient"]
@@ -219,15 +355,21 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			message["target"] = receiver["pos"]
 			message["eta"] += travel_time(s, message["source"], receiver["pos"])
 			if message["eta"] > due:
+				_file(index, message)
 				next_any = minf(next_any, message["eta"])
-				if is_exact:
-					next_exact = minf(next_exact, message["eta"])
 				continue
 			message["pos"] = receiver["pos"]
 		message["dead"] = true
 		arrived.append(message)
+	var next_exact := INF
+	var waiting: Array = []
+	for message in index["exact"]:
+		if not message["dead"]:
+			waiting.append(message)
+			next_exact = minf(next_exact, message.get("eta", INF))
+	index["exact"] = waiting
 	# 先记下剩下的消息里最早的到达时刻；下面收消息时新发出的消息会再往前更新（_expect）。
-	s.message_due = [next_exact, next_any]
+	s.message_due = [next_exact, minf(next_any, next_exact)]
 	for message in arrived:
 		_deliver(s, message)
 		for body in message.get("more", []):
@@ -236,7 +378,11 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			part.erase("more")
 			_deliver(s, part)
 	if changed or not arrived.is_empty():
-		s.messages = s.messages.filter(func(m): return not m["dead"])
+		# 收过的消息攒到总数的八分之一再一起删掉，不用每收一批就整份重排。
+		index["dead"] += arrived.size() + (1 if changed else 0)
+		if index["dead"] * 8 >= s.messages.size():
+			s.messages = s.messages.filter(func(m): return not m["dead"])
+			index["dead"] = 0
 		receive_due(s, depth + 1)
 
 
@@ -556,6 +702,7 @@ static func sample(s: GameState, force := false) -> void:
 	# 在固定最大子步网格采样，不能因接收一个消息再无限加密采样而产生零时间事件洪泛。
 	s.next_sensor_time = (floorf(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON) + 1.0) * Balance.PHYSICS_MAX_DT
 	var entities := Combat.targets(s, true, true)
+	var index := Geometry.cell_index(s.system_cells)
 	for civ in s.civs:
 		if not civ.alive:
 			continue
@@ -590,7 +737,7 @@ static func sample(s: GameState, force := false) -> void:
 							{"type":"front","front_type":entry[0],"data":zone.duplicate(true)},true)
 			var origin_pos: Vector3 = observer["pos"]
 			var reach2 := view_reach2(s, observer)
-			for cell in s.system_cells:
+			for cell in Geometry.cells_near(s.system_cells, index, origin_pos, sqrt(reach2)):
 				if (Vector3(cell) - origin_pos).length_squared() > reach2 or not in_view(s, observer, Vector3(cell)):
 					continue
 				var data := s.snapshot(cell)
@@ -639,7 +786,7 @@ static func reported_ships(s: GameState, civ: Civ) -> Array[Ship]:
 	ids.sort()
 	var result: Array[Ship] = []
 	for id in ids:
-		var ship := reported_ship(s, civ, id)
+		var ship := _reported_ship(s, civ, id, control)
 		if ship != null:
 			result.append(ship)
 	return result
@@ -647,8 +794,12 @@ static func reported_ships(s: GameState, civ: Civ) -> Array[Ship]:
 
 ## 前端与命令校验使用最后收到的遥测；只在控制锚点原地时可直接读本地实体。
 static func reported_ship(s: GameState, civ: Civ, id: int) -> Ship:
+	return _reported_ship(s, civ, id, entity(s, s.civs.find(civ), controller(civ)))
+
+
+## control 是控制锚点（entity 的结果）。一次查很多艘时由调用方先查好。
+static func _reported_ship(s: GameState, civ: Civ, id: int, control: Dictionary) -> Ship:
 	var actual := civ.ship_by_id(id)
-	var control := entity(s, s.civs.find(civ), controller(civ))
 	if actual != null and not actual.dead and not control.is_empty() and actual.pos.distance_to(control["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON:
 		return actual
 	if not civ.telemetry.has(id):

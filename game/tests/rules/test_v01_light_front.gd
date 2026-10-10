@@ -71,6 +71,38 @@ func test_v01_uniform_light_records_exact_arrival() -> void:
 
 
 ## 规则：广播和隐藏文明
+func test_v01_cell_conversion_reschedules_only_crossing_rays() -> void:
+	# 隐藏文明听到后每年按机会出手，出手后就不再监听；这里只看听到的时刻。
+	Balance.HIDDEN_STRIKE_CHANCE=0.0
+	var s:=_wave_match()
+	s.hidden=[Vector3i(-2,1,0)]
+	var origin:=Vector3(0.1,0.2,0.3)
+	Information.broadcast(s,s.human(),origin,Vector3i(4,4,4),GameState.NO_HIT)
+	var exact:=s.clock+origin.distance_to(Vector3(s.hidden[0]))*s.physical_cell_size()/s.background_light()
+	WorldTime.advance(s,0.5)
+	var wave: Dictionary=s.broadcasts[0]
+	var started: float=wave["lazy_from"]
+	var before:={}
+	for i in wave["samples"].size():
+		before[i]=wave["samples"][i].get("eta",INF)
+	# 二维格的光速比三维慢，穿过这一格的光线要晚到。
+	SpaceEvents.convert_cell(s,Vector3i(3,0,0))
+	WorldTime.advance(s,Balance.PHYSICS_MAX_DT)
+	check_eq(wave["lazy_from"],started,"只有一格变了，整条波不用重排")
+	var later:=0
+	var earlier:=0
+	for i in wave["samples"].size():
+		var sample: Dictionary=wave["samples"][i]
+		if sample.has("eta"):
+			later+=1 if sample["eta"]>before[i]+1e-9 else 0
+			earlier+=1 if sample["eta"]<before[i]-1e-9 else 0
+	check(later>0 and earlier==0,"穿过那一格的光线晚到（%d 条），没有光线提前（%d 条）" % [later,earlier])
+	WorldTime.advance(s,2.0)
+	check_eq(s.hidden_listen.size(),1,"隐藏文明听到了广播")
+	check(not s.hidden_listen.is_empty() and absf(s.hidden_listen[0]["received"]-exact)<1e-9,"路线不经过那一格的接收者照旧按准确时刻收到")
+
+
+## 规则：广播和隐藏文明
 func test_v01_uniform_light_keeps_broadcast_years_short() -> void:
 	var s:=_wave_match()
 	Information.broadcast(s,s.human(),Vector3(0.1,0.2,0.3),Vector3i(4,4,4),GameState.NO_HIT)

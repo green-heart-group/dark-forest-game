@@ -96,3 +96,74 @@ static func _along(origin: Vector3, direction: Vector3, from_t: float, to_t: flo
 	for h in hits:
 		result.append(h[1])
 	return result
+
+## 每个格子在 cells 里的第几个（同一格出现几次就记几个），给 cells_near 用。
+static func cell_index(cells: Array[Vector3i]) -> Dictionary:
+	var index := {}
+	for i in cells.size():
+		if not index.has(cells[i]):
+			index[cells[i]] = []
+		index[cells[i]].append(i)
+	return index
+
+
+## cells 里离 pos 可能不超过 reach 格的那些，顺序和 cells 里一样。只是粗筛（看 pos 周围的方盒），调用方还要自己精确判断。
+## 方盒里的格子比 cells 还多时，直接返回 cells，不如逐个看。index 是 cell_index(cells) 的结果。
+static func cells_near(cells: Array[Vector3i], index: Dictionary, pos: Vector3, reach: float) -> Array[Vector3i]:
+	if not is_finite(reach) or reach > 64.0:
+		return cells
+	var lo := Vector3i((pos - Vector3.ONE * reach).floor())
+	var hi := Vector3i((pos + Vector3.ONE * reach).ceil())
+	var size := hi - lo + Vector3i.ONE
+	if float(size.x) * size.y * size.z > cells.size():
+		return cells
+	var found: Array[int] = []
+	for x in range(lo.x, hi.x + 1):
+		for y in range(lo.y, hi.y + 1):
+			for z in range(lo.z, hi.z + 1):
+				var at := Vector3i(x, y, z)
+				if index.has(at):
+					found.append_array(index[at])
+	found.sort()
+	var result: Array[Vector3i] = []
+	for i in found:
+		result.append(cells[i])
+	return result
+
+## 把格子换成稍大一点的方盒，给 crosses_cells 用。
+static func cell_boxes(cells: Array) -> Array[AABB]:
+	var pad := Vector3.ONE * 1e-3
+	var boxes: Array[AABB] = []
+	for cell in cells:
+		boxes.append(AABB(Vector3(cell) - Vector3.ONE * CELL_HALF - pad, Vector3.ONE + pad * 2.0))
+	return boxes
+
+
+## 从 a 到 b 的线段有没有碰到这些方盒中的某一个。
+static func crosses_cells(boxes: Array[AABB], a: Vector3, b: Vector3) -> bool:
+	for box in boxes:
+		if box.has_point(a) or box.intersects_segment(a, b):
+			return true
+	return false
+
+## 线段 a0-a1 和线段 b0-b1 之间最近的距离。
+static func segment_distance(a0: Vector3, a1: Vector3, b0: Vector3, b1: Vector3) -> float:
+	var u := a1 - a0
+	var v := b1 - b0
+	var w := a0 - b0
+	var uu := u.dot(u)
+	var vv := v.dot(v)
+	if uu <= 1e-18 and vv <= 1e-18:
+		return a0.distance_to(b0)
+	if uu <= 1e-18:
+		return a0.distance_to(b0 + v * clampf(w.dot(v) / vv, 0.0, 1.0))
+	if vv <= 1e-18:
+		return b0.distance_to(a0 + u * clampf(-w.dot(u) / uu, 0.0, 1.0))
+	var uv := u.dot(v)
+	var denominator := uu * vv - uv * uv
+	var sa := 0.0
+	if denominator > 1e-18:
+		sa = clampf((uv * v.dot(w) - vv * u.dot(w)) / denominator, 0.0, 1.0)
+	var sb := clampf((uv * sa + v.dot(w)) / vv, 0.0, 1.0)
+	sa = clampf((uv * sb - u.dot(w)) / uu, 0.0, 1.0)
+	return (a0 + u * sa).distance_to(b0 + v * sb)

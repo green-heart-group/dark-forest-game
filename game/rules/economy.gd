@@ -19,6 +19,35 @@ static func charge(s: GameState,civ: Civ,cost: Array,reason: String) -> void:
 
 
 static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
+	var result := _base_packages(s, civ)
+	result.append_array(TacticalEvents.packages(s, civ))
+	result.append_array(Signals.coverage_packages(s, civ))
+	return result
+
+
+## 回合推进时用：同一个 0.05 年采样刻度里，文明的星系、舰船、设施和科技的个数都没变，就沿用上次算好的运营包；
+## 只有压制（跟着舰船进出目标格）每次照算。观测覆盖、舰船所在格这些随时间变的东西，最多晚 0.05 年反映到收支上，
+## 和情报的节拍一样。每次回合推进开始时清空缓存（WorldTime.advance），所以推进以外的调用不会影响结果。
+static func _cached_packages(s: GameState, civ: Civ) -> Array[Dictionary]:
+	var dead := 0
+	for ship in civ.ships:
+		if ship.dead:
+			dead += 1
+	var key := [floori(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON), s.space_epoch, civ.colonies.size(),
+			civ.ships.size(), dead, civ.assets.size(), civ.techs.size()]
+	var index := s.civs.find(civ)
+	var hit: Array = s.package_cache.get(index, [])
+	if hit.is_empty() or hit[0] != key:
+		hit = [key, _base_packages(s, civ), Signals.coverage_packages(s, civ)]
+		s.package_cache[index] = hit
+	var result: Array[Dictionary] = hit[1].duplicate()
+	result.append_array(TacticalEvents.packages(s, civ))
+	result.append_array(hit[2])
+	return result
+
+
+## 星系、戴森球和舰船的产出与维护。
+static func _base_packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for at in civ.colonies:
 		var e := 0.0
@@ -46,8 +75,6 @@ static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 				"upkeep": Construction.upkeep(ship.kind), "parent": ""})
 		if ship.kind == Ship.WANDERING_EARTH:
 			result[-1].merge(EarthTransform.gross(civ,ship),true)
-	result.append_array(TacticalEvents.packages(s, civ))
-	result.append_array(Signals.coverage_packages(s, civ))
 	return result
 
 
@@ -71,10 +98,10 @@ static func _totals(items: Array[Dictionary], active: Dictionary) -> Dictionary:
 	return {"net": net, "reference": reference}
 
 
-## 优先级数组前面的包先保留；未排序的按稳定生成顺序处理。
-static func plan(s: GameState, civ: Civ, duration := 1.0) -> Dictionary:
+## 优先级数组前面的包先保留；未排序的按稳定生成顺序处理。cached 只在回合推进里用（见 _cached_packages）。
+static func plan(s: GameState, civ: Civ, duration := 1.0, cached := false) -> Dictionary:
 	var phase:=Time.get_ticks_usec() if s.profiling else 0
-	var items := packages(s, civ)
+	var items := _cached_packages(s, civ) if cached else packages(s, civ)
 	if s.profiling: phase=s._lap("经济/运营包",phase)
 	var active := {}
 	for p in items:

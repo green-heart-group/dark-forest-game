@@ -549,5 +549,5 @@ func test_v01_new_actions_and_escrow_replay() -> void:
 	check_eq(copy.checksum(), s.checksum(), "包括托管、工作量和余额校验")
 	check_eq(copy.human().pending, me.pending, "未完成订单也完全一致")
 	var old := replay.to_dict()
-	old["version"] = 2
+	old["version"] = Replay.VERSION - 1
 	check(not Replay.valid_data(old), "旧规则回放不能静默使用新规则重算")

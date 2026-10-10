@@ -87,25 +87,40 @@ static func box_entry(motion: Dictionary, cell: Vector3i, duration: float) -> fl
 	return near if near <= far and far >= 0.0 else INF
 
 
+## 到了目标星系会自己停下的几种船（events_in 的 arrival_stop）。
+const STOP_KINDS := [Ship.COLONY, Ship.DEVOURER, Ship.DROPLET, Ship.SOPHON]
+## events_in 只看这几种船：会停下的，加上光粒。别的船跳过，不用逐艘查。
+const EVENT_KINDS := [Ship.COLONY, Ship.DEVOURER, Ship.DROPLET, Ship.SOPHON, Ship.GRAIN]
+
+
 static func events_in(s: GameState, motions: Dictionary, duration: float) -> Array[Dictionary]:
 	var due: Array[Dictionary] = []
 	if s.clock < s.remap_until:
 		return due
-	var all: Array = s.hidden_ships.map(func(ship): return [ship, -1])
+	var all: Array = []
+	for ship in s.hidden_ships:
+		if ship.kind in EVENT_KINDS:
+			all.append([ship, -1])
 	for civ in s.civs:
+		var owner := s.civs.find(civ)
 		for ship in civ.ships:
-			all.append([ship, s.civs.find(civ)])
+			if ship.kind in EVENT_KINDS:
+				all.append([ship, owner])
+	var index := Geometry.cell_index(s.system_cells) if not all.is_empty() else {}
 	for pair in all:
 		var ship: Ship = pair[0]
 		if ship.dead or not motions.has(ship.id):
+			continue
+		var stops: bool = ship.kind in STOP_KINDS and ship.moving()
+		if not stops and ship.kind != Ship.GRAIN:
 			continue
 		var motion: Dictionary=motions[ship.id]
 		# 任一二次轨迹的位移不超过 |v|dt+|a|dt²/2；远于此球的格子不可能相交。
 		# 只做保守剔除，近处仍使用原来的连续轨迹精确判定。
 		var travel_bound: float=motion["velocity"].length()*duration+0.5*motion["acceleration"].length()*duration*duration
-		if ship.kind in [Ship.COLONY,Ship.DEVOURER,Ship.DROPLET,Ship.SOPHON] and ship.moving():
+		if stops:
 			var bound: float=travel_bound+Balance.COLLISION_EPSILON/s.physical_cell_size()+1e-7
-			for cell in s.system_cells:
+			for cell in Geometry.cells_near(s.system_cells, index, motion["pos"], bound):
 				if motion["pos"].distance_squared_to(Vector3(cell))>bound*bound:
 					continue
 				var owner:=s.coord_owner(cell)
@@ -121,7 +136,7 @@ static func events_in(s: GameState, motions: Dictionary, duration: float) -> Arr
 			ship.dead = true
 			continue
 		var grain_bound: float=travel_bound+Balance.GRAIN_RADIUS/s.physical_cell_size()+1e-7
-		for cell in s.system_cells:
+		for cell in Geometry.cells_near(s.system_cells, index, motion["pos"], grain_bound):
 			if motion["pos"].distance_squared_to(Vector3(cell))>grain_bound*grain_bound:
 				continue
 			if s.coord_owner(cell) == null or s.map.star_at(cell) == StarMap.Star.NONE or s.cell_ids.get(cell, -1) == ship.origin_cell_id:

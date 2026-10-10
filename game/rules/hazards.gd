@@ -141,25 +141,26 @@ static func light_speed(s: GameState, table: Dictionary, pos: Vector3) -> float:
 ## 光和消息（匀速直线）下一次真的换光速是什么时候，最多看 dt 年。
 ## 没有黑域和死线时，每格光速固定；过边界后光速不变的，停下来什么都不变，就跳过去接着往前看。
 ## 有黑域或死线时光速在格子里也会变，照旧用 next_boundary。
-static func next_light_edge(s: GameState, motion: Dictionary, dt: float, table := {}) -> float:
+## start 是起点，velocity 是每年走多少格。
+static func next_light_edge(s: GameState, start: Vector3, velocity: Vector3, dt: float, table := {}) -> float:
 	if table.is_empty() and any(s):
-		return next_boundary(s, motion, dt)
-	var velocity: Vector3 = motion["velocity"]
+		return next_boundary(s, {"pos": start, "velocity": velocity, "acceleration": Vector3.ZERO}, dt)
 	if velocity.length_squared() < 1e-20:
 		return INF
 	if not table.is_empty() and table["speeds"].is_empty():
 		return INF
-	var pos: Vector3 = motion["pos"]
-	var here := light_speed(s, table, pos)
+	var here := light_speed(s, table, start)
+	# 边界上的点按前进方向归到下一格。
+	var nudge := velocity.normalized() * 1e-6
+	var pos := start
 	var t := 0.0
 	for i in 8:
-		var edge := Kinematics.next_cell_boundary({"pos": pos, "velocity": velocity, "acceleration": Vector3.ZERO})
+		var edge := Kinematics.straight_cell_exit(pos, velocity)
 		if t + edge > dt:
 			return INF
 		t += edge
-		pos = motion["pos"] + velocity * t
-		# 边界上的点按前进方向归到下一格。
-		if light_speed(s, table, pos + velocity.normalized() * 1e-6) != here:
+		pos = start + velocity * t
+		if light_speed(s, table, pos + nudge) != here:
 			return t
 	return t
 
@@ -182,7 +183,7 @@ static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaini
 		if speed <= 0.0:
 			break
 		var left := minf(duration - t, need / speed)
-		var edge := next_light_edge(s, {"pos": at, "velocity": direction * speed / size, "acceleration": Vector3.ZERO}, left, table)
+		var edge := next_light_edge(s, at, direction * speed / size, left, table)
 		var step := minf(left, maxf(edge, Balance.TIME_EPSILON))
 		if step >= need / speed:
 			return {"distance": remaining, "arrival": t + need / speed}

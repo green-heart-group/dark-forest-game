@@ -40,6 +40,7 @@ static func integrate(s: GameState, plans: Dictionary, duration: float) -> Array
 
 static func advance(s: GameState, duration: float) -> void:
 	var end := s.clock + duration
+	s.package_cache.clear()
 	s.ensure_cells()
 	for civ in s.civs:
 		Assets.ensure(s, civ)
@@ -56,12 +57,12 @@ static func advance(s: GameState, duration: float) -> void:
 		Hazards.refresh(s)
 		var medium := Signals.medium(s)
 		if medium != s.message_medium:
-			Signals.retime(s)
+			Signals.retime(s, s.message_medium)
 			s.message_medium = medium
 		var plans := {}
 		for civ in s.civs:
 			if civ.alive:
-				var plan := Economy.plan(s, civ, end - s.clock)
+				var plan := Economy.plan(s, civ, end - s.clock, true)
 				Economy.set_operating(civ, plan)
 				plans[s.civs.find(civ)] = plan
 		Signals.receive_due(s)

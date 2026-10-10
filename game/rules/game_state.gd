@@ -48,7 +48,14 @@ const SOPHON_REPORTS := {"dispatch": "派出了一个单位", "turn_ship": "让�
 		"start_reduce": "开始自身降维", "launch_singularity": "发射了奇异点", "send_sophon": "派智子去 %s",
 		"upgrade": "升级了射电望远镜或预警范围"}
 
-var dimension := 3
+var dimension := 3:
+	set(value):
+		dimension = value
+		_cell_size = Balance.DIMENSION_CELL_SIZE[str(value)]
+		_background_light = Balance.DIMENSION_LIGHT[str(value)]
+## 当前维度的格子边长和背景光速，维度一变就跟着换（上面的 set）。规则里每个子步要查几万次，存下来不用每次查表。
+var _cell_size: float = Balance.DIMENSION_CELL_SIZE["3"]
+var _background_light: float = Balance.DIMENSION_LIGHT["3"]
 var space_epoch := 0
 var fold_anchor := Vector3i.ZERO
 var line_anchor := Vector3i.ZERO
@@ -70,6 +77,18 @@ var messages: Array[Dictionary] = []
 var message_medium: Array = []
 ## 在途消息里最早的到达时刻：[命令类, 全部]。还没到就不用逐条检查（Signals.receive_due）；-INF 表示要重新查一遍。
 var message_due: Array = [-INF, -INF]
+## 发出消息的流水号，记在消息的 "n" 里。同一批到的消息按它的先后处理，复制出来的局面也是同样的顺序。
+var message_serial := 0
+## 在途消息按到达的 0.05 年刻度分好的索引（Signals._indexed）。只为算得快，不打包（StateCopy.SKIP）；空的时候从 messages 重建。
+var message_index: Dictionary = {}
+## 维度变了、还没据此重算在途消息到达时间的格子（SpaceEvents.convert_cell 记下，Signals.retime 用完清空）。
+var converted_cells: Array[Vector3i] = []
+## 上次算消息到达时间时黑域和死线影响光速的范围（Signals.hazard_shapes）。下次只重算路线碰到旧范围或新范围的消息。
+var hazard_shapes: Array = []
+## 回合推进里运营包的缓存（Economy._cached_packages）。只为算得快，复制局面和存档时不带（StateCopy.SKIP），不进校验值。
+var package_cache: Dictionary = {}
+## 上次算的光速表（LightFront.environment），只为算得快，同样不打包。
+var environment_cache: Dictionary = {}
 var scans: Array[Dictionary] = []
 var neutral_assets: Array[Dictionary] = []
 var sensor_stamps: Dictionary = {}
@@ -3263,11 +3282,11 @@ func ensure_cells() -> void:
 
 
 func physical_cell_size() -> float:
-	return Balance.DIMENSION_CELL_SIZE[str(dimension)]
+	return _cell_size
 
 
 func background_light() -> float:
-	return Balance.DIMENSION_LIGHT[str(dimension)]
+	return _background_light
 
 
 func relative_light(pos: Vector3) -> float:
@@ -3275,8 +3294,14 @@ func relative_light(pos: Vector3) -> float:
 
 
 func light_speed_at(pos: Vector3) -> float:
-	var dim: int = cell_dims.get(cell_ids.get(Vector3i(pos.round()), -1), dimension)
-	return 0.0 if dim == 0 else Balance.DIMENSION_LIGHT[str(dim)] * relative_light(pos)
+	var cell := Vector3i(pos.round())
+	var dim: int = cell_dims.get(cell_ids.get(cell, -1), dimension)
+	if dim == 0:
+		return 0.0
+	var c: float = _background_light if dim == dimension else Balance.DIMENSION_LIGHT[str(dim)]
+	if black_domains.is_empty() and deadlines.is_empty():
+		return c * minf(light_at(cell), 1.0) # 没有黑域和死线时 Hazards.suppression 是 1，省掉这次调用
+	return c * relative_light(pos)
 
 
 func _receive_command(message: Dictionary, exists: bool) -> void:
