@@ -120,7 +120,7 @@ game/
 ├── rules/    规则代码：不依赖任何画面节点
 ├── view/     画面代码：只读取规则数据
 ├── tests/    规则测试（rules/ 里按规则分文件）和画面测试
-├── tools/    跑测试、变异测试、平衡模拟、更新文档里的数字、做网页字体、录 README 的动图
+├── tools/    跑测试、导出打包、变异测试、平衡模拟、更新文档里的数字、做网页字体、录 README 的动图
 └── balance_presets/  共享的数值方案（和 balance.cfg 不一样的一组数值）
 docs/         设计、要确定的问题、现状、路线图、开发日志、提议和重要决定（入口 docs/README.md）
 ```
@@ -160,10 +160,11 @@ godot_console --headless --path game --script res://tools/simulate.gd -- PRESET=
 
 ### 发布
 
-推送 `v` 开头的标签（如 `v0.1.0`）后，GitHub 自动跑测试，导出 Windows exe 和网页版：
+推送 `v` 开头的标签（如 `v0.1.0`）后，GitHub 自动跑测试，导出 Windows、macOS 和网页版：
 
 - exe 打包挂到 [Releases](https://github.com/green-heart-group/dark-forest-game/releases)：
   `dark-forest-windows.zip` 是普通版，`dark-forest-windows-dev.zip` 是一打开就有调试面板的开发者版。
+- Mac 版也挂到 Releases：Intel 芯片选 `dark-forest-macos-intel.zip`，Apple Silicon（M 系列）选 `dark-forest-macos-apple-silicon.zip`。
 - 网页版发到 <https://green-heart-group.github.io/dark-forest-game/>；
   带调试面板的网页版在 <https://green-heart-group.github.io/dark-forest-game/dev/>（见 [调试模式](docs/guides/debug-tools.md#怎么打开)）。
 - 标签里带「-」（如 `v0.1.0-test`）的标成预发布。步骤写在 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
@@ -173,17 +174,38 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-本地导出（需要先在 Godot 编辑器「编辑器 → 管理导出模板」里下载模板）：
+本地导出：安装好 uv、Godot 4.7.2，并在 Godot「编辑器 → 管理导出模板」里安装同版本模板。
+Windows、macOS、Linux 都在仓库根目录用下面的命令；GitHub 发布也调用同一个工具。
+工具自动同步数值声明、准备网页字体、导入资源、创建输出目录、导出和打包，失败时停止并返回非零退出码。
 
 ```bash
-godot_console --headless --path game --export-release "Windows Desktop" ../build/dark-forest.exe
-godot_console --headless --path game --export-release "Windows Desktop (dev)" ../build/dark-forest-dev.exe
+# 导出全部：网页版、Windows 普通版和开发者版、macOS
+uv run game/tools/export.py
 
-# 网页版：网页里用不了电脑上装的字体，先做好随游戏带的字体，再导入、导出
-uv run game/tools/make_web_fonts.py
-godot_console --headless --path game --import
-godot_console --headless --path game --export-release "Web" ../build/web/index.html
+# 也可以只导出其中一版
+uv run game/tools/export.py web
+uv run game/tools/export.py windows
+uv run game/tools/export.py windows-dev
+uv run game/tools/export.py macos
+
+# Mac 也可以只导出一种芯片
+uv run game/tools/export.py macos-intel
+uv run game/tools/export.py macos-apple-silicon
+
+# 指定输出目录（相对当前工作目录）；查看所有参数
+uv run game/tools/export.py --out-dir build/release
+uv run game/tools/export.py --help
 ```
+
+默认产物在 `build/`：两个 exe 和对应的 Windows ZIP；网页版在 `build/web/`，发布时上传整个目录。
+Mac 版在 `build/` 中分别生成 Intel 和 Apple Silicon 两个 ZIP，在对应的 Mac 上解压后打开其中的 `.app`。
+导出它需要安装同版本的官方 `macos.zip` 模板；工具自动提取两个芯片各自的模板，再由 Godot 签名和导出 ZIP，以保留程序的执行权限。
+如果在 Godot 编辑器里手动导出，先运行 `uv run game/tools/make_macos_templates.py` 准备模板；生成文件位于 `build/macos_templates/`，不进仓库。
+目前 Mac 版使用内置临时签名，未做 Apple 公证，首次打开可能需要在系统安全设置中允许运行，见 [Godot 的 macOS 分发说明](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_macos.html#code-signing-and-notarization)。
+网页版同时生成 `/dev/` 开发者入口。第一次导出 Web 需要联网下载字体，之后复用 `build/font_cache/` 的下载缓存。
+Godot 的查找顺序是环境变量 `GODOT`、`godot_console`、`godot`；也可以用 `--godot "可执行文件路径"` 指定，路径有空格时加引号。
+每次导出都先在临时目录检查产物，通过后才复制到输出目录，避免上次的文件掩盖本次失败。
+导出工具不运行游戏测试，发布前仍需按[测试和平衡模拟](#测试和平衡模拟)验证。
 
 ## 文档
 

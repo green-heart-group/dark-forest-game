@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["cogapp"]
 # ///
-"""一条命令跑全部测试：先按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
+"""一条命令跑全部测试：先检查 Python 工具，再按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
 最后跑规则、画面和展开演示测试。
 本地和 GitHub 上都用它，所以两边跑的东西一样。
 
@@ -101,6 +101,13 @@ def main() -> int:
     parser.add_argument("--no-import", action="store_true", help="不先导入")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8), help="规则测试分几个进程跑")
     args = parser.parse_args()
+
+    if args.which == "all" and not args.only:
+        if subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(GAME / "tests" / "tools")],
+                          cwd=GAME.parent).returncode:
+            print("工具测试失败")
+            return 1
+        print("工具测试：0 个失败", flush=True)
 
     if sync_balance.sync(write=True):
         print("已按 balance.cfg 更新 game/rules/balance.gd 里的数值声明，记得一起提交")

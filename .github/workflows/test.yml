@@ -17,6 +17,18 @@ env:
   GODOT_VERSION: 4.7.2
 
 jobs:
+  tools:
+    name: 工具测试 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: 检查跨平台导出流程
+        run: uv run --python 3.11 --no-project python -m unittest discover -s game/tests/tools
+
   tests:
     runs-on: ubuntu-latest
     steps:

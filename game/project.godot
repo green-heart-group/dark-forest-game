@@ -24,3 +24,8 @@ window/stretch/aspect="expand"
 [gui]
 
 theme/custom_font="res://view/ui_font.tres"
+
+[rendering]
+
+textures/vram_compression/import_etc2_astc=true
+textures/vram_compression/import_s3tc_bptc=true

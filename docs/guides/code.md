@@ -128,9 +128,19 @@
 
 ## 导出
 
-- 导出设置有三个：`Windows Desktop`（普通版 exe）、`Windows Desktop (dev)`（开发者版 exe）、`Web`。
+- 本地和 GitHub 发布都调用 `game/tools/export.py`，用法只写在[仓库 README](../../README.md#发布)。
+  工具负责数值声明同步、网页字体、导入、导出、ZIP 打包和网页开发者入口；发布流程只负责上传和发布。
+  GitHub 测试流程在 Windows、macOS、Linux 上检查工具逻辑；发布流程在 Linux 上实际导出游戏。
+  Godot 预设仍在 `game/export_presets.cfg` 中维护，不在脚本里重复平台设置。
+
+- 导出设置有五个：`Windows Desktop`（普通版 exe）、`Windows Desktop (dev)`（开发者版 exe）、`Web`、`macOS (Intel)`、`macOS (Apple Silicon)`。
   开发者版和普通版只差一个 `dev` 标记（导出设置的「自定义特性」），`main.gd` 看到它就打开调试面板，等于带了 `-- debug`。
   网页版只导出一份，开发者入口 `/dev/` 是发布时生成的一个小网页，转到 `?debug`。
+
+- macOS 按 Intel（`x86_64`）和 Apple Silicon（`arm64`）分成两个包，项目同时启用 S3TC/BPTC 和 ETC2/ASTC 纹理导入，以支持从各平台导出这两个版本。
+  应用标识为 `org.greenheartgroup.darkforest`，带上 `balance.cfg` 和数值方案；系统字体包含 macOS 的苹方，桌面版不带网页字体。
+  官方模板内只有 Universal 程序，`make_macos_templates.py` 先提取对应芯片的程序到 `build/macos_templates/`，两个预设分别使用生成的自定义模板。
+  使用内置临时签名、关闭 Apple 公证，导出 ZIP 保留 `.app` 的执行权限；工具检查应用清单、芯片架构、可执行文件权限和游戏资源包，复制 Godot 原始 ZIP，不重新打包。
 
 - 导出设置（`game/export_presets.cfg`）里脚本按原文导出（`script_export_mode=0`）。运行时已经不读原文（见上面「数值」），
   改成编译成二进制也能用，但没必要改，免得这个文件来回变。
@@ -143,7 +153,10 @@
 
 | 文件 | 做什么 |
 | --- | --- |
+| `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见仓库 README |
+| `game/tools/make_macos_templates.py` | 从已安装的官方通用模板提取 Intel、Apple Silicon 模板，输出到被忽略的构建目录；导出工具自动调用，也能为编辑器手动导出准备模板 |
 | `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
+| `game/tests/tools/test_export.py` | 用 Python 标准库检查导出失败处理、完整产物、ZIP 内容和 Godot 路径；完整 `test.py` 会先跑它 |
 | `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
 | `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
 | `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |

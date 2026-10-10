@@ -1,5 +1,5 @@
-# 发布游戏：推送 v 开头的标签（如 v0.1.0）时，跑测试，导出 Windows exe 和网页版，
-# 把 exe 打包挂到 Release 页面，网页版发到 GitHub Pages。
+# 发布游戏：推送 v 开头的标签（如 v0.1.0）时，跑测试，导出 Windows、macOS 和网页版，
+# 把桌面版 ZIP 挂到 Release 页面，网页版发到 GitHub Pages。
 # exe 和网页版各有一个开发者版（一打开就有调试面板）：dark-forest-windows-dev.zip 和网页的 /dev/。
 # 标签里带「-」（如 v0.1.0-test）的算试用版：Release 标成预发布。
 # 也可以在 Actions 页面手动运行：只跑测试和导出，结果在运行页面底部下载，不发布。
@@ -33,28 +33,7 @@ jobs:
         run: uv run game/tools/test.py
 
       - name: 导出
-        run: |
-          mkdir -p build/web
-          godot --headless --path game --export-release "Windows Desktop" ../build/dark-forest.exe
-          godot --headless --path game --export-release "Windows Desktop (dev)" ../build/dark-forest-dev.exe
-          godot --headless --path game --export-release "Web" ../build/web/index.html
-          test -s build/dark-forest.exe && test -s build/dark-forest-dev.exe && test -s build/web/index.html
-          cd build
-          zip -q dark-forest-windows.zip dark-forest.exe
-          zip -q dark-forest-windows-dev.zip dark-forest-dev.exe
-
-      - name: 网页版的开发者入口（/dev/ 转到 ?debug，打开调试面板）
-        run: |
-          mkdir -p build/web/dev
-          cat > build/web/dev/index.html <<'EOF'
-          <!DOCTYPE html>
-          <meta charset="utf-8">
-          <title>黑暗森林（开发者调试）</title>
-          <script>
-            var extra = location.search ? "&" + location.search.slice(1) : "";
-            location.replace("../?debug" + extra);
-          </script>
-          EOF
+        run: uv run game/tools/export.py
 
       - name: 保存导出结果（运行页面底部可下载）
         uses: actions/upload-artifact@v4
@@ -63,6 +42,8 @@ jobs:
           path: |
             build/dark-forest-windows.zip
             build/dark-forest-windows-dev.zip
+            build/dark-forest-macos-intel.zip
+            build/dark-forest-macos-apple-silicon.zip
             build/web
 
       - name: 发 Release
@@ -72,7 +53,7 @@ jobs:
         run: |
           flag=""
           case "$GITHUB_REF_NAME" in *-*) flag="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" build/dark-forest-windows.zip build/dark-forest-windows-dev.zip --generate-notes $flag
+          gh release create "$GITHUB_REF_NAME" build/dark-forest-windows.zip build/dark-forest-windows-dev.zip build/dark-forest-macos-intel.zip build/dark-forest-macos-apple-silicon.zip --generate-notes $flag
 
       - name: 准备网页版
         if: startsWith(github.ref, 'refs/tags/')
