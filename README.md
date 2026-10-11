@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [**在浏览器里玩**](https://green-heart-group.github.io/dark-forest-game/) ·
-[下载 Windows 版](https://github.com/green-heart-group/dark-forest-game/releases) ·
+[下载桌面版](https://github.com/green-heart-group/dark-forest-game/releases) ·
 [完整规则](docs/design/current-rules.md)
 
 <table>
@@ -78,6 +78,8 @@
 winget install --id GodotEngine.GodotEngine --exact --version 4.7.2
 ```
 
+运行测试和导出工具还需要 uv，安装方法见 [uv 官方安装指南](https://docs.astral.sh/uv/getting-started/installation/)。
+
 ### 运行
 
 在仓库根目录：
@@ -97,18 +99,10 @@ godot --path game --editor
 
 ### 操作
 
-- **看星图**：左键拖动旋转，滚轮缩放；也可以用键盘平移、旋转（星图左上角「视角操作」里有说明）。
-- **选目标**：单击星图上的东西选中它；单击空处可以瞄准那一格。点不准时，在面板里直接输入 x、y、z 坐标。
-- **行动**：右侧面板分科技、建造、行动、情况四页。升级科技不花行动点；建造、派出单位、发射武器各花 1 个行动点。
-  最后按「结束回合」。鼠标停在按钮上能看到说明。
-- **科技树**：科技页打开独立全屏界面，前置科技在左、后续在右，箭头表示直接依赖；选节点查看说明和开放条件，再按研究。
-- **星图层次**：图例和全体视野默认收起。概览保留星系、全部飞行单位和敌情，停泊单位合并显示数量；悬停看具体种类、设施和情报，选中或在行动页选择单位后显示航线。「详细星图」展开全部航线与设施。广播只显示最近三条传播波前，每条一个圈，摘要保留实际条数。
-- **存档与读档**：星图左上角「保存」「读取」，或 Ctrl+S / Ctrl+O。存档为 `.forest` 文件，恢复保存时的回合和已经执行的操作；较长读档显示进度，可按取消或 Esc，失败时保留当前对局。桌面版默认打开个人存档目录，网页版下载或上传文件。
-- **面板与快捷键**：右上角按钮或 Ctrl+B 收起面板，竖屏自动收起；Alt+1 打开全屏科技树（Esc 返回），Alt+2～4 切页，Alt+左右方向键选行动，Ctrl+Enter 执行，Shift+Enter 结束回合。正在输入坐标或操作弹窗时不触发这些快捷键。
-- **重开**：回合状态旁边的「🔄 重开」随时可以换一张新星图，或者在同一张星图上从头打。
-- **界面大小**：拖动窗口时界面跟着缩放；按 Ctrl + 加号 / 减号调整字的大小，Ctrl + 0 恢复。
-- **开发者调试**：按 F12 打开调试面板，可以换成任意文明的视角、播放和回退对局、随时改数值。
-  `godot --path game -- watch seed=123` 开一局全由 AI 打的观战局。详见 [调试模式](docs/guides/debug-tools.md)。
+- 左键拖动旋转，滚轮缩放；单击星图选中目标，右侧面板分科技、建造、行动、情况四页，最后按「结束回合」。
+  升级科技不花行动点；建造、派出单位、发射武器各花 1 个行动点。鼠标停在按钮上能看到说明。
+- 看星图、存档读档、快捷键、界面大小见 [操作说明](docs/guides/controls.md)。
+- 按 F12 打开开发者调试面板，`godot --path game -- watch seed=123` 开一局全由 AI 打的观战局，详见 [调试模式](docs/guides/debug-tools.md)。
 
 ## 开发
 
@@ -120,7 +114,7 @@ game/
 ├── rules/    规则代码：不依赖任何画面节点
 ├── view/     画面代码：只读取规则数据
 ├── tests/    规则测试（rules/ 里按规则分文件）和画面测试
-├── tools/    跑测试、变异测试、平衡模拟、更新文档里的数字、做网页字体、录 README 的动图
+├── tools/    跑测试、导出打包、变异测试、平衡模拟、更新文档里的数字、做网页字体、录 README 的动图
 └── balance_presets/  共享的数值方案（和 balance.cfg 不一样的一组数值）
 docs/         设计、要确定的问题、现状、路线图、开发日志、提议和重要决定（入口 docs/README.md）
 ```
@@ -160,29 +154,16 @@ godot_console --headless --path game --script res://tools/simulate.gd -- PRESET=
 
 ### 发布
 
-推送 `v` 开头的标签（如 `v0.1.0`）后，GitHub 自动跑测试，导出 Windows exe 和网页版：
-
-- exe 打包挂到 [Releases](https://github.com/green-heart-group/dark-forest-game/releases)：
-  `dark-forest-windows.zip` 是普通版，`dark-forest-windows-dev.zip` 是一打开就有调试面板的开发者版。
-- 网页版发到 <https://green-heart-group.github.io/dark-forest-game/>；
-  带调试面板的网页版在 <https://green-heart-group.github.io/dark-forest-game/dev/>（见 [调试模式](docs/guides/debug-tools.md#怎么打开)）。
-- 标签里带「-」（如 `v0.1.0-test`）的标成预发布。步骤写在 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
+推送 `v` 开头的标签（如 `v0.1.0`）后，GitHub 自动跑测试，导出 Windows、macOS 和网页版，挂到 [Releases](https://github.com/green-heart-group/dark-forest-game/releases) 并部署网页版。
+本地导出要先在 Godot 里装好同版本导出模板。各版本的产物、Mac 签名和手动试导出见 [导出和发布](docs/guides/export.md)。
 
 ```bash
+# 发布一个版本
 git tag v0.1.0
 git push origin v0.1.0
-```
 
-本地导出（需要先在 Godot 编辑器「编辑器 → 管理导出模板」里下载模板）：
-
-```bash
-godot_console --headless --path game --export-release "Windows Desktop" ../build/dark-forest.exe
-godot_console --headless --path game --export-release "Windows Desktop (dev)" ../build/dark-forest-dev.exe
-
-# 网页版：网页里用不了电脑上装的字体，先做好随游戏带的字体，再导入、导出
-uv run game/tools/make_web_fonts.py
-godot_console --headless --path game --import
-godot_console --headless --path game --export-release "Web" ../build/web/index.html
+# 本地导出全部版本（也可以只导出 web、windows、windows-dev、macos 等，--help 查看）
+uv run game/tools/export.py
 ```
 
 ## 文档

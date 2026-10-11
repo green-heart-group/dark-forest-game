@@ -22,12 +22,25 @@
 | 每天做了什么、改了什么 | [devlog/](devlog/README.md) |
 | 提议和试玩意见的原文 | [proposals/](proposals/README.md) |
 | 常用命令：安装、运行、测试、平衡模拟、导出和发布 | 仓库首页 README 的 [快速开始](../README.md#快速开始)、[开发](../README.md#开发) |
+| 怎么玩：操作、存档读档、快捷键 | [guides/controls.md](guides/controls.md) |
+| 导出的各个版本、产物、Mac 签名 | [guides/export.md](guides/export.md) |
 | 只和某个工具有关的命令和参数（调试参数、截图、生成数值目录等） | 那个工具所在的 [指南](guides/README.md) |
 | 代码怎么分工、改代码要守的规矩、导出设置 | [guides/code.md](guides/code.md) |
 | 调试面板、开发者版、对局记录、数值方案 | [guides/debug-tools.md](guides/debug-tools.md) |
 | 怎么用 Godot、让 AI 助手操作 Godot | [guides/](guides/README.md) |
 | 怎么开分支（分支名的前缀）、提交改动、合并进 `master` | [decisions/0003](decisions/0003-github-flow.md) |
 | 旧 Python 版和它的已知 bug | [decisions/0002](decisions/0002-archive-python.md) |
+
+## 常翻的文档要最短
+
+越常翻的文档越短，细节往不常翻的地方放，只留一句话加链接：
+
+- 最常翻的是仓库首页 README、[现状](status.md)、[路线图](roadmap.md)、[要确定的问题](open-questions.md)，要让人一眼看完。
+  它们只写「现在是什么」和「接下来做什么」；做完的事、做的经过、验收和自检的数字、旧的数字，记进当月的 [开发日志](devlog/README.md)，不在这里留清单。
+- 参考类文档（[规则](design/current-rules.md)、[游戏设计](design/game-design.md)、[代码指南](guides/code.md)）是查阅用的，不求短，但要分节、能按标题查。
+- 一段内容长了、又不是每次都要看，就拆到 [guides/](guides/README.md) 里的单独文件，原处留链接。
+- 缩短时，先确认被删的内容在别处（开发日志、git 历史）查得到，再删；别的文档链接到的标题和锚点不要改名。
+- 历史记录不缩短、不回头改（见下一节）。
 
 ## 现在的事实和历史记录
 

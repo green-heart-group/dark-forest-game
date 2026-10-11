@@ -49,6 +49,9 @@ runs:
         mv templates/* "$dir/"
 
     - uses: astral-sh/setup-uv@v6
+      with:
+        python-version: "3.11"
+        cache-dependency-glob: "game/tools/*.py"
 
     - name: 缓存下载的字体
       uses: actions/cache@v4
