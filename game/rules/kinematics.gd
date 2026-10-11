@@ -154,7 +154,7 @@ static func relative_contact(first: Dictionary, second: Dictionary, radius: floa
 			first["acceleration"] - second["acceleration"], radius, duration)
 
 
-## 对直线推进在每个格界硬分段，进入已转换格、硬到期格和图外边界不会等到年末。
+## 下一次走到格子边界是什么时候。结算时只在规则不同的格子边界停下（Hazards.next_cell_change），这里只管找边界。
 static func next_cell_boundary(motion: Dictionary) -> float:
 	var best := INF
 	for axis in 3:

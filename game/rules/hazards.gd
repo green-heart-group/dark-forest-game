@@ -416,11 +416,11 @@ static func _distance_integral(u: float, b2: float) -> float:
 		value += b2 * signf(u) * log(ratio + sqrt(ratio * ratio + 1.0))
 	return 0.5 * value
 
-## 动的东西下一次碰到光速算法会变的地方：格子边界、黑域表面和中心、死线边界。
+## 动的东西下一次碰到光速算法会变的地方：进入规则不同的格子（next_cell_change）、黑域表面和中心、死线边界。
 ## 黑域半径在一段里不变（field_radius），长大时每段结束另外切开（next_change）。
 ## grain 为真时再加上光粒失效的那一层：单个黑域里光速正好等于 GRAIN_MIN_LIGHT 的球面（几个黑域重叠时只是近似）。
 static func next_boundary(s: GameState, motion: Dictionary, dt: float, grain := false) -> float:
-	var best := Kinematics.next_cell_boundary(motion)
+	var best := next_cell_change(s, motion, dt)
 	if motion["velocity"].length_squared() + motion["acceleration"].length_squared() < 1e-20:
 		return best
 	var scale := s.physical_cell_size()
@@ -434,6 +434,41 @@ static func next_boundary(s: GameState, motion: Dictionary, dt: float, grain := 
 	for line in s.deadlines:
 		best = minf(best, _surface(motion, {"a": line["a"], "b": line["b"], "r": Balance.DEADLINE_RADIUS / scale, "growth": 0.0}, dt))
 	return best
+
+
+## 按 motion 走，最多看 dt 年，下一次进入「格子规则」（_cell_rule）和现在这一格不同的格子是什么时候。
+## 前后两格的维度、光速、黑域留下的寿命都一样时，过边界什么都不变，不用停下，接着往前看。
+static func next_cell_change(s: GameState, motion: Dictionary, dt: float) -> float:
+	var velocity: Vector3 = motion["velocity"]
+	var acceleration: Vector3 = motion["acceleration"]
+	if velocity.length_squared() + acceleration.length_squared() < 1e-20:
+		return Kinematics.next_cell_boundary(motion)
+	var here := _cell_rule(s, _cell_ahead(motion, 0.0))
+	var t := 0.0
+	# 一步最多看 32 个边界，再多就在那里停一下，下一步接着看。
+	for i in 32:
+		var at := {"pos": Kinematics.position(motion, t), "velocity": velocity + acceleration * t, "acceleration": acceleration}
+		var edge := Kinematics.next_cell_boundary(at)
+		if t + edge > dt:
+			return INF
+		t += edge
+		if _cell_rule(s, _cell_ahead(motion, t)) != here:
+			return t
+	return t
+
+
+## 时刻 t 所在的格子；正好在边界上时，归到前进方向的那一格。
+static func _cell_ahead(motion: Dictionary, t: float) -> Vector3i:
+	var heading: Vector3 = motion["velocity"] + motion["acceleration"] * t
+	if heading.length_squared() < 1e-20:
+		heading = motion["acceleration"]
+	return Vector3i((Kinematics.position(motion, t) + heading.normalized() * LIGHT_NUDGE).round())
+
+
+## 一格里决定光速和存续的东西：在不在图上、维度、格子光速、黑域留下的寿命。两格的这几样都一样，过边界就什么都不变。
+static func _cell_rule(s: GameState, cell: Vector3i) -> Array:
+	var id: int = s.cell_ids.get(cell, -1)
+	return [s.map.contains(cell), s.cell_dims.get(id, s.dimension), s.light_at(cell), s.domain_cells.get(id, {})]
 
 
 static func _surface(motion: Dictionary, shape: Dictionary, dt: float) -> float:

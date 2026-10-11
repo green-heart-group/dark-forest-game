@@ -312,6 +312,35 @@ static func before_light_change(s: GameState, cells: Array[Vector3i], shapes: Ar
 			_rebase_one(s, message)
 
 
+## 降维前沿在 s.clock 这一刻扫过 cells（可能是过去的某一刻，当时没停、现在才补上，见 SpaceEvents.resolve）。
+## 降维前调用：把那一刻之前发出、还没到、路线碰到这些格子的消息，按还没变的光速挪到那一刻的位置。
+static func before_cells_change(s: GameState, cells: Array[Vector3i]) -> void:
+	var boxes := Geometry.cell_boxes(cells)
+	for message in s.messages:
+		if message["dead"] or not message.has("eta") or message["sent"] >= s.clock or message["eta"] <= s.clock:
+			continue
+		if Geometry.crosses_cells(boxes, message["source"], message["target"]):
+			_rebase_one(s, message)
+
+
+## 降维后调用：那一刻和那以后发出、路线碰到这些格子的消息（包括刚挪过的），从出发的地方按新的光速重算到达时刻。
+## 和那一刻停下来重算的结果一样，消息不会早到。
+## 这些格子的消息都已经重算好，之后的 retime 不用再管它们：从 converted_cells 里拿掉。
+## 要是交给 retime，它会从上次重算的时刻起把这几格都当成已经降维，消息被算晚。
+static func after_cells_change(s: GameState, cells: Array[Vector3i]) -> void:
+	var boxes := Geometry.cell_boxes(cells)
+	for message in s.messages:
+		if not message["dead"] and message.has("eta") and message["sent"] >= s.clock \
+				and Geometry.crosses_cells(boxes, message["source"], message["target"]):
+			message["eta"] = message["sent"] + travel_time(s, message["source"], message["target"])
+	s.message_due = [-INF, -INF]
+	s.message_index.clear()
+	for cell in cells:
+		s.converted_cells.erase(cell)
+	# 格子维度的变化已经处理完，retime 就不会因为它把所有消息重算一遍。
+	if s.converted_cells.is_empty() and s.message_medium.size() > MEDIUM_CELLS:
+		s.message_medium[MEDIUM_CELLS] = hash(s.cell_dims)
+
 ## 只重算剩下的路线碰到 cells 里某一格、或者碰到 shapes 里某一处范围的消息。
 static func _retime_near(s: GameState, cells: Array[Vector3i], shapes: Array) -> void:
 	var boxes := Geometry.cell_boxes(cells)

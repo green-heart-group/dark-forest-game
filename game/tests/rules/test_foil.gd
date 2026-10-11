@@ -222,3 +222,60 @@ func test_visual_anticipation_preserves_rules() -> void:
 	s._spread_flat()
 	var next:=DimensionSpace.frame(s)
 	check(next["amounts"][far]>first["amounts"][far] and not s.flattened.has(far),"视觉继续展开而远方前沿尚未到达")
+
+
+## 规则：二向箔，移动
+func test_ship_stops_only_where_cell_rules_change() -> void:
+	# 船过格子边界时，前后两格一样就不用让整个世界停下；进已经降维的格子要停。
+	var s:=_two_civs(Vector3i(8,8,8))
+	var motion:={"pos":Vector3(1,0,0),"velocity":Vector3(1,0,0),"acceleration":Vector3.ZERO}
+	check_eq(Hazards.next_cell_change(s,motion,3.0),INF,"一样的格子一路过去不用停")
+	s._unfold_foil(Vector3i(4,0,0))
+	check(absf(Hazards.next_cell_change(s,motion,3.0)-2.5)<1e-6,"进已降维的格子要停：%f"%Hazards.next_cell_change(s,motion,3.0))
+
+
+## 规则：二向箔
+func test_front_past_empty_cells_is_filled_in_later() -> void:
+	# 前沿扫过没有东西的格子时不停下，等下一次停下时补上：降维记的仍是扫到的时刻，路过的消息不早到。
+	var keep:=Balance.PHYSICS_MAX_DT
+	Balance.PHYSICS_MAX_DT=1.0
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	for civ in s.civs: _protect(civ)
+	# 前沿 0.3 年展开，每年的停顿在 x.75：扫到格子的时刻（0.3 加整数年）都不在停顿上。
+	WorldTime.advance(s,0.3)
+	s._unfold_foil(Vector3i(6,0,0))
+	var created:=s.clock
+	var from:=Vector3(8,0,0)
+	Signals.send(s,0,from,Signals.controller(me),"report",{"type":"own","data":{"id":9001},"source_id":9001,"t_observed":s.clock,"epoch":0})
+	s.profiling=true
+	s.profile={}
+	WorldTime.advance(s,0.45)
+	for i in 14:
+		WorldTime.advance(s,1.0)
+	Balance.PHYSICS_MAX_DT=keep
+	var batches:=SpaceEvents._batches(SpaceEvents.front_times(s),INF).size()
+	check(s.profile.get("连续/子步数",0)<=20,"没为空格子停下：%d 步"%s.profile.get("连续/子步数",0))
+	# 前沿从 (6,0,0) 出发，(k,0,0) 在离它 |6-k|-0.5 光年处被扫到，前沿每年走 0.5 光年。
+	var spread:=Balance.FOIL_SPREAD*s.background_light()
+	var cell_id: int=s.cell_ids[Vector3i(3,0,0)]
+	var when:=-1.0
+	for event in s.events:
+		if event["kind"]=="cell_converted" and event["cell_id"]==cell_id:
+			when=event["t"]
+	check(absf(when-(created+2.5/spread))<1e-6,"补上的降维记扫到的时刻：%f"%when)
+	# 照着每一格被扫到的时刻，每 0.0001 年一步走一遍消息：没降维的格子光速 1，降成二维的 0.6。
+	var x:=from.x
+	var t:=created
+	var step:=0.0001
+	while x>0.0:
+		var k:=roundi(x)
+		var c:=s.background_light()
+		if t>=created+maxf(0.0,absf(6.0-k)-0.5)/spread:
+			c=Balance.DIMENSION_LIGHT["2"]
+		x-=c*step/s.physical_cell_size()
+		t+=step
+	var got: float=me.telemetry.get(9001,{}).get("t_received",-1.0)
+	check(got>=t-1e-3,"不早到：%f 对 %f"%[got,t])
+	check(got<t+0.05,"也不晚：%f 对 %f"%[got,t])
+	check(batches>0,"还有没扫到的格子")

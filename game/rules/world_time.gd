@@ -126,6 +126,8 @@ static func advance(s: GameState, duration: float) -> void:
 				if speed > 0.0:
 					dt = minf(dt, shot["remaining"] / speed)
 				dt = minf(dt, Hazards.next_boundary(s, Combat.projectile_motion(s, shot), dt))
+		# 降维前沿只在扫到的格子有用处时停下（要看这一步各个东西往哪里走），其余等下一次停下时补上。
+		dt = minf(dt, SpaceEvents.next_front(s, motions, dt))
 		if s.profiling:
 			detail=s._lap("细分/移动与环境边界",detail)
 		dt = minf(dt, TacticalEvents.next_change(s, motions, dt))
