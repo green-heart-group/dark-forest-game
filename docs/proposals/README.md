@@ -64,7 +64,7 @@
 
 ## 2026-10-11 新增讨论
 
-- [feedback-latest-discussion.md](feedback-latest-discussion.md)：E7F6、ccl、RainZL 的新增试玩与规则意见，状态为待整理；直接提取消息 439～712 中的空间全局可见、十年尺度、运动、死线、光粒、整数经济和交付要求，区分已有候选与待验证项。
+- [feedback-latest-discussion.md](feedback-latest-discussion.md)：E7F6、ccl、RainZL 的新增试玩与规则意见，已整合进问题清单和路线图；直接提取消息 439～712 中的空间全局可见、十年尺度、运动、死线、光粒、整数经济和交付要求，区分已有候选与待验证项。
 - [balance-complete.md](balance-complete.md)：ccl 在 2026-10-11 分享的完整数值与数学附录，状态为讨论中；Word 全文转为 Markdown，锁定旧实验快照，原件按用户选择留本地。
 
 本轮只收录提议与来源，不把新讨论自动采纳进现行规则或路线图。九张引用截图见[媒体补充评论](https://github.com/green-heart-group/dark-forest-game/issues/10#issuecomment-6108431810)，新增读取边界见[来源补充](chat-direction-sources.md#新增读取边界2026-10-11)。
