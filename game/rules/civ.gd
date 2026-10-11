@@ -194,10 +194,17 @@ func ship_by_id(id: int) -> Ship:
 	var i: int = _ship_slots.get(id, -1)
 	if i >= 0 and i < ships.size() and ships[i].id == id:
 		return ships[i]
+	var same_list := _not_ships_mark == _ships_mark()
+	if same_list and _not_ships.has(id):
+		return null
 	for k in ships.size():
 		if ships[k].id == id:
 			_ship_slots = _slots(ships)
 			return ships[k]
+	if not same_list:
+		forget_lookups()
+		_not_ships_mark = _ships_mark()
+	_not_ships[id] = true
 	return null
 
 
@@ -218,6 +225,38 @@ func asset_by_id(id: int) -> Dictionary:
 ## 只为算得快，不打包（StateCopy.SKIP）。
 var _ship_slots: Dictionary = {}
 var _asset_slots: Dictionary = {}
+## 从头找过、不是船的编号（多半是据点和设施），连同那时 ships 的条数和首尾两艘的编号：这三样变了就作废。
+## 规则里 ships 只追加、删掉或滤掉死船，条数都会变；只有流浪地球会沿用旧编号，造出来时调用 forget_lookups。
+var _not_ships: Dictionary = {}
+var _not_ships_mark: Array = []
+
+
+func _ships_mark() -> Array:
+	if ships.is_empty():
+		return [0]
+	return [ships.size(), ships[0].id, ships[-1].id]
+
+
+## 还没完结的工程回报的编号（OrderControl.open_reports 用，完结的回报越攒越多，不用每次都扫一遍）。
+## order_reports 的条数和记下时不同（别处直接改过）就从头重数。只为提速，不打包。
+var _open_orders: Dictionary = {}
+var _open_orders_size := -1
+
+
+## 记下一份工程回报（规则里都经这里写 order_reports），顺便更新上面的编号表。
+func record_order(id: int, report: Dictionary) -> void:
+	var in_step := _open_orders_size == order_reports.size()
+	order_reports[id] = report
+	if in_step:
+		if report.get("status", "") not in OrderControl.CLOSED:
+			_open_orders[id] = true
+		_open_orders_size = order_reports.size()
+
+
+## 忘掉「不是船」的记录（造出沿用旧编号的船以后调用）。
+func forget_lookups() -> void:
+	_not_ships = {}
+	_not_ships_mark = []
 
 
 static func _slots(items: Array) -> Dictionary:

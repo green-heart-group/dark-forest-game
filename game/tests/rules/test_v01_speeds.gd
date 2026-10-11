@@ -19,7 +19,7 @@ func _space(dim: int = 3) -> GameState:
 		s.line_anchor = s.map.origin
 		DimensionSpace.commit(s,true)
 	for id in s.cell_dims:
-		s.cell_dims[id] = dim
+		s.set_cell_dim(id, dim)
 	for civ in s.civs:
 		for asset in civ.assets:
 			asset["entity_dim"] = dim

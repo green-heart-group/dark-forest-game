@@ -34,6 +34,7 @@ static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 
 static func next_change(s: GameState, motions: Dictionary, duration: float) -> float:
 	var next := INF
+	var shapes := []
 	for civ in s.civs:
 		for ship in civ.ships:
 			if ship.dead or not motions.has(ship.id):
@@ -42,10 +43,29 @@ static func next_change(s: GameState, motions: Dictionary, duration: float) -> f
 				next = minf(next, maxf(0.0, Balance.SUPPRESSION_DURATION - ship.suppression["progress"]))
 			if ship.kind != Ship.WARSHIP:
 				continue
-			for other in s.civs:
-				for cell in other.colonies:
-					for radius in [Balance.SUPPRESSION_RANGE, Balance.SUPPRESSION_DEFENDER_RANGE]:
-						next = minf(next, Hazards._surface(motions[ship.id], {"a": Vector3(cell), "b": Vector3(cell), "r": radius / s.physical_cell_size(), "growth": 0.0}, duration))
+			var motion: Dictionary = motions[ship.id]
+			# 不动的战舰不会越过压制范围的边界（对不动的点 _surface 总是 INF），不用逐个星系算。
+			if motion["velocity"] == Vector3.ZERO and motion["acceleration"] == Vector3.ZERO:
+				continue
+			if shapes.is_empty():
+				for other in s.civs:
+					for cell in other.colonies:
+						for radius in [Balance.SUPPRESSION_RANGE, Balance.SUPPRESSION_DEFENDER_RANGE]:
+							shapes.append({"a": Vector3(cell), "b": Vector3(cell), "r": radius / s.physical_cell_size(), "growth": 0.0})
+			# 这一步走过的路的方框（弦的方框，四周放宽弯曲的余量 |a|t²/8，再多留一点浮点误差）。
+			# 离方框都比半径远的星系，整段路都在它的球外面，不会越过表面（_surface 也是 INF），不用算。
+			var low := Vector3.ONE * -INF
+			var high := Vector3.ONE * INF
+			if is_finite(duration):
+				var end := Kinematics.position(motion, duration)
+				var bend: float = motion["acceleration"].length() * duration * duration / 8.0 + 1e-4
+				low = motion["pos"].min(end) - Vector3.ONE * bend
+				high = motion["pos"].max(end) + Vector3.ONE * bend
+			for shape in shapes:
+				var point: Vector3 = shape["a"]
+				if point.distance_to(point.clamp(low, high)) > shape["r"]:
+					continue
+				next = minf(next, Hazards._surface(motion, shape, duration))
 	return next
 
 

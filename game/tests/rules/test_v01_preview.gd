@@ -42,7 +42,7 @@ func test_v01_preview_scales_distances_and_capped_eta() -> void:
 	s.fold_anchor=Vector3i.ZERO
 	DimensionSpace.commit(s,false)
 	for id in s.cell_dims:
-		s.cell_dims[id]=s.dimension
+		s.set_cell_dim(id,s.dimension)
 	for civ in s.civs:
 		for asset in civ.assets:
 			asset["entity_dim"]=s.dimension
@@ -70,6 +70,7 @@ func test_v01_preview_hidden_truth_pair_and_received_threats() -> void:
 	remote.pos=Vector3(7,7,7)
 	remote.dormant=true
 	s.light[s.light_index(Vector3i(5,0,0))]=0.0
+	s.light_version+=1
 	s.cell_dims[s.cell_ids[Vector3i(4,0,0)]]=1
 	s.foil_zones.append({"id":9002,"center":Vector3i(7,7,7),"age":4.0})
 	_ship(s,s.civs[1],Ship.WARSHIP,Vector3(2,0,0))
@@ -179,7 +180,7 @@ func test_v01_preview_parked_pause_and_outside_destination() -> void:
 	s.fold_anchor=Vector3i.ZERO
 	DimensionSpace.commit(s,false)
 	for id in s.cell_dims:
-		s.cell_dims[id]=s.dimension
+		s.set_cell_dim(id,s.dimension)
 	Assets.get_id(me,Signals.controller(me))["entity_dim"]=2
 	me.techs["dimension"]=true
 	var host:=_ship(s,me,Ship.STARSHIP,Vector3.ZERO)

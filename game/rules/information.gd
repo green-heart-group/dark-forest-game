@@ -58,13 +58,7 @@ static func receive_battle(s: GameState,owner: int,body: Dictionary) -> void:
 
 ## 已知战报到达后才能查询；收件者只来自当时已收己方遥测，不枚举真实远端传感器。
 static func query_battles(s: GameState,civ: Civ) -> void:
-	var known:=Knowledge.assets(s,civ).filter(func(asset):return asset["kind"]=="anchor")
-	var recipients: Dictionary={}
-	for asset in known:
-		recipients[asset["id"]]=Vector3(asset["at"])
-	for ship in Signals.reported_ships(s,civ):
-		if ship.kind!=Ship.GRAIN:
-			recipients[ship.id]=ship.pos
+	var recipients:=_battle_recipients(s,civ)
 	for event_id in civ.battle_reports:
 		var private_id: Variant=s.battle_tokens.get(s.civs.find(civ),{}).find_key(event_id)
 		if private_id==null:
@@ -77,6 +71,65 @@ static func query_battles(s: GameState,civ: Civ) -> void:
 			Signals.send(s,s.civs.find(civ),Signals.entity(s,s.civs.find(civ),Signals.controller(civ)).get("pos",Vector3(civ.home)),id,"survey_query",{
 				"event_id":private_id,"recipient_pos":recipients[id]},s.survey_sequence)
 			s.survey_sequence-=1
+
+
+## 战况查询的收件者 {编号: 位置}：已知的据点（Knowledge.assets 里的锚点），再加已知的舰船（Signals.reported_ships，光粒除外）。
+## 和那两个函数得出的一样、顺序也一样，只是不为每艘船重建一份船的状态、不为每处据点拍快照：每收一条己方回报就要算一次。
+static func _battle_recipients(s: GameState,civ: Civ) -> Dictionary:
+	var owner:=s.civs.find(civ)
+	var control:=Signals.entity(s,owner,Signals.controller(civ))
+	var center: Vector3=control.get("pos",Vector3(civ.home))
+	var size:=s.physical_cell_size()
+	# 已知的舰船：[编号, 种类, 位置, 是否在控制地点]，和 reported_ships 同样的编号和顺序。
+	var ids: Array=civ.telemetry.keys()
+	if not control.is_empty():
+		for ship in civ.ships:
+			if ship.pos.distance_to(control["pos"])*size<=Balance.COLLISION_EPSILON and not ids.has(ship.id):
+				ids.append(ship.id)
+	ids.sort()
+	var ships: Array=[]
+	for id in ids:
+		var actual:=civ.ship_by_id(id)
+		var pos: Vector3
+		var kind: String
+		if actual!=null and not actual.dead and not control.is_empty() and actual.pos.distance_to(control["pos"])*size<=Balance.COLLISION_EPSILON:
+			pos=actual.pos
+			kind=actual.kind
+		elif civ.telemetry.has(id) and not civ.telemetry[id]["data"]["dead"]:
+			pos=civ.telemetry[id]["data"]["pos"]
+			kind=civ.telemetry[id]["data"]["kind"]
+		else:
+			continue
+		ships.append([id,kind,pos,center.distance_to(pos)*size<=Balance.COLLISION_EPSILON])
+	var recipients: Dictionary={}
+	var add_anchors:=func(assets: Array):
+		for asset in assets:
+			if asset["kind"]=="anchor":
+				recipients[asset["id"]]=Vector3(asset["at"])
+	# Knowledge.colonies：有回报说还占着的星系，加上在控制地点、自己知道还占着的；排好序。
+	var cells: Array[Vector3i]=[]
+	for cell in civ.site_reports:
+		var here: bool=center.distance_to(Vector3(cell))*size<=Balance.COLLISION_EPSILON
+		if civ.owns(cell) if here else civ.site_reports[cell].get("data",{}).get("owned",false):
+			cells.append(cell)
+	for cell in civ.colonies:
+		if center.distance_to(Vector3(cell))*size<=Balance.COLLISION_EPSILON and not cells.has(cell):
+			cells.append(cell)
+	cells.sort()
+	for cell in cells:
+		if center.distance_to(Vector3(cell))*size<=Balance.COLLISION_EPSILON:
+			add_anchors.call(civ.assets.filter(func(a):return a["at"]==cell and a["carrier"]<0))
+		else:
+			add_anchors.call(civ.site_reports.get(cell,{}).get("data",{}).get("assets",[]))
+	for ship in ships:
+		if ship[3]:
+			add_anchors.call(civ.assets.filter(func(a):return a["carrier"]==ship[0]))
+		else:
+			add_anchors.call(civ.telemetry.get(ship[0],{}).get("data",{}).get("assets",[]))
+	for ship in ships:
+		if ship[1]!=Ship.GRAIN:
+			recipients[ship[0]]=ship[2]
+	return recipients
 
 
 ## 原始信息先沿真实cell→sensor光路抵达；查询前只保存在这一个传感器的私有缓冲。

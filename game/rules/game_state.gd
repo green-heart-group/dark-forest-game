@@ -93,6 +93,15 @@ var step_start := 0.0
 var step_motions: Dictionary = {}
 ## 不动的观察者看得到哪些星系（Signals._cells_in_view）。只为算得快，同样不打包。
 var view_cells: Dictionary = {}
+## 看视野时「什么变了」的记录和预测（ViewMarks），算到哪一刻为止（WorldTime.advance 记下这一回合结算到哪里）。
+## 每回合开头重新记，只为算得快，同样不打包、不进校验值。
+var view_marks: Dictionary = {}
+var view_until := 0.0
+## 核对模式：每一刀只看变了的以后，再把所有视野全看一遍（不发出），有漏发的就报错（Signals._check_missed）。测试里打开。
+var view_check := false
+var view_dry := false
+var view_missed: Array = []
+var view_missed_total := 0
 ## 上次算的光速表（LightFront.environment），只为算得快，同样不打包。
 var environment_cache: Dictionary = {}
 var scans: Array[Dictionary] = []
@@ -121,6 +130,10 @@ var flattened: Dictionary[Vector3i, int] = {}
 var black_domains: Array[Dictionary] = []
 ## 每格的光速（G14），下标见 _li。还没出现过黑域时为空，表示处处都是 1.0。
 var light := PackedFloat64Array()
+## 各格光速或维度改过几次：只经 set_light_at、set_cell_dim 和换图改，改一次加 1。Hazards.uniform_light 等据此沿用上次的结果。
+var light_version := 0
+## Hazards.uniform_light 上次的结果：[换图次数, 维度, light_version, 格子数, 结果]。只为提速，不打包。
+var uniform_cache := []
 ## 隐藏文明的位置，在星图外面。它们看不见、打不到，只对广播做出反应。
 var hidden: Array[Vector3i] = []
 ## 听到了广播、还在考虑要不要出手的隐藏文明：每项是 {"from": 隐藏文明的位置, "target": 被广播的坐标, "left": 还会等几回合}
@@ -634,14 +647,15 @@ func build_error(civ: Civ, kind: String, at: Vector3i, modules: Array = []) -> S
 	if kind == "landing":
 		return "运输船抵达后从行动页建立殖民地"
 	var host := construction_host(civ, at)
-	var known:=Knowledge.site(self,civ,at)
-	var info:=Knowledge.snapshot(self,civ,at)
 	if host == -2:
 		return "先选择自己的星系或星舰作为建造地点"
 	if construction_busy(civ, at, host):
 		return "这里的 %d 个建造槽已占满，已有施工或正在等待回报；收到完工或取消回报后释放对应槽位" % construction_capacity(civ,at,host)
 	if host >= 0 and FACILITIES.has(kind):
 		return "普通星舰上不能建造天体设施"
+	# 前面几项便宜，先查；据点的样子要拼一整份，查到这里才拼。
+	var known:=Knowledge.site(self,civ,at)
+	var info:=Knowledge.snapshot(self,civ,at)
 	if known.get("dormant",false) or (host >= 0 and Signals.reported_ship(self,civ,host).dormant):
 		if kind not in ["probe", "colony"]:
 			return "休眠救援队列只支持基础探测器或运输船"
@@ -995,7 +1009,7 @@ func antimatter_origins(civ: Civ) -> Array[Dictionary]:
 	for asset in Knowledge.assets(self,civ):
 		if asset["kind"] == "anchor" and not Knowledge.site(self,civ,asset["at"]).get("dormant",false):
 			origins.append({"id":asset["id"],"pos":Vector3(asset["at"])})
-	for ship in Signals.reported_ships(self,civ):
+	for ship in Signals.reported_ships(self,civ,[Ship.WARSHIP]):
 		if ship.kind == Ship.WARSHIP and not ship.dormant:
 			origins.append({"id":ship.id,"pos":ship.pos})
 	return origins
@@ -1344,7 +1358,8 @@ func in_own_vision(civ: Civ, p: Vector3) -> bool:
 
 
 ## 星系 c 现在的样子（情报里记下的）。
-func snapshot(c: Vector3i) -> Dictionary:
+## counts 是 snapshot_counts 的结果：一次要拍很多个星系时先数好，不用每个星系都把主人的舰船和箔扫一遍。结果一样。
+func snapshot(c: Vector3i, counts := {}) -> Dictionary:
 	var owner := coord_owner(c)
 	var info := {"turn": turn, "stars": map.star_at(c), "rocky": map.rocky.get(c, 0), "gas": map.gas.get(c, 0),
 			"habitable": map.is_habitable(c), "owner": civs.find(owner) if owner != null else -1, "dysons": 0, "warships": 0, "broadcaster": false, "grain": false, "foil": false,
@@ -1354,6 +1369,10 @@ func snapshot(c: Vector3i) -> Dictionary:
 		info["broadcaster"] = owner.broadcasters.has(c)
 		info["grain"] = owner.grains.has(c)
 		info["bunker"] = owner.bunkers.has(c)
+		if not counts.is_empty():
+			info["warships"] = counts["warships"][info["owner"]].get(c, 0)
+			info["foil"] = counts["foils"][info["owner"]].has(c)
+			return info
 		for s in owner.ships:
 			if s.kind == Ship.WARSHIP and s.docked and s.cell() == c:
 				info["warships"] += 1
@@ -1361,6 +1380,32 @@ func snapshot(c: Vector3i) -> Dictionary:
 			if f.prepare_left > 0 and Vector3i(f.origin.round()) == c:
 				info["foil"] = true
 	return info
+
+
+## snapshot 要数的东西，按文明、按格子先数好：{"warships": [{格子: 停着的战舰数}], "foils": [{格子: true}]}。
+func snapshot_counts() -> Dictionary:
+	var counts := {"warships": [], "foils": []}
+	for civ in civs:
+		var docked := {}
+		for s in civ.ships:
+			if s.kind == Ship.WARSHIP and s.docked:
+				docked[s.cell()] = docked.get(s.cell(), 0) + 1
+		var foils := {}
+		for f in civ.foils:
+			if f.prepare_left > 0:
+				foils[Vector3i(f.origin.round())] = true
+		counts["warships"].append(docked)
+		counts["foils"].append(foils)
+	return counts
+
+
+## snapshot 用到的所有事实合成一个签名（counts 是 snapshot_counts 的结果）：签名没变，就没有哪个星系的快照变了。
+## 只为提速：一次原生的 hash 比逐个星系拍快照便宜得多。黑域和死线在场时光速随时间变，签名管不了，调用方要先看 Hazards.any。
+func cell_facts(counts: Dictionary) -> int:
+	var owners := []
+	for civ in civs:
+		owners.append([civ.alive, civ.colonies, civ.dysons, civ.broadcasters, civ.grains, civ.bunkers])
+	return hash([dimension, cell_dims, light, map.stars, map.habitable, map.rocky, map.gas, owners, counts])
 
 
 ## 回合末所有文明看一遍之前，先把这段时间里不会变的东西算好，省得每只眼睛都重算（只为提速，结果不变）：
@@ -1815,6 +1860,13 @@ func set_light_at(c: Vector3i, value: float) -> void:
 	Signals.before_light_change(self, cells, [])
 	_ensure_light()
 	light[light_index(c)] = value
+	light_version += 1
+
+
+## 设编号为 id 的格子的维度。规则和测试都经这里改，Hazards.uniform_light 才知道要重算。
+func set_cell_dim(id: int, dim: int) -> void:
+	cell_dims[id] = dim
+	light_version += 1
 
 
 ## 格子 c 的光速（G14），开始是 1.0，被黑域拉低。星图外的都是 1.0。
@@ -2199,12 +2251,17 @@ func cancel_order(civ: Civ, id: int) -> Dictionary:
 
 func _refresh_permissions(civ: Civ) -> void:
 	Assets.ensure(self,civ)
-	var plan:=Economy.plan(self,civ)
-	var reference: Array = plan["reference"]
 	var events := [false, civ.discovered, civ.contacted, civ.conquered]
+	# 收支计划只在还有等着开放的级别时才算：每收到一条异文明观测都会走到这里，后期各级都已开放，算了也用不上。
+	var plan := {}
 	for tier in [1, 2, 3]:
+		if not events[tier] or civ.tier_turn(tier)>=0 or civ.pending_permissions.has(tier):
+			continue
+		if plan.is_empty():
+			plan=Economy.plan(self,civ)
+		var reference: Array = plan["reference"]
 		var gate: Array = Balance.TIER_NET_INCOME[str(tier)]
-		if not events[tier] or civ.tier_turn(tier)>=0 or civ.pending_permissions.has(tier) or reference[0]<gate[0] or reference[1]<gate[1]:
+		if reference[0]<gate[0] or reference[1]<gate[1]:
 			continue
 		# 账本可即时结算余额，但远端增产、停机和损失不能经权限按钮提前暴露。
 		# 同一时点冻结达标证明；来源分别走实际光路，不能用一个全局直线延时替代。
@@ -2567,7 +2624,7 @@ func queue_entity_command(civ: Civ, id: int, pos: Vector3, body: Dictionary, cos
 
 
 func reported_starship(civ: Civ) -> Ship:
-	for ship in Signals.reported_ships(self,civ):
+	for ship in Signals.reported_ships(self,civ,[Ship.STARSHIP,Ship.WANDERING_EARTH]):
 		if ship.kind in [Ship.STARSHIP,Ship.WANDERING_EARTH]:
 			return ship
 	return null

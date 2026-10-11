@@ -84,6 +84,7 @@ func test_speedups_match_plain_checks() -> void:
 	s._ensure_light()
 	for i in 6:
 		s.light[rng.randi_range(0, s.light.size() - 1)] = 0.0
+	s.light_version += 1
 	s.system_cells.clear()
 	for x in n:
 		for y in n:

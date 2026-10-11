@@ -28,7 +28,7 @@ static func compare(s: GameState,civ: Civ,from: Vector3,target: Vector3i,unit_id
 		for ship in me.ships:
 			ship.entity_dim=mini(ship.entity_dim,known.dimension)
 		for id in known.cell_dims:
-			known.cell_dims[id]=mini(known.cell_dims[id],known.dimension)
+			known.set_cell_dim(id,mini(known.cell_dims[id],known.dimension))
 		next=_journey(known,me,next_from,Vector3(next_target),unit)
 	var size: float=Balance.DIMENSION_CELL_SIZE[str(s.dimension)]
 	var next_size: float=Balance.DIMENSION_CELL_SIZE[str(maxi(1,s.dimension-1))]

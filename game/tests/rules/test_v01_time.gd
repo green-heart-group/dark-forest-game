@@ -23,7 +23,7 @@ func test_v01_physical_units_and_acceleration() -> void:
 	check_eq(m["cap_time"], 15.0, "战舰15年达到.15ly/年")
 	s.dimension = 2
 	for cell_id in s.cell_dims:
-		s.cell_dims[cell_id] = 2
+		s.set_cell_dim(cell_id, 2)
 	m = Kinematics.motion(s, me, ship, 1.0)
 	check(absf(Kinematics.position(m, 1.0).x - 0.01) < 0.000001, "二维格长.5ly，物理路程不变而逻辑格路程翻倍")
 	var probe := _ship(s, me, Ship.PROBE, Vector3.ZERO, Vector3.RIGHT)

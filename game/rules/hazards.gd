@@ -118,13 +118,20 @@ static func any(s: GameState) -> bool:
 
 ## 全图光速处处相同：没有黑域和死线，每格的维度和光速也都和背景一样。
 ## 这时光走过格子边界什么都不变，不用在边界停下来。
+## 各格光速和维度没改过（GameState.light_version）就沿用上次的结果，不用每次扫全图。
 static func uniform_light(s: GameState) -> bool:
 	if any(s):
 		return false
+	var key := [s.space_epoch, s.dimension, s.light_version, s.cell_ids.size()]
+	if s.uniform_cache.size() == 5 and s.uniform_cache.slice(0, 4) == key:
+		return s.uniform_cache[4]
+	var result := true
 	for cell in s.cell_ids:
 		if s.cell_dims.get(s.cell_ids[cell], s.dimension) != s.dimension or s.light_at(cell) != 1.0:
-			return false
-	return true
+			result = false
+			break
+	s.uniform_cache = key + [result]
+	return result
 
 
 static func suppression(s: GameState, position: Vector3) -> float:

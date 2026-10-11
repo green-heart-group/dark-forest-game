@@ -131,6 +131,7 @@ static func commit(s: GameState, to_line: bool) -> void:
 	_keys(s.cell_ids, mapping)
 	s.map = next
 	s.light = remapped_light
+	s.light_version += 1
 	s.system_cells.clear()
 	for cell in old_systems:
 		s.system_cells.append(mapping.get(cell, cell))

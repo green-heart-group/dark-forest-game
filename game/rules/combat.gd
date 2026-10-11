@@ -21,8 +21,9 @@ static func targets(s: GameState, include_grain := false, observe := false) -> A
 				continue
 			var carrier := civ.ship_by_id(asset["carrier"]) if asset["carrier"] >= 0 else null
 			var motion := {"velocity": Vector3.ZERO, "acceleration": Vector3.ZERO} if carrier == null else _motion(s, civ, carrier, observe)
+			# 和 Signals.entity 的位置一样：船上的在船那里，否则在所在的格子（矿机的编号不会是船的编号，不用先当船找一遍）。
 			result.append({"id": asset["id"], "kind": asset["kind"], "owner": owner,
-					"pos": Signals.entity(s,owner,asset["id"])["pos"], "velocity": motion["velocity"],
+					"pos": carrier.pos if carrier != null else Vector3(asset["at"]), "velocity": motion["velocity"],
 					"acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF), "hp": 1, "asset": asset})
 	for payload in s.payloads:
 		if not payload.get("dead", false):
@@ -262,7 +263,13 @@ static func events_in(s: GameState, motions: Dictionary, duration: float) -> Arr
 					ship.contact_ids.erase(target["id"])
 				if ship.contact_ids.has(target["id"]):
 					continue
-				var t := Kinematics.relative_contact(motions[ship.id], target_motion(target, motions), radius / s.physical_cell_size(), duration)
+				var mine: Dictionary = motions[ship.id]
+				var other := target_motion(target, motions)
+				# 两边这一步里最多靠近多少：起点离得比这再加半径还远（多留一点浮点误差），就碰不上（relative_contact 也是 INF），不用算。
+				var closing: float = (mine["velocity"] - other["velocity"]).length() * duration + 0.5 * (mine["acceleration"] - other["acceleration"]).length() * duration * duration
+				if mine["pos"].distance_to(other["pos"]) > radius / s.physical_cell_size() + closing + 1e-4:
+					continue
+				var t := Kinematics.relative_contact(mine, other, radius / s.physical_cell_size(), duration)
 				if t != INF:
 					found.append({"after": t, "kind": "contact", "ship": ship, "owner": civ, "target": target})
 	return found

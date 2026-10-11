@@ -283,3 +283,19 @@ func test_v01_dead_reckoning_stays_inside_map() -> void:
 	var pos := Combat.predicted(s, contact)
 	check(not Ship.outside(pos, s.map.bounds()), "推算的位置不出地图：%s" % pos)
 	check(pos.x > 8.0, "朝地图边上推，停在边上：%s" % pos)
+
+
+## 规则：视野
+func test_v01_views_that_only_check_changes_miss_nothing() -> void:
+	# 每回合中间只看变了的东西（ViewMarks）。核对模式每一刀再全看一遍，有内容变了却没发的观测就记下来。
+	var s := GameState.new_game(5, Balance.AI_COUNT, true)
+	s.view_check = true
+	var checked := 0
+	for i in 100:
+		if s.is_over():
+			break
+		s.end_turn()
+		trace_long(s, "view_check100")
+		checked += 1
+	check(checked >= 60, "打了 %d 回合" % checked)
+	check(s.view_missed_total == 0, "没有漏发的观测：漏了 %d 条" % s.view_missed_total)
