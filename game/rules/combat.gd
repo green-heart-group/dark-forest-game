@@ -182,10 +182,11 @@ static func fire_ready(s: GameState) -> void:
 ## 中间按观测时的速度和加速度推算。只推算到「现在减去这条观测的传播时间」那一刻，
 ## 也就是假如每次采样都重发、此刻最新能收到的那次观测；不替收件方预知更晚的变化。
 ## 返回那一刻的位置、速度和时刻。
+## 推算最多推到观测之后 stale_after() 年，见 stale()。
 static func observed(s: GameState,contact: Dictionary) -> Dictionary:
 	var t0: float = contact.get("t_observed",s.clock)
 	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
-	var t := maxf(0.0,s.clock-delay-t0)
+	var t := clampf(s.clock-delay-t0,0.0,stale_after())
 	var velocity: Vector3 = contact.get("velocity",Vector3.ZERO)
 	var acceleration: Vector3 = contact.get("acceleration",Vector3.ZERO)
 	# 加速到最高速度（accel_until）就不再加速，之后匀速。不封顶的话，看不见以后会一直推算到超过最高速度。
@@ -194,10 +195,28 @@ static func observed(s: GameState,contact: Dictionary) -> Dictionary:
 
 
 ## 从 observed 那一刻起，按那时的速度直线推算现在的位置。凡是用别人位置的地方都要先推算，
-## 不能直接用观测那一刻的位置。
+## 不能直接用观测那一刻的位置。最多再推一段传播时间（过时的观测就停在那里），也不推出地图。
 static func predicted(s: GameState,contact: Dictionary) -> Vector3:
 	var known := observed(s,contact)
-	return known["pos"]+known["velocity"]*maxf(0.0,s.clock-known["t"])
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	var pos: Vector3 = known["pos"]+known["velocity"]*clampf(s.clock-known["t"],0.0,delay)
+	var bounds := s.map.bounds()
+	var half := Vector3.ONE*Geometry.CELL_HALF
+	return pos.clamp(bounds.position-half,bounds.end-half)
+
+
+## 目标还在视野里时，观测最晚隔一次心跳再加一个子步（采样在子步末）就会重发。
+## 过了这么久还没收到新的，说明它已离开视野、停下或没了，不能再往前推算。
+static func stale_after() -> float:
+	return Signals.HEARTBEAT+Balance.PHYSICS_MAX_DT
+
+
+## 这条观测之后本该收到新的却没收到：推算已经停住，画面画淡一些。
+static func stale(s: GameState,contact: Dictionary) -> bool:
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	return s.clock-delay-t0 > stale_after()
 
 
 static func projectile_motion(s: GameState, shot: Dictionary) -> Dictionary:

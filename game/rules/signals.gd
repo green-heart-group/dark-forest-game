@@ -964,6 +964,9 @@ static func _cells_in_view(s: GameState, index: Dictionary, observer: Dictionary
 	return cells
 
 
+## 观测内容不变时，每隔这么多年（心跳）照样重发一次。
+const HEARTBEAT := 1.0
+
 ## 航位推算：观测里有位置和速度时，这两项不算进签名。目标照上次观测的速度和加速度走、
 ## 走到了推算的位置和速度，就当没变，不重发；收件方用 Combat.observed 按同样的式子推算。
 ## 加速度、种类、损伤等别的内容变了，或者实际位置、速度偏离推算，才立即重发。心跳照旧每年一次。
@@ -991,7 +994,7 @@ static func _emit(s: GameState, owner: int, observer: Dictionary, origin: Vector
 		same = stamp.get("epoch", -1) == s.space_epoch \
 				and pos.distance_to(data["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON \
 				and (velocity + acceleration * t).distance_to(data["velocity"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON
-	if same and (not heartbeat or now - stamp.get("time", -INF) < 1.0):
+	if same and (not heartbeat or now - stamp.get("time", -INF) < HEARTBEAT):
 		return
 	s.sensor_stamps[key] = {"hash": signature, "time": now}
 	if moving:
@@ -1082,7 +1085,7 @@ static func sample(s: GameState, _force := false) -> void:
 				var contact: bool = data["owner"] >= 0 and data["owner"] != owner and Vector3i(observer["pos"].round()) == cell
 				# 和 _emit 里的判断一样：没变、心跳也没到就不发。多数星系每次都是这样，省得每次拼一条消息。
 				var stamp: Dictionary = s.sensor_stamps.get(seen[1], {})
-				if stamp.get("hash", -1) == seen_cell[contact] and s.clock - stamp["time"] < 1.0:
+				if stamp.get("hash", -1) == seen_cell[contact] and s.clock - stamp["time"] < HEARTBEAT:
 					continue
 				_emit(s, owner, observer, Vector3(cell), seen[1],
 						{"type": "cell", "cell": cell, "cell_id": seen[2], "passive": true, "data": data, "contact": contact}, true, INF, seen_cell[contact])

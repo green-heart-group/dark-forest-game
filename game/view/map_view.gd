@@ -583,7 +583,7 @@ func _pickables() -> Array[Dictionary]:
 	for sight in me.sightings:
 		add.call("v%s%d" % [sight["pos"], sight["turn"]], Combat.predicted(state, sight), 0.18, "第 %d 回合看到的舰船" % sight["turn"])
 	for alert in me.alerts:
-		add.call("a%s" % alert["pos"], Combat.predicted(state, alert), 0.29, "预警")
+		add.call("a%s" % alert["pos"], Combat.predicted(state, alert), 0.29, "预警（已过时）" if Combat.stale(state, alert) else "预警")
 	return list
 
 
@@ -1408,9 +1408,10 @@ func _draw_intel(me: Civ) -> void:
 		points.append(Combat.predicted(state, sight))
 		colors.append(Color(COLOR_SIGHTING, clampf(1.0 - float(age) / Balance.SIGHTING_KEEP, 0.15, 1.0)))
 		sizes.append(1.0)
+	# 过时的预警（目标离开预警范围、停下或没了）停在最后推到的地方，画淡一些
 	for alert in me.alerts:
 		points.append(Combat.predicted(state, alert))
-		colors.append(COLOR_ALERT)
+		colors.append(Color(COLOR_ALERT, 0.35) if Combat.stale(state, alert) else COLOR_ALERT)
 		sizes.append(1.6)
 	var diamond := SphereMesh.new()
 	diamond.radius = 0.18
@@ -1518,7 +1519,7 @@ func _colony_candidates(me: Civ) -> Node3D:
 
 ## 图例：星图上每种标记的颜色和意思。
 static func legend_text() -> String:
-	return "[color=#4d99ff]■ / ▲[/color] 己方星系 / 飞行单位；停泊舰队按数量合并。\n" + 			"[color=#ff5959]■ / ◆[/color] 已知敌方星系 / 舰船；[color=#ff991a]◆[/color] 当前预警。旧情报越旧越淡。\n" + 			"[color=#b8c4d9]●[/color] 已探索星系；[color=#ff80cc]□ / ○[/color] 广播目标 / 最近三条传播波前。\n" + 			"[color=#fff259]○[/color] 当前选择；悬停看详情，选中看航线与设施；详细星图显示全部。\n" + 			"白片是降维箔，淡紫区域是降维或黑域；黑域中心有框。x / y / z 是坐标轴。"
+	return "[color=#4d99ff]■ / ▲[/color] 己方星系 / 飞行单位；停泊舰队按数量合并。\n" + 			"[color=#ff5959]■ / ◆[/color] 已知敌方星系 / 舰船；[color=#ff991a]◆[/color] 预警，过时的变淡。旧情报越旧越淡。\n" + 			"[color=#b8c4d9]●[/color] 已探索星系；[color=#ff80cc]□ / ○[/color] 广播目标 / 最近三条传播波前。\n" + 			"[color=#fff259]○[/color] 当前选择；悬停看详情，选中看航线与设施；详细星图显示全部。\n" + 			"白片是降维箔，淡紫区域是降维或黑域；黑域中心有框。x / y / z 是坐标轴。"
 
 
 # ---------- 绘图小工具 ----------

@@ -248,10 +248,38 @@ func test_v01_message_aimed_ahead_is_not_early_when_receiver_turns() -> void:
 ## 规则：情报传回，移动
 func test_v01_dead_reckoning_stops_speeding_up_at_top_speed() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))
-	# 观测时每年加速 0.1 格，2 年后到最高速度；之后看不见了，推算也只能按最高速度匀速走。
+	# 观测时每年加速 0.1 格，0.5 年后到最高速度；之后只能按最高速度匀速推算。
 	var contact := {"pos": Vector3.ZERO, "velocity": Vector3(0.1, 0, 0), "acceleration": Vector3(0.1, 0, 0),
-			"accel_until": 2.0, "t_observed": 0.0, "t_received": 0.0}
-	s.clock = 10.0
+			"accel_until": 0.5, "t_observed": 0.0, "t_received": 0.0}
+	s.clock = 1.5
 	var known := Combat.observed(s, contact)
-	check(known["velocity"].is_equal_approx(Vector3(0.3, 0, 0)), "速度停在最高速度：%s" % known["velocity"])
-	check(known["pos"].is_equal_approx(Vector3(2.8, 0, 0)), "先加速 2 年再匀速 8 年：%s" % known["pos"])
+	check(known["velocity"].is_equal_approx(Vector3(0.15, 0, 0)), "速度停在最高速度：%s" % known["velocity"])
+	check(known["pos"].is_equal_approx(Vector3(0.2125, 0, 0)), "先加速 0.5 年再匀速 1 年：%s" % known["pos"])
+
+
+## 规则：情报传回，移动
+func test_v01_dead_reckoning_stops_when_reports_stop() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	# 观测在路上走了 1 年。目标还在视野里时，最晚 Combat.stale_after() 年后会再看到它一次，
+	# 再过 1 年传到；过了这个时间还没收到新的，说明它已离开视野、停下或没了，推算停在那里。
+	var contact := {"pos": Vector3(1, 4, 4), "velocity": Vector3(0.5, 0, 0), "acceleration": Vector3.ZERO,
+			"t_observed": 0.0, "t_received": 1.0}
+	var stale := Combat.stale_after()
+	s.clock = 1.5
+	check(Combat.predicted(s, contact).is_equal_approx(Vector3(1.75, 4, 4)), "还在等下一次报告时照常推算：%s" % Combat.predicted(s, contact))
+	check(not Combat.stale(s, contact), "还在等下一次报告时不算过时")
+	s.clock = 10.0
+	var frozen := Vector3(1, 4, 4) + Vector3(0.5, 0, 0) * (stale + 1.0)
+	check(Combat.predicted(s, contact).is_equal_approx(frozen), "报告断了就停在最后能推到的地方：%s" % Combat.predicted(s, contact))
+	check(Combat.stale(s, contact), "报告断了算过时")
+
+
+## 规则：情报传回，移动
+func test_v01_dead_reckoning_stays_inside_map() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var contact := {"pos": Vector3(8, 4, 4), "velocity": Vector3(1, 0, 0), "acceleration": Vector3.ZERO,
+			"t_observed": 0.0, "t_received": 0.0}
+	s.clock = 1.0
+	var pos := Combat.predicted(s, contact)
+	check(not Ship.outside(pos, s.map.bounds()), "推算的位置不出地图：%s" % pos)
+	check(pos.x > 8.0, "朝地图边上推，停在边上：%s" % pos)
