@@ -128,7 +128,7 @@
 
 ## 导出
 
-- 本地和 GitHub 发布都调用 `game/tools/export.py`，用法只写在[仓库 README](../../README.md#发布)。
+- 本地和 GitHub 发布都调用 `game/tools/export.py`，用法只写在[导出和发布](export.md)。
   工具负责数值声明同步、网页字体、导入、导出、ZIP 打包和网页开发者入口；发布流程只负责上传和发布。
   GitHub 测试流程在 Windows、macOS、Linux 上检查工具逻辑；发布流程在 Linux 上实际导出游戏。
   Godot 预设仍在 `game/export_presets.cfg` 中维护，不在脚本里重复平台设置。
@@ -156,7 +156,7 @@
 
 | 文件 | 做什么 |
 | --- | --- |
-| `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见仓库 README |
+| `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见 [导出和发布](export.md) |
 | `game/tools/make_macos_templates.py` | 从已安装的官方通用模板提取 Intel、Apple Silicon 模板，输出到被忽略的构建目录；导出工具自动调用，也能为编辑器手动导出准备模板 |
 | `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
 | `game/tests/tools/test_export.py` | 用 Python 标准库检查导出失败处理、完整产物、ZIP 内容和 Godot 路径；完整 `test.py` 会先跑它 |
