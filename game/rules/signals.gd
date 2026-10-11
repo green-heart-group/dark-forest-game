@@ -4,6 +4,14 @@ extends RefCounted
 ## 被动传感先到本地接收器，再转发控制锚点；两段时间分别记录。
 
 
+## 收件者（entity 的结果）在 t 时刻在哪。t 在上一个子步里时，船按这一步的运动推出那一刻的位置；其余就是现在的位置。
+static func position_at(s: GameState, receiver: Dictionary, t: float) -> Vector3:
+	var ship: Ship = receiver.get("ship", receiver.get("carrier"))
+	if ship != null and t < s.clock and t >= s.step_start and s.step_motions.has(ship.id):
+		return Kinematics.position(s.step_motions[ship.id], t - s.step_start)
+	return receiver["pos"]
+
+
 static func entity(s: GameState, owner: int, id: int) -> Dictionary:
 	if owner < 0 or owner >= s.civs.size():
 		return {}
@@ -39,6 +47,11 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 		var host := _merge_host(s, owner, source, recipient, kind)
 		if not host.is_empty():
 			host["more"].append(body.duplicate(true))
+			if not host.get("prompt", false) and _prompt(owner, kind, entity(s, owner, recipient), body):
+				host["prompt"] = true
+				if not s.message_index.is_empty():
+					s.message_index["exact"].append(host)
+				_expect(s, host)
 			return host
 	var receiver := entity(s, owner, recipient)
 	var fallback: Vector3 = body.get("recipient_pos", source)
@@ -51,6 +64,8 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 		var aim := _aim(s, owner, receiver, source, 0.0)
 		message["target"] = aim[0]
 		message["eta"] = s.clock + aim[1]
+		if _prompt(owner, kind, receiver, body):
+			message["prompt"] = true
 	if merge and private_id == 0 and kind in MERGE_KINDS:
 		message["more"] = []
 	message["n"] = s.message_serial
@@ -135,8 +150,8 @@ static func _expect(s: GameState, message: Dictionary) -> void:
 		_file(s.message_index, message)
 
 
-## 在途消息的索引：{"buckets": {刻度: [消息]}, "low": 可能还有消息的最小刻度, "exact": [命令类消息], "dead": 已收但还没从 messages 删掉的条数}。
-## 第 k 个刻度装到达时刻在 k×0.05 年到 (k+1)×0.05 年之间的消息。到达时刻改了就再放进新刻度，旧刻度里的那份收的时候认出来跳过。
+## 在途消息的索引：{"buckets": {分组: [消息]}, "low": 可能还有消息的最小分组, "exact": [到了就要切开的消息], "dead": 已收但还没从 messages 删掉的条数}。
+## 第 k 组装到达时刻在 k×BUCKET 年到 (k+1)×BUCKET 年之间的消息。到达时刻改了就再放进新分组，旧分组里的那份收的时候认出来跳过。
 ## 算不出到达时间的（光速为 0）不放进去：光速一变就整份重算（retime）。
 static func _indexed(s: GameState) -> Dictionary:
 	if s.message_index.is_empty():
@@ -155,15 +170,17 @@ static func _indexed(s: GameState) -> Dictionary:
 	return s.message_index
 
 
-## 比任何刻度都大，当作「没有」。
+## 比任何分组都大，当作「没有」。
 const NEVER := 1 << 62
+## 在途消息按到达时刻分组的宽度（年）。只为查得快，不影响结果。
+const BUCKET := 0.05
 
 
 static func _file(index: Dictionary, message: Dictionary) -> void:
 	var eta: float = message.get("eta", INF)
 	if eta > 1e12:
 		return
-	var tick := floori(eta / Balance.PHYSICS_MAX_DT)
+	var tick := floori(eta / BUCKET)
 	var buckets: Dictionary = index["buckets"]
 	if not buckets.has(tick):
 		buckets[tick] = []
@@ -333,13 +350,27 @@ const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]
 const RECEIVER_KEY := 1 << 32
 
 
-## 只有命令类消息的到达要让整个世界停下来。其余的情报（传感、回报）到了以后
-## 等到下一个 0.05 年的传感刻度才拆开（固定节拍处理，见 receive_due），不再每到一条就切一个子步。
+## 到达时要让整个世界停下来的消息：命令类，以及发给会自己动作的船（带武器的船自动开火、星舰避开敌方星系）的观测，
+## 这些船收到就要能在下一小步反应。其余的情报（传感、回报）到了以后，等所在的子步结束才一起收（见 receive_due），
+## 收到时刻仍记准确的到达时刻，不为它多切一刀。
 static func exact(message: Dictionary) -> bool:
-	return message["kind"] in EXACT_KINDS
+	return message["kind"] in EXACT_KINDS or message.get("prompt", false)
 
 
-## 下一条命令类消息还要多久到（换图后要等到 not_before 才收）。
+## 发给 receiver 的这条观测要不要到了就切开处理：只有船会马上用到的才要。
+## 带武器的船看到的敌方单位（自动开火），星舰看到的敌方星系（避开它）。其余观测船上用不到，子步末再收。
+static func _prompt(owner: int, kind: String, receiver: Dictionary, body: Dictionary) -> bool:
+	if kind != "sensor" or not receiver.has("ship"):
+		return false
+	var ship: Ship = receiver["ship"]
+	var data: Dictionary = body.get("data", {})
+	var enemy: bool = data.get("owner", -1) >= 0 and data.get("owner", -1) != owner
+	if body["type"] == "entity":
+		return enemy and not ship.weapons.is_empty()
+	return body["type"] == "cell" and enemy and ship.kind == Ship.STARSHIP
+
+
+## 下一条到了就要切开的消息（exact）还要多久到（换图后要等到 not_before 才收）。
 static func next_arrival(s: GameState) -> float:
 	var next := INF
 	for message in _indexed(s)["exact"]:
@@ -351,23 +382,19 @@ static func next_arrival(s: GameState) -> float:
 
 static func receive_due(s: GameState, depth := 0) -> void:
 	assert(depth < 8, "本地零距离收据不能无限重发")
-	var arrived: Array[Dictionary] = []
+	var received: Array[Dictionary] = []
 	var dropped := 0 # 收件者已经不在、直接作废的条数
 	var receivers: Dictionary={}
-	# 时钟落在 0.05 年的传感刻度上才拆开情报类消息。按时钟本身判断，不看 next_sensor_time：
-	# 这一刻采样后它已指向下一刻度，而采样当场发出、距离为零的本地回报也要在这一刻收到。
-	var ticks := s.clock / Balance.PHYSICS_MAX_DT
-	var on_tick := absf(ticks - roundf(ticks)) * Balance.PHYSICS_MAX_DT <= Balance.TIME_EPSILON
 	var size := s.physical_cell_size()
 	var reach2 := (Balance.COLLISION_EPSILON / size) * (Balance.COLLISION_EPSILON / size)
 	var due := s.clock + Balance.TIME_EPSILON
-	# 最早的一条都还没到（不在刻度上时只看命令类），这一遍不用逐条看。
-	if s.message_due[1 if on_tick else 0] > due:
+	# 最早的一条都还没到，这一遍不用逐条看。
+	if s.message_due[1] > due:
 		return
-	# 只看到达刻度不晚于现在的消息，按发出的先后处理。没处理的（还没到、要等刻度、追收件者）放回索引。
+	# 只看到达分组不晚于现在的消息，按发出的先后处理。没处理的（还没到、等换图结束、追收件者）放回索引。
 	var index := _indexed(s)
 	var buckets: Dictionary = index["buckets"]
-	var last := floori(due / Balance.PHYSICS_MAX_DT)
+	var last := floori(due / BUCKET)
 	var found: Array[Dictionary] = []
 	for tick in range(index["low"], last + 1):
 		if buckets.has(tick):
@@ -379,7 +406,7 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			index["low"] = mini(index["low"], tick)
 	found.sort_custom(func(a, b): return a["n"] < b["n"])
 	# 后面的刻度里的消息都不早于这个时刻。
-	var next_any := (last + 1) * Balance.PHYSICS_MAX_DT
+	var next_any := (last + 1) * BUCKET
 	var previous := {}
 	for message in found:
 		if message["dead"] or is_same(message, previous):
@@ -390,9 +417,8 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			_file(index, message)
 			next_any = minf(next_any, eta)
 			continue
-		var is_exact: bool = message["kind"] in EXACT_KINDS
-		if (not on_tick and not is_exact) or s.clock < message.get("not_before", -INF):
-			# 已经到了，只是还要等刻度或换图结束：下次照样要看它。
+		if s.clock < message.get("not_before", -INF):
+			# 已经到了，只是还要等换图结束：下次照样要看它。
 			_file(index, message)
 			next_any = minf(next_any, eta)
 			continue
@@ -402,6 +428,8 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			receivers[key]=entity(s,owner,message["recipient"])
 		var receiver: Dictionary=receivers[key]
 		message["pos"] = message["target"]
+		# 到达时刻在这个子步里的，按收件者那一刻的位置判断收没收到；等换图结束才收的，按现在。
+		var arrived: float = eta if eta >= s.step_start else s.clock
 		if receiver.is_empty():
 			# 收件者死亡不能令远端命令在发送瞬间退款，从余额泄露真实战况。
 			message["dead"] = true
@@ -409,7 +437,7 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			if message["kind"] == "command":
 				s._receive_command(message, false)
 			continue
-		if receiver["pos"].distance_squared_to(message["target"]) > reach2:
+		if position_at(s, receiver, arrived).distance_squared_to(message["target"]) > reach2:
 			# 收件者不在瞄准点：从瞄准点出发再追它。光到瞄准点以后已经又走了 clock - eta 年。
 			var aim := _aim(s, owner, receiver, message["target"], s.clock - message["eta"])
 			message["source"] = message["target"]
@@ -421,8 +449,10 @@ static func receive_due(s: GameState, depth := 0) -> void:
 				next_any = minf(next_any, message["eta"])
 				continue
 			message["pos"] = receiver["pos"]
+			arrived = message["eta"]
+		message["arrived"] = arrived
 		message["dead"] = true
-		arrived.append(message)
+		received.append(message)
 	var next_exact := INF
 	var waiting: Array = []
 	for message in index["exact"]:
@@ -432,27 +462,30 @@ static func receive_due(s: GameState, depth := 0) -> void:
 	index["exact"] = waiting
 	# 先记下剩下的消息里最早的到达时刻；下面收消息时新发出的消息会再往前更新（_expect）。
 	s.message_due = [next_exact, minf(next_any, next_exact)]
-	for message in arrived:
+	for message in received:
 		_deliver(s, message)
 		for body in message.get("more", []):
 			var part: Dictionary = message.duplicate()
 			part["body"] = body
 			part.erase("more")
 			_deliver(s, part)
-	if dropped > 0 or not arrived.is_empty():
+	if dropped > 0 or not received.is_empty():
 		# 收过的消息攒到总数的八分之一再一起删掉，不用每收一批就整份重排。
-		index["dead"] += arrived.size() + dropped
+		index["dead"] += received.size() + dropped
 		if index["dead"] * 8 >= s.messages.size():
 			s.messages = s.messages.filter(func(m): return not m["dead"])
 			index["dead"] = 0
 		receive_due(s, depth + 1)
 
 
+## 收下一条消息。收到的时刻记成它真正到达的时刻（arrived），不记现在：情报类消息到了以后，
+## 等到所在的子步结束才一起收，不为它多切一刀。
 static func _deliver(s: GameState, message: Dictionary) -> void:
 	var owner: int = message["owner"]
 	var civ: Civ = s.civs[owner]
 	var receiver := entity(s, owner, message["recipient"])
 	var body: Dictionary = message["body"]
+	var now: float = message.get("arrived", s.clock)
 	if message["kind"]=="survey_record":
 		Information.receive_record(s,message)
 		return
@@ -474,32 +507,35 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 			Conversion.apply(s, civ, receiver, body["step"], false)
 		return
 	if message["kind"] == "sensor":
-		body["t_local_received"] = s.clock
+		body["t_local_received"] = now
 		if receiver.has("ship") and body["type"] == "cell":
 			var key: String="cell:%d"%body["cell_id"]
 			if receiver["ship"].local_contacts.get(key,{}).get("t_observed",-INF)<=body["t_observed"]:
 				receiver["ship"].local_contacts[key]={"id":-body["cell_id"]-1,"kind":"anchor",
 					"owner":body["data"]["owner"],"pos":Vector3(body["cell"]),"velocity":Vector3.ZERO,"hp":0,
-					"t_observed":body["t_observed"],"t_received":s.clock,"epoch":body["epoch"]}
+					"t_observed":body["t_observed"],"t_received":now,"epoch":body["epoch"]}
 		if receiver.has("ship") and body["type"] == "entity":
 			var contact: Dictionary = body["data"].duplicate(true)
 			contact["t_observed"] = body["t_observed"]
-			contact["t_received"] = s.clock
+			contact["t_received"] = now
 			contact["epoch"] = body["epoch"]
 			if receiver["ship"].local_contacts.get(contact["id"],{}).get("t_observed",-INF)<=body["t_observed"]:
 				receiver["ship"].local_contacts[contact["id"]] = contact
 		elif receiver.has("asset") and body["type"] == "entity":
 			var contact: Dictionary = body["data"].duplicate(true)
-			contact.merge({"t_observed":body["t_observed"],"t_received":s.clock,"epoch":body["epoch"]},true)
+			contact.merge({"t_observed":body["t_observed"],"t_received":now,"epoch":body["epoch"]},true)
 			if not civ.local_contacts_by_source.has(message["recipient"]):
 				civ.local_contacts_by_source[message["recipient"]] = {}
 			if civ.local_contacts_by_source[message["recipient"]].get(contact["id"],{}).get("t_observed",-INF)<=body["t_observed"]:
 				civ.local_contacts_by_source[message["recipient"]][contact["id"]] = contact
 		if message["recipient"] != controller(civ):
 			if not receiver.is_empty():
-				send(s, owner, receiver["pos"], controller(civ), "report", body)
+				# 转发从到达的那一刻、收件者那时所在的位置出发，转多少手都不多等。
+				var lag := s.clock - now
+				var relay := send(s, owner, position_at(s, receiver, now), controller(civ), "report", body, 0, lag <= 0.0)
+				catch_up(s, relay, lag)
 			return
-	body["t_received"] = s.clock
+	body["t_received"] = now
 	if body["type"]=="permission":
 		var tier: int=body["tier"]
 		var proof: Dictionary=civ.pending_permissions.get(tier,{})
@@ -525,7 +561,7 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 				plan["ready_reports"]={}
 			if plan["ready_at"].get(body["entity"],-INF)<=body["t_observed"]:
 				plan["ready_at"][body["entity"]]=body["t_observed"]
-				plan["ready_reports"][body["entity"]]={"t_observed":body["t_observed"],"t_received":s.clock,"epoch":body["epoch"]}
+				plan["ready_reports"][body["entity"]]={"t_observed":body["t_observed"],"t_received":now,"epoch":body["epoch"]}
 	elif body["type"] == "site_destroyed":
 		Information.receive_battle(s,owner,body)
 	elif body["type"] == "battle_survey":
@@ -541,7 +577,7 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 		Information.confirm_battles(s,civ)
 	elif body["type"] == "hit":
 		civ.times_hit+=1
-		civ.hit_dirs.append({"at":body["cell"],"dir":body["direction"],"turn":s.turn,"t_observed":body["t_observed"],"t_received":s.clock})
+		civ.hit_dirs.append({"at":body["cell"],"dir":body["direction"],"turn":s.turn,"t_observed":body["t_observed"],"t_received":now})
 	elif body["type"] == "broadcast":
 		civ.heard[body["target"]] = s.turn
 		civ.known[body["target"]] = s.turn
@@ -550,7 +586,7 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 		s._discover(civ,"收到广播坐标")
 	elif body["type"] == "warning":
 		var warning: Dictionary = body["data"].duplicate(true)
-		warning.merge({"turn":s.turn,"t_observed":body["t_observed"],"t_received":s.clock,"source_id":body["source_id"],"epoch":body["epoch"]},true)
+		warning.merge({"turn":s.turn,"t_observed":body["t_observed"],"t_received":now,"source_id":body["source_id"],"epoch":body["epoch"]},true)
 		civ.alerts = civ.alerts.filter(func(old):return old.get("id",-1)!=warning["id"])
 		civ.alerts.append(warning)
 	elif body["type"] == "payload":
@@ -568,7 +604,7 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 	elif body["type"] == "order":
 		var data: Dictionary = body["data"].duplicate(true)
 		data["t_observed"] = body["t_observed"]
-		data["t_received"] = s.clock
+		data["t_received"] = now
 		if civ.order_reports.get(data["id"],{}).get("t_observed",-INF)<=body["t_observed"]:
 			var previous: String=civ.order_reports.get(data["id"],{}).get("status","")
 			if previous in ["completed","failed","destroyed","cancelled"]:
@@ -610,10 +646,10 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 		if body.get("passive", false):
 			if not civ.coverage.has(cell_id):
 				civ.coverage[cell_id] = {}
-			civ.coverage[cell_id][body["source_id"]] = {"t_observed": body["t_observed"], "t_received": s.clock, "epoch": body["epoch"]}
+			civ.coverage[cell_id][body["source_id"]] = {"t_observed": body["t_observed"], "t_received": now, "epoch": body["epoch"]}
 		var first_discovery := not civ.intel.has(cell) and not Knowledge.owns(s,civ,cell)
 		var info: Dictionary = body["data"].duplicate(true)
-		info.merge({"t_observed": body["t_observed"], "t_received": s.clock,
+		info.merge({"t_observed": body["t_observed"], "t_received": now,
 				"source_id": body["source_id"], "epoch": body["epoch"]}, true)
 		if civ.intel.has(cell) and civ.intel[cell].get("t_observed", -INF) > body["t_observed"]:
 			return
@@ -629,7 +665,7 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 			civ.known.erase(cell)
 	elif body["type"] == "entity":
 		var contact: Dictionary = body["data"].duplicate(true)
-		contact.merge({"t_observed": body["t_observed"], "t_received": s.clock,
+		contact.merge({"t_observed": body["t_observed"], "t_received": now,
 				"source_id": body["source_id"], "epoch": body["epoch"], "turn": s.turn}, true)
 		# 一遍找出同一单位的旧记录：有更新的就不收，否则删掉旧的、新的放到末尾。
 		var same: Array[int]=[]
@@ -652,12 +688,12 @@ static func _deliver(s: GameState, message: Dictionary) -> void:
 			civ.site_reports[cell]=body.duplicate(true)
 			if civ.intel.get(cell,{}).get("t_observed",-INF)<=body["t_observed"]:
 				civ.intel[cell]=body["data"]["snapshot"].duplicate(true)
-				civ.intel[cell].merge({"t_observed":body["t_observed"],"t_received":s.clock,"turn":s.turn,"source_id":body["source_id"],"epoch":body["epoch"]},true)
+				civ.intel[cell].merge({"t_observed":body["t_observed"],"t_received":now,"turn":s.turn,"source_id":body["source_id"],"epoch":body["epoch"]},true)
 	elif body["type"] == "own":
 		var id: int = body["data"]["id"]
 		if not civ.telemetry.has(id) or civ.telemetry[id]["t_observed"] <= body["t_observed"]:
 			civ.telemetry[id] = body.duplicate(true)
-			civ.telemetry[id]["t_received"] = s.clock
+			civ.telemetry[id]["t_received"] = now
 	if not civ.battle_reports.is_empty() and body["type"] in ["own","own_site"]:
 		Information.query_battles(s,civ)
 	_receive_permissions(s,civ)

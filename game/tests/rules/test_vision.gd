@@ -99,7 +99,7 @@ func test_steady_course_is_not_resent_every_sample() -> void:
 
 
 ## 规则：情报传回
-func test_reports_are_opened_on_sensor_ticks() -> void:
+func test_relayed_reports_keep_exact_arrival_time() -> void:
 	var s:=_two_civs(Vector3i(8,8,8))
 	var me:=s.human()
 	for x in 4:
@@ -113,12 +113,21 @@ func test_reports_are_opened_on_sensor_ticks() -> void:
 	WorldTime.advance(s,2.0)
 	var steps: int=s.profile["连续/子步数"]
 	var ticks:=roundi(1.0/Balance.PHYSICS_MAX_DT)
-	# 这里没有别的事件，只该停在两年的采样刻度上；每到一条观测就停一次的话要切 59 段。
+	# 这里没有别的事件，只该停在两年的采样刻度上；每到一条观测或转发就停一次的话要切 59 段以上。
 	check(steps<=2*ticks+2,"两年切了 %d 段，不随到达的观测条数增加" % steps)
 	check(me.intel.size()>4,"观测照样送到")
+	# 观测先按光速走到探测器，探测器在到达那一刻转发回母星：收到时刻正好是两段光路之和，不等刻度。
+	var home:=Vector3(me.home)
+	var relayed:=0
 	for cell in me.intel:
-		var t: float=me.intel[cell]["t_received"]
-		check(absf(t/Balance.PHYSICS_MAX_DT-roundf(t/Balance.PHYSICS_MAX_DT))<1e-6,"在 0.05 年的采样刻度上拆开")
+		var info: Dictionary=me.intel[cell]
+		var eye:=me.ship_by_id(info["source_id"])
+		if eye==null:
+			continue
+		relayed+=1
+		var expected: float=info["t_observed"]+Signals.travel_time(s,Vector3(cell),eye.pos)+Signals.travel_time(s,eye.pos,home)
+		check(absf(info["t_received"]-expected)<1e-6,"转发一手的观测按两段光路准时收到：%f 对 %f"%[info["t_received"],expected])
+	check(relayed>0,"有经探测器转发的观测")
 
 
 ## 规则：情报传回

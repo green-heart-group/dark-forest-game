@@ -146,6 +146,29 @@ func test_domain_does_not_invent_anchor_elimination_or_output_multiplier() -> vo
 
 
 ## 规则：黑域
+func test_message_through_domain_takes_exact_time() -> void:
+	var s:=_two_civs(Vector3i(8,8,8))
+	var center:=Vector3(4,4,4)
+	Hazards.activate(s,center)
+	s.clock+=4.0
+	Hazards.refresh(s)
+	var from:=Vector3(1,4.3,4)
+	var to:=Vector3(7,4.3,4)
+	var size:=s.physical_cell_size()
+	var steps:=60000
+	var expected:=0.0
+	for i in steps:
+		var at:=from.lerp(to,(i+0.5)/steps)
+		expected+=from.distance_to(to)*size/steps/s.light_speed_at(at)
+	var eta:=Signals.travel_time(s,from,to)
+	check(absf(eta-expected)<1e-4,"穿过黑域的用时按公式算准：%f 对 %f"%[eta,expected])
+	check(eta>from.distance_to(to)*size/s.background_light()+0.5,"黑域确实让消息慢了")
+	var half:=Hazards.light_travel(s,from,Vector3.RIGHT,from.distance_to(to)*size,eta*0.5)
+	var rest:=Signals.travel_time(s,from+Vector3.RIGHT*half["distance"]/size,to)
+	check(absf(half["time"]+rest-eta)<1e-6,"走一半时间停下，剩下的路再走正好补齐")
+
+
+## 规则：黑域
 func test_bounded_domain_uses_physical_radius_in_new_dimensions() -> void:
 	var s:=_two_dimensional_match()
 	var center:=Vector3(13,13,s.flat_plane)

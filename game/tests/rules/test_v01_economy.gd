@@ -380,6 +380,8 @@ func test_v01_landing_invalid_after_start_burns_escrow() -> void:
 				"occupied": s.civs[1].colonies.append(at)
 				"dimension": s.cell_dims[s.cell_ids[at]] = 2
 			s._finish_pending(me,0.0)
+			# 测试直接改了局面：照正式结算那样，光速变了就重算在途消息的到达时间。
+			Signals.retime(s)
 			check(me.pending.is_empty(),"失效落地工程立即销毁")
 			check_eq(me.order_reports[project["id"]],known,"远端失效要等回执，不能提前改变已知工程")
 			check_eq([me.energy_millis,me.mineral_millis],paid,"销毁时不退预付")
@@ -392,7 +394,7 @@ func test_v01_landing_invalid_after_start_burns_escrow() -> void:
 			check(not receipt.has("failure_refund"),"项目销毁不携带退款")
 			check_eq([me.energy_millis,me.mineral_millis],paid,"收到失效回执也不退2.25E/3M或零进度费用")
 			check_eq([receipt.get("t_observed",-1),receipt.get("t_received",-1)],
-				[4.0,4.0+return_time],"失效观测与接收时间遵守实际光路，不提前回传")
+				[4.0,4.0+Signals.travel_time(s,Vector3(at),Vector3(me.home))],"失效观测与接收时间遵守实际光路，不提前回传")
 			Signals.receive_due(s)
 			check_eq([me.energy_millis,me.mineral_millis],paid,"重复接收不产生退款")
 

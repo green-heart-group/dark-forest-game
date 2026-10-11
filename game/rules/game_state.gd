@@ -87,6 +87,10 @@ var converted_cells: Array[Vector3i] = []
 var hazard_shapes: Array = []
 ## 回合推进里运营包的缓存（Economy._cached_packages）。只为算得快，复制局面和存档时不带（StateCopy.SKIP），不进校验值。
 var package_cache: Dictionary = {}
+## 上一个子步从什么时刻开始、各船这一步怎么动（WorldTime.advance 记下）。消息在子步中间到达、子步末才收时，
+## 用它找出收件者在到达那一刻的位置（Signals.position_at）。只为算得准，复制局面和存档时不带（StateCopy.SKIP）。
+var step_start := 0.0
+var step_motions: Dictionary = {}
 ## 上次算的光速表（LightFront.environment），只为算得快，同样不打包。
 var environment_cache: Dictionary = {}
 var scans: Array[Dictionary] = []

@@ -11,7 +11,7 @@ extends RefCounted
 const LINKS := {"GameState": ["map", "rng", "civs", "hidden_ships", "hidden_foils", "broadcasts", "zero_winner"],
 		"Civ": ["ships", "foils"]}
 ## 只为算得快的缓存，不打包，恢复后是空的，用到时重新算。
-const SKIP := {"GameState": ["package_cache", "message_index", "environment_cache", "_cell_size", "_background_light"],
+const SKIP := {"GameState": ["package_cache", "message_index", "environment_cache", "_cell_size", "_background_light", "step_start", "step_motions"],
 		"Civ": ["_ship_slots", "_asset_slots"]}
 
 

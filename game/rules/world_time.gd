@@ -40,6 +40,8 @@ static func integrate(s: GameState, plans: Dictionary, duration: float) -> Array
 
 static func advance(s: GameState, duration: float) -> void:
 	var end := s.clock + duration
+	s.step_start = s.clock
+	s.step_motions = {}
 	s.package_cache.clear()
 	s.ensure_cells()
 	for civ in s.civs:
@@ -132,6 +134,8 @@ static func advance(s: GameState, duration: float) -> void:
 		SpaceEvents.advance(s, dt)
 		s._collapse_depth += 1
 		_move(s, motions, dt)
+		s.step_start = s.clock
+		s.step_motions = motions
 		s.clock += dt
 		var due: Array[Dictionary] = []
 		for event in collisions:

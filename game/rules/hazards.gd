@@ -181,9 +181,12 @@ static func next_light_edge(s: GameState, start: Vector3, velocity: Vector3, dt:
 
 ## 光或消息从 pos 沿 direction 走 duration 年，最多走 remaining（物理距离）。
 ## 在一个子步里自己分段：每段用这一段起点的光速，到光速会变的地方（next_light_edge）换一段。
+## 有黑域或死线时改用 _field_travel：黑域里光速随位置连续变化，按公式算准每段的用时。
 ## 返回走了多远（distance）、到达终点用了多久（arrival，没到为 INF）、实际走了多久（time）。光速为 0 的地方走不动。
 ## 每段至少走 TIME_EPSILON 年，所以不限段数也一定会停；一维的长直线上可能要分几百段。
 static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaining: float, duration: float, table := {}) -> Dictionary:
+	if table.is_empty() and any(s):
+		return _field_travel(s, pos, direction, remaining, duration)
 	var size := s.physical_cell_size()
 	var t := 0.0
 	var moved := 0.0
@@ -205,6 +208,178 @@ static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaini
 		moved += speed * step
 		t += step
 	return {"distance": moved, "arrival": INF, "time": t}
+
+
+## 有黑域或死线时的 light_travel。在格子边界、黑域表面和中心、死线边界处分段；
+## 段内格子、死线和覆盖的黑域都不变，光速只随到各黑域中心的距离变，用时按公式算（_field_time）。
+static func _field_travel(s: GameState, pos: Vector3, direction: Vector3, remaining: float, duration: float) -> Dictionary:
+	var size := s.physical_cell_size()
+	var t := 0.0
+	var moved := 0.0
+	while true:
+		var need := remaining - moved
+		if need <= 0.0:
+			return {"distance": remaining, "arrival": t}
+		if t >= duration:
+			break
+		var at := pos + direction * moved / size
+		var piece := minf(need, maxf(_field_edge(s, at, direction, need), Balance.TIME_EPSILON))
+		var field := _field(s, at, direction, piece)
+		if field.is_empty():
+			break
+		var cost := _field_time(field, piece)
+		if t + cost > duration:
+			moved += _field_reach(field, piece, duration - t)
+			t = duration
+			break
+		t += cost
+		if piece >= need:
+			return {"distance": remaining, "arrival": t}
+		moved += piece
+	return {"distance": moved, "arrival": INF, "time": t}
+
+
+## 从 at 沿 direction 走多远（物理距离）光速的算法会变：出格子、碰到黑域表面或中心、进出死线。最多看 limit。
+## 黑域半径取现在的大小，和 suppression 一样。
+static func _field_edge(s: GameState, at: Vector3, direction: Vector3, limit: float) -> float:
+	var size := s.physical_cell_size()
+	var motion := {"pos": at, "velocity": direction, "acceleration": Vector3.ZERO}
+	var best := minf(Kinematics.straight_cell_exit(at, direction), limit / size)
+	for source in s.black_domains:
+		for r in [Balance.DOMAIN_CORE, radius(s, source, s.clock)]:
+			best = minf(best, _surface(motion, {"a": source["pos"], "b": source["pos"], "r": r / size, "growth": 0.0}, best))
+	for line in s.deadlines:
+		best = minf(best, _surface(motion, {"a": line["a"], "b": line["b"], "r": Balance.DEADLINE_RADIUS / size, "growth": 0.0}, best))
+	return best * size
+
+
+## 从 at 沿 direction 走 piece（物理距离）这一段的光速：{"c": 这一格的背景光速, "floor": 1 / 上限比例,
+## "domains": 覆盖这一段的黑域 [{"u": 起点沿方向离中心多远, "b2": 直线离中心最近距离的平方, "k": 权重 / 半径}],
+## "lo"、"hi": 黑域减速比上限更慢的那一截}。光速为 0（在黑域中心或零维格子里）时为空。
+## 这一点的相对光速是 min(上限, 1 / (1 + 各黑域权重之和))，上限是格子自己的光速和死线的 0.8 中较小的。
+static func _field(s: GameState, at: Vector3, direction: Vector3, piece: float) -> Dictionary:
+	var size := s.physical_cell_size()
+	var mid := at + direction * (0.5 * piece / size)
+	var cell := Vector3i(mid.round())
+	var id: int = s.cell_ids.get(cell, -1)
+	var dim: int = s.cell_dims.get(id, s.dimension)
+	if dim == 0:
+		return {}
+	var c: float = s.background_light() if dim == s.dimension else Balance.DIMENSION_LIGHT[str(dim)]
+	var cap := minf(s.light_at(cell), 1.0)
+	for line in s.deadlines:
+		if line["expires"] >= s.clock and segment_distance(mid, line["a"], line["b"]) * size <= Balance.DEADLINE_RADIUS:
+			cap = minf(cap, Balance.DEADLINE_FACTOR)
+	if c <= 0.0 or cap <= 0.0:
+		return {}
+	var domains := []
+	var life: Dictionary = s.domain_cells.get(id, {})
+	if life.is_empty() or s.clock < life["expires"] or s.clock >= life["immune_until"]:
+		for source in s.black_domains:
+			if source["expires"] < s.clock:
+				continue
+			var reach := radius(s, source, s.clock)
+			var distance: float = mid.distance_to(source["pos"]) * size
+			if reach <= 0.0 or distance > reach + 1e-8:
+				continue
+			if distance <= Balance.DOMAIN_CORE:
+				return {}
+			var offset: Vector3 = (at - source["pos"]) * size
+			var u := offset.dot(direction)
+			domains.append({"u": u, "b2": maxf(0.0, offset.length_squared() - u * u), "k": Balance.DOMAIN_WEIGHT / reach})
+	var field := {"c": c, "floor": 1.0 / cap, "domains": domains, "lo": 0.0, "hi": 0.0}
+	if domains.is_empty():
+		return field
+	# 1 + 权重之和沿直线是凸起的一条（各项是负的到中心距离），比上限更慢的部分是一整截 [lo, hi]。
+	var top := _field_peak(field, piece)
+	if _field_slowness(field, top) <= field["floor"]:
+		return field
+	field["lo"] = 0.0 if _field_slowness(field, 0.0) > field["floor"] else _field_cross(field, 0.0, top)
+	field["hi"] = piece if _field_slowness(field, piece) > field["floor"] else _field_cross(field, piece, top)
+	return field
+
+
+## 不算上限时，走 x 处每走 1 光年要多少年（乘以背景光速）：1 + 各黑域权重之和。
+static func _field_slowness(field: Dictionary, x: float) -> float:
+	var value := 1.0
+	for d in field["domains"]:
+		value += Balance.DOMAIN_WEIGHT - d["k"] * sqrt(d["b2"] + (d["u"] + x) * (d["u"] + x))
+	return value
+
+
+## _field_slowness 在 [0, piece] 上最大的位置（它的斜率一路变小，二分找斜率为 0 处）。
+static func _field_peak(field: Dictionary, piece: float) -> float:
+	if _field_slope(field, 0.0) <= 0.0:
+		return 0.0
+	if _field_slope(field, piece) >= 0.0:
+		return piece
+	var lo := 0.0
+	var hi := piece
+	for i in 60:
+		var mid := (lo + hi) * 0.5
+		if _field_slope(field, mid) > 0.0:
+			lo = mid
+		else:
+			hi = mid
+	return (lo + hi) * 0.5
+
+
+static func _field_slope(field: Dictionary, x: float) -> float:
+	var value := 0.0
+	for d in field["domains"]:
+		var along: float = d["u"] + x
+		var distance := sqrt(d["b2"] + along * along)
+		if distance > 0.0:
+			value -= d["k"] * along / distance
+	return value
+
+
+## 在 outside（比上限快）和 top（比上限慢）之间，找 _field_slowness 正好等于上限的位置。
+static func _field_cross(field: Dictionary, outside: float, top: float) -> float:
+	var a := outside
+	var b := top
+	for i in 60:
+		var mid := (a + b) * 0.5
+		if _field_slowness(field, mid) > field["floor"]:
+			b = mid
+		else:
+			a = mid
+	return (a + b) * 0.5
+
+
+## 从这一段起点走 x（物理距离）要多少年。比上限慢的那一截用积分公式，其余按上限的光速。
+static func _field_time(field: Dictionary, x: float) -> float:
+	var lo := minf(x, field["lo"])
+	var hi := minf(x, field["hi"])
+	var slow := 0.0
+	if hi > lo:
+		slow = (1.0 + Balance.DOMAIN_WEIGHT * field["domains"].size()) * (hi - lo)
+		for d in field["domains"]:
+			slow -= d["k"] * (_distance_integral(d["u"] + hi, d["b2"]) - _distance_integral(d["u"] + lo, d["b2"]))
+	return (field["floor"] * (x - (hi - lo)) + slow) / field["c"]
+
+
+## 走 time 年能走多远，最多 piece。用时随距离只增不减，二分找。
+static func _field_reach(field: Dictionary, piece: float, time: float) -> float:
+	var lo := 0.0
+	var hi := piece
+	for i in 60:
+		var mid := (lo + hi) * 0.5
+		if _field_time(field, mid) > time:
+			hi = mid
+		else:
+			lo = mid
+	return lo
+
+
+## 到一点距离 sqrt(b2 + u²) 对 u 的积分（从 0 积到 u）：(u·sqrt(b2 + u²) + b2·arsinh(u / sqrt(b2))) / 2。
+static func _distance_integral(u: float, b2: float) -> float:
+	var root := sqrt(b2 + u * u)
+	var value := u * root
+	if b2 > 1e-24:
+		var ratio := absf(u) / sqrt(b2)
+		value += b2 * signf(u) * log(ratio + sqrt(ratio * ratio + 1.0))
+	return 0.5 * value
 
 ## 局部光速的不连续边界必须分段；场内连续权重使用最大步长积分并做减半收敛测试。
 static func next_boundary(s: GameState, motion: Dictionary, dt: float) -> float:
