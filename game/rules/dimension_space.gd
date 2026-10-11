@@ -135,6 +135,7 @@ static func commit(s: GameState, to_line: bool) -> void:
 	for cell in old_systems:
 		s.system_cells.append(mapping.get(cell, cell))
 	s._view_cache.clear()
+	s.view_cells.clear()
 	s.last_mapping = mapping
 	var zones := s.line_zones if to_line else s.foil_zones
 	if not zones.is_empty():

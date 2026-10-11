@@ -130,6 +130,46 @@ func test_relayed_reports_keep_exact_arrival_time() -> void:
 	check(relayed>0,"有经探测器转发的观测")
 
 
+## 规则：视野
+func test_unit_passing_through_view_between_samples_is_seen() -> void:
+	# 子步放宽到一整年：敌方探测器在两次采样之间整个穿过战舰的视野，照样看到，观测时刻是进入视野那一刻。
+	var keep:=Balance.PHYSICS_MAX_DT
+	Balance.PHYSICS_MAX_DT=1.0
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	var eye:=_ship(s,me,Ship.WARSHIP,Vector3(4,4,4))
+	var passer:=_ship(s,s.civs[1],Ship.PROBE,Vector3(3.87,4.995,4),Vector3.RIGHT)
+	WorldTime.advance(s,1.0)
+	var outside:=not Signals.in_view(s,Signals.observers(s,me).filter(func(o):return o["id"]==eye.id)[0],passer.pos)
+	WorldTime.advance(s,1.0)
+	Balance.PHYSICS_MAX_DT=keep
+	check(outside,"一年后探测器已经飞出视野")
+	var entry:=(4.0-sqrt(1.0-0.995*0.995)-3.87)/0.3
+	var contact: Dictionary=eye.local_contacts.get(passer.id,{})
+	check(absf(contact.get("t_observed",-1.0)-entry)<1e-4,"按进入视野的时刻记观测：%f 对 %f"%[contact.get("t_observed",-1.0),entry])
+	check(contact.get("pos",Vector3.ZERO).distance_to(Vector3(3.87+0.3*entry,4.995,4))<1e-4,"位置是进入视野那一刻的位置")
+
+
+## 规则：视野
+func test_cone_view_records_exact_entry_time() -> void:
+	# 探测器的视野是朝前的圆锥。敌方光粒从侧面横穿圆锥，在两次采样之间进去又出来，照样看到，观测时刻按进入那一刻算。
+	var keep:=Balance.PHYSICS_MAX_DT
+	Balance.PHYSICS_MAX_DT=1.0
+	var s:=_two_civs(Vector3i(8,8,8))
+	var me:=s.human()
+	var probe:=_ship(s,me,Ship.PROBE,Vector3(1,4,4),Vector3.RIGHT)
+	var target:=_ship(s,s.civs[1],Ship.GRAIN,Vector3(2.1,4.3,4),Vector3.DOWN)
+	WorldTime.advance(s,1.0)
+	var eye: Dictionary=Signals.observers(s,me).filter(func(o):return o["id"]==probe.id)[0]
+	check(not Signals.in_view(s,eye,target.pos),"一年后光粒已经离开圆锥")
+	WorldTime.advance(s,2.0)
+	Balance.PHYSICS_MAX_DT=keep
+	# 圆锥长 1 光年：探测器以 0.3c 追近，0.1 光年后光粒进入圆锥远端，这时它已在圆锥里面（离轴不到张角）。
+	var entry:=(1.1-1.0)/0.3
+	var contact: Dictionary=probe.local_contacts.get(target.id,{})
+	check(absf(contact.get("t_observed",-1.0)-entry)<1e-4,"圆锥视野按进入时刻记观测：%f 对 %f"%[contact.get("t_observed",-1.0),entry])
+
+
 ## 规则：情报传回
 func test_seeing_enemy_ship_counts_as_discovery() -> void:
 	var s:=_two_civs(Vector3i(8,8,8))

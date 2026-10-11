@@ -91,12 +91,13 @@ var package_cache: Dictionary = {}
 ## 用它找出收件者在到达那一刻的位置（Signals.position_at）。只为算得准，复制局面和存档时不带（StateCopy.SKIP）。
 var step_start := 0.0
 var step_motions: Dictionary = {}
+## 不动的观察者看得到哪些星系（Signals._cells_in_view）。只为算得快，同样不打包。
+var view_cells: Dictionary = {}
 ## 上次算的光速表（LightFront.environment），只为算得快，同样不打包。
 var environment_cache: Dictionary = {}
 var scans: Array[Dictionary] = []
 var neutral_assets: Array[Dictionary] = []
 var sensor_stamps: Dictionary = {}
-var next_sensor_time := 0.0
 var domain_cells: Dictionary[int, Dictionary] = {}
 var zero_zones: Array[Dictionary] = []
 var remap_until := -1.0
@@ -378,7 +379,7 @@ func _dev_record(civ_index: int, name: String, args: Array) -> void:
 func checksum() -> int:
 	var parts: Array = [turn, clock, winner, steps, _next_id, flattened.size(), linearized.size(), dimension, space_epoch, map.extent, light, rng.state, cell_ids, cell_dims]
 	parts.append([map.stars, map.rocky, map.gas, map.habitable, messages.filter(func(m): return not m["dead"]), projectiles, payloads,
-			domain_cells, black_domains, deadlines, sensor_stamps, next_sensor_time, zero_zones, remap_until, applied_hits])
+			domain_cells, black_domains, deadlines, sensor_stamps, zero_zones, remap_until, applied_hits])
 	parts.append([scans,neutral_assets,hidden_listen,foil_zones,line_zones,pending_battle_surveys,battle_archive,battle_tokens,survey_sequence])
 	for wave in broadcasts:
 		parts.append([wave["id"],wave["from"],wave["target"],civs.find(wave["sender"]),wave["samples"],wave["visited"],wave.get("propagation",{})])

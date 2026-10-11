@@ -174,6 +174,9 @@ static func _indexed(s: GameState) -> Dictionary:
 const NEVER := 1 << 62
 ## 在途消息按到达时刻分组的宽度（年）。只为查得快，不影响结果。
 const BUCKET := 0.05
+## 看视野时把目标按位置分桶（_entity_buckets）：桶有几格宽，一个方框最多碰几个桶。只为算得快，不影响结果。
+const BUCKET_CELLS := 2.0
+const BUCKET_LIMIT := 64
 
 
 static func _file(index: Dictionary, message: Dictionary) -> void:
@@ -760,108 +763,337 @@ static func in_view(s: GameState, observer: Dictionary, pos: Vector3) -> bool:
 	return forward >= 0.0 and forward <= radius and (d - observer["dir"] * forward).length() <= forward * tan(deg_to_rad(observer["angle"] * 0.5)) + Balance.COLLISION_EPSILON
 
 
+## 点离视野边缘多远（物理距离）：在视野里时不大于 0。和 in_view 用同样的判断，d 是点减观察者（物理距离）。
+## 离得越远值越大，而且点每挪 1 光年，值最多变 _view_slope 光年，_first_seen 据此排除看不到的时间段。
+static func _view_margin(s: GameState, observer: Dictionary, d: Vector3) -> float:
+	var radius: float = observer["radius"]
+	var dir: Vector3 = observer["dir"]
+	if dir == Vector3.ZERO:
+		return d.length() - radius - 1e-7
+	var forward := d.dot(dir)
+	if s.dimension == 1:
+		return maxf(forward - radius, -radius * observer["backward"] - forward)
+	var off := (d - dir * forward).length()
+	return maxf(maxf(-forward, forward - radius), off - forward * tan(deg_to_rad(observer["angle"] * 0.5)) - Balance.COLLISION_EPSILON)
+
+
+static func _view_slope(s: GameState, observer: Dictionary) -> float:
+	if observer["dir"] == Vector3.ZERO or s.dimension == 1:
+		return 1.0
+	return 1.0 + tan(deg_to_rad(observer["angle"] * 0.5))
+
+
+## 上一个子步里，目标最早什么时候在视野里（离子步开始多少年），一直看不到时为 INF。
+## r0、v、a 是目标相对观察者的位置、速度、加速度（格），子步开始时的值；observer 给出视野形状（子步里不变）。
+## 把时间段对半分：按视野边缘的距离和相对速度，整段都不可能进视野的就排除，最后准到 TIME_EPSILON 年。
+static func _first_seen(s: GameState, observer: Dictionary, r0: Vector3, v: Vector3, a: Vector3, dt: float) -> float:
+	return _seen_between(s, observer, r0, v, a, _view_slope(s, observer) * s.physical_cell_size(), 0.0, dt)
+
+
+static func _seen_between(s: GameState, observer: Dictionary, r0: Vector3, v: Vector3, a: Vector3, scale: float, lo: float, hi: float) -> float:
+	var size := s.physical_cell_size()
+	var low := _view_margin(s, observer, (r0 + v * lo + 0.5 * a * lo * lo) * size)
+	if low <= 0.0:
+		return lo
+	var high := _view_margin(s, observer, (r0 + v * hi + 0.5 * a * hi * hi) * size)
+	# 这一段里离边缘最近也不小于 (low + high − 最快变化 × 段长) / 2。
+	var change := ((v + a * lo).length() + a.length() * (hi - lo)) * scale * (hi - lo)
+	if low + high - change > 0.0:
+		return INF
+	if hi - lo <= Balance.TIME_EPSILON:
+		return hi if high <= 0.0 else INF
+	var mid := (lo + hi) * 0.5
+	var left := _seen_between(s, observer, r0, v, a, scale, lo, mid)
+	return left if left != INF else _seen_between(s, observer, r0, v, a, scale, mid, hi)
+
+
+## 上一个子步里这样东西怎么动：{"pos": 子步开始时的位置, "velocity", "acceleration"}（格/年）。
+## id 没记下运动（不动的设施和据点）时，就当它一直在 pos。
+static func _path(s: GameState, id: int, pos: Vector3) -> Dictionary:
+	return s.step_motions.get(id, {"pos": pos, "velocity": Vector3.ZERO, "acceleration": Vector3.ZERO})
+
+
+static func _moved(path: Dictionary) -> bool:
+	return path["velocity"] != Vector3.ZERO or path["acceleration"] != Vector3.ZERO
+
+
+## 观察者在上一个子步里的视野：圆锥朝它那时飞的方向（子步末可能刚转向）。
+static func _past_view(observer: Dictionary, path: Dictionary) -> Dictionary:
+	if observer["dir"] == Vector3.ZERO or not _moved(path):
+		return observer
+	var past := observer.duplicate()
+	var heading: Vector3 = path["velocity"] if path["velocity"] != Vector3.ZERO else path["acceleration"]
+	past["dir"] = heading.normalized()
+	return past
+
+
+## 动的观察者在上一个子步里有没有新看到不动的点 point（子步开始时已在视野里的，上一次采样看过，不算）。
+## past 是那时的视野，path 是它这一步的运动。
+static func _passed(s: GameState, past: Dictionary, path: Dictionary, point: Vector3, dt: float) -> bool:
+	var seen := _first_seen(s, past, point - path["pos"], -path["velocity"], -path["acceleration"], dt)
+	return seen > 0.0 and seen < INF
+
+
+## 目标在上一个子步开始后 t 年时的样子（位置、速度、加速度按它这一步的运动 trail 推出）。start 是子步开始的时刻。
+static func _entity_data(target: Dictionary, trail: Dictionary, t: float, start: float) -> Dictionary:
+	var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
+			"pos": Kinematics.position(trail, t), "velocity": trail["velocity"] + trail["acceleration"] * t,
+			"acceleration": trail["acceleration"], "hp": target["hp"]}
+	if trail.get("cap_time", INF) < INF:
+		data["accel_until"] = start + trail["cap_time"]
+	return data
+
+
+## 两条子步里的轨迹（起点 a0、b0，终点 a1、b1，各自加速度）有没有可能相距不到 reach 格。只是粗筛。
+static func _may_meet(a0: Vector3, a1: Vector3, aa: Vector3, b0: Vector3, b1: Vector3, ba: Vector3, dt: float, reach: float) -> bool:
+	if not is_finite(reach):
+		return true
+	var bend := (aa.length() + ba.length()) * dt * dt / 8.0
+	return Geometry.segment_distance(a0, a1, b0, b1) <= reach + bend + 1e-6
+
+
+## 按位置把目标分进 BUCKET_CELLS 格见方的桶，好让每个观察者只查附近的目标（只为算得快，结果不变）。
+## 目标放进它这一步扫过的每个桶（起点到终点的方框，加上弯曲的余量）；扫过太多桶的放进 "wide"，谁都查它。
+static func _entity_buckets(entities: Array[Dictionary], dt: float) -> Dictionary:
+	var buckets := {"wide": []}
+	for i in entities.size():
+		var box := _sweep_box(entities[i]["path"], entities[i]["pos"], dt, 0.0)
+		var keys := _bucket_keys(box[0], box[1])
+		if keys.is_empty():
+			buckets["wide"].append(i)
+		for key in keys:
+			if not buckets.has(key):
+				buckets[key] = []
+			buckets[key].append(i)
+	return buckets
+
+
+## 这一步从 path 的起点走到 pos 扫过的方框 [最低角, 最高角]，四周再放宽 margin 格。path 是空的就当没动。
+static func _sweep_box(path: Dictionary, pos: Vector3, dt: float, margin: float) -> Array[Vector3]:
+	var low := pos
+	var high := pos
+	if not path.is_empty():
+		margin += path["acceleration"].length() * dt * dt / 8.0
+		low = low.min(path["pos"])
+		high = high.max(path["pos"])
+	return [low - Vector3.ONE * margin, high + Vector3.ONE * margin]
+
+
+## 方框碰到的桶；超过 BUCKET_LIMIT 个（或方框无限大）时返回空，由调用方改为全查。
+static func _bucket_keys(low: Vector3, high: Vector3) -> Array[Vector3i]:
+	var keys: Array[Vector3i] = []
+	if not (low.is_finite() and high.is_finite()):
+		return keys
+	var a := Vector3i((low / BUCKET_CELLS).floor())
+	var b := Vector3i((high / BUCKET_CELLS).floor())
+	if (b.x - a.x + 1) * (b.y - a.y + 1) * (b.z - a.z + 1) > BUCKET_LIMIT:
+		return keys
+	for x in range(a.x, b.x + 1):
+		for y in range(a.y, b.y + 1):
+			for z in range(a.z, b.z + 1):
+				keys.append(Vector3i(x, y, z))
+	return keys
+
+
+## 观察者这一步可能看到的目标，按 entities 里的原顺序。box 是观察者扫过的方框（已放宽视野距离）。
+static func _nearby(buckets: Dictionary, count: int, box: Array[Vector3]) -> Array:
+	var keys := _bucket_keys(box[0], box[1])
+	if keys.is_empty():
+		return range(count)
+	var found := {}
+	for i in buckets["wide"]:
+		found[i] = true
+	for key in keys:
+		for i in buckets.get(key, []):
+			found[i] = true
+	var result := found.keys()
+	result.sort()
+	return result
+
+
+## 不动的观察者看得到的星系：[[格子, 消息键, 星系编号], ...]，顺序和 Geometry.cells_near 一样。
+## 观察者的位置、视野和星系表都没变时，直接用上次的结果。
+static func _cells_in_view(s: GameState, index: Dictionary, observer: Dictionary, reach2: float) -> Array:
+	var shape := [observer["pos"], observer["dir"], observer["radius"], observer["angle"], observer["backward"], s.dimension, s.system_cells.size()]
+	var known: Dictionary = s.view_cells.get(observer["id"], {})
+	if known.get("shape") == shape:
+		return known["cells"]
+	var cells := []
+	for cell in Geometry.cells_near(s.system_cells, index, observer["pos"], sqrt(reach2)):
+		var point := Vector3(cell)
+		if (point - observer["pos"]).length_squared() <= reach2 and in_view(s, observer, point):
+			var id: int = s.cell_ids.get(cell, -1)
+			cells.append([cell, "%d:cell:%d" % [observer["id"], id], id])
+	s.view_cells[observer["id"]] = {"shape": shape, "cells": cells}
+	return cells
+
+
 ## 航位推算：观测里有位置和速度时，这两项不算进签名。目标照上次观测的速度和加速度走、
 ## 走到了推算的位置和速度，就当没变，不重发；收件方用 Combat.observed 按同样的式子推算。
 ## 加速度、种类、损伤等别的内容变了，或者实际位置、速度偏离推算，才立即重发。心跳照旧每年一次。
-static func _emit(s: GameState, owner: int, observer: Dictionary, origin: Vector3, key: String, body: Dictionary, heartbeat: bool) -> void:
+## at 是观测时刻（不给就是现在）：在上一个子步中间进入视野的，按进入那一刻发出（catch_up）。
+## signature 不给时按 body 现算；同一次采样里很多观察者发同样内容时，由调用方算一次传进来。
+static func _emit(s: GameState, owner: int, observer: Dictionary, origin: Vector3, key: String, body: Dictionary, heartbeat: bool, at := INF, signature = null) -> void:
+	var now := s.clock if at == INF else at
 	var data: Dictionary = body["data"]
 	var moving: bool = data.has("pos") and data.has("velocity")
-	var facts := data
-	if moving:
-		facts = data.duplicate()
-		facts.erase("pos")
-		facts.erase("velocity")
-		facts.erase("accel_until") # 每次算出来都差一点浮点误差，不能因此重发；到了最高速度加速度会变成 0，那时照样重发。
-	var signature := hash([facts,body.get("contact",false)])
+	if signature == null:
+		var facts := data
+		if moving:
+			facts = data.duplicate()
+			facts.erase("pos")
+			facts.erase("velocity")
+			facts.erase("accel_until") # 每次算出来都差一点浮点误差，不能因此重发；到了最高速度加速度会变成 0，那时照样重发。
+		signature = hash([facts,body.get("contact",false)])
 	var stamp: Dictionary = s.sensor_stamps.get(key, {})
 	var same: bool = stamp.get("hash", -1) == signature
 	if same and moving:
-		var t: float = s.clock - stamp["time"]
+		var t: float = now - stamp["time"]
 		var acceleration: Vector3 = data.get("acceleration", Vector3.ZERO)
 		var velocity: Vector3 = stamp.get("velocity", Vector3.INF)
 		var pos: Vector3 = stamp.get("pos", Vector3.INF) + velocity * t + 0.5 * acceleration * t * t
 		same = stamp.get("epoch", -1) == s.space_epoch \
 				and pos.distance_to(data["pos"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON \
 				and (velocity + acceleration * t).distance_to(data["velocity"]) * s.physical_cell_size() <= Balance.COLLISION_EPSILON
-	if same and (not heartbeat or s.clock - stamp.get("time", -INF) < 1.0):
+	if same and (not heartbeat or now - stamp.get("time", -INF) < 1.0):
 		return
-	s.sensor_stamps[key] = {"hash": signature, "time": s.clock}
+	s.sensor_stamps[key] = {"hash": signature, "time": now}
 	if moving:
 		s.sensor_stamps[key].merge({"pos": data["pos"], "velocity": data["velocity"], "epoch": s.space_epoch})
-	body["t_observed"] = s.clock
+	body["t_observed"] = now
 	body["epoch"] = s.space_epoch
 	body["source_id"] = observer["id"]
-	send(s, owner, origin, observer["id"], "sensor", body)
+	var lag := s.clock - now
+	catch_up(s, send(s, owner, origin, observer["id"], "sensor", body, 0, lag <= 0.0), lag)
 
 
-static func sample(s: GameState, force := false) -> void:
-	if not force and s.clock < s.next_sensor_time - Balance.TIME_EPSILON:
-		return
+## 看一遍所有视野。每个子步结束时（以及每回合开始时）做一次，所以状态一变（只在切开的时刻变）就能看到。
+## 两次之间新进视野、或者整个穿过视野的：移动的单位按进入视野那一刻的位置和速度发出观测（_emit 的 at）；
+## 不动的星系、航迹端点、空间前沿只要这一步里进过视野，就按现在发出（只会晚，不会早）。
+static func sample(s: GameState, _force := false) -> void:
 	Information.retry_archives(s)
-	# 在固定最大子步网格采样，不能因接收一个消息再无限加密采样而产生零时间事件洪泛。
-	s.next_sensor_time = (floorf(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON) + 1.0) * Balance.PHYSICS_MAX_DT
 	var entities := Combat.targets(s, true, true)
 	var index := Geometry.cell_index(s.system_cells)
+	# 上一个子步的长度；回合开始那一次没有上一步，只看现在。
+	var dt := s.clock - s.step_start
+	var sweep := dt > Balance.TIME_EPSILON and not s.step_motions.is_empty()
+	var snapshots := {}
+	for target in entities:
+		var mover: int = target["asset"]["carrier"] if target.has("asset") else target["id"]
+		target["path"] = s.step_motions.get(mover, {}) if sweep else {}
+	var buckets := _entity_buckets(entities, dt)
 	for civ in s.civs:
 		if not civ.alive:
 			continue
 		var owner := s.civs.find(civ)
 		Knowledge.sample(s,civ)
-		_sample_warning(s,civ,entities)
+		_sample_warning(s,civ,entities,dt if sweep else 0.0)
 		for project in WorldTime.orders(civ):
 			var period := 1.0
 			if Balance.LOCAL_ORDER_REPORT_CURRENT == 1:
 				var source: Dictionary = OrderControl.host(s,civ,project)
 				var receiver := entity(s,owner,controller(civ))
 				if not source.is_empty() and not receiver.is_empty() and source["pos"].distance_to(receiver["pos"])*s.physical_cell_size()<=Balance.COLLISION_EPSILON:
-					# 本地也走报告链路；仅零距离缩短采样间隔，不能把远端施工真值给界面或AI。
-					period = maxf(0.0,Balance.PHYSICS_MAX_DT-Balance.TIME_EPSILON)
+					# 本地也走报告链路；仅零距离时每次采样都报，不能把远端施工真值给界面或AI。
+					period = 0.0
 			if s.clock-project.get("report_time",-INF)>=period:
 				project["report_time"] = s.clock
 				OrderControl.report(s,civ,project,project.get("status","working"))
 		for observer in observers(s, civ):
+			var path := _path(s, observer["id"], observer["pos"]) if sweep else {}
+			var moving := sweep and _moved(path)
+			var past := _past_view(observer, path) if moving else observer
 			for wake in s.deadlines:
 				if wake["expires"]<=s.clock:
 					continue
 				# 两个端点各自走完整的光路；较近的一端不能替远端或被阻断端提供情报。
 				for endpoint in 2:
 					var pos: Vector3=wake["a"] if endpoint==0 else wake["b"]
-					if in_view(s,observer,pos):
+					if in_view(s,observer,pos) or (moving and _passed(s, past, path, pos, dt)):
 						_emit(s,owner,observer,pos,"%d:wake:%d:%d"%[observer["id"],wake["id"],endpoint],
 							{"type":"wake","data":{"id":wake["id"],"endpoint":endpoint,"pos":pos,"turn":s.turn}},true)
 			for entry in [["foil",s.foil_zones],["line",s.line_zones]]:
 				for zone in entry[1]:
-					if in_view(s,observer,Vector3(zone["center"])):
-						_emit(s,owner,observer,Vector3(zone["center"]),"%d:front:%d"%[observer["id"],zone.get("id",-1)],
+					var center := Vector3(zone["center"])
+					if in_view(s,observer,center) or (moving and _passed(s, past, path, center, dt)):
+						_emit(s,owner,observer,center,"%d:front:%d"%[observer["id"],zone.get("id",-1)],
 							{"type":"front","front_type":entry[0],"data":zone.duplicate(true)},true)
 			var origin_pos: Vector3 = observer["pos"]
 			var reach2 := view_reach2(s, observer)
-			for cell in Geometry.cells_near(s.system_cells, index, origin_pos, sqrt(reach2)):
-				if (Vector3(cell) - origin_pos).length_squared() > reach2 or not in_view(s, observer, Vector3(cell)):
+			var reach := sqrt(reach2)
+			var seen_cells := []
+			if moving:
+				# 动的观察者看这一步扫过的整片地方：以起点和终点连线的中点为心，多看半条连线和弯曲的余量。
+				var around: Vector3 = (path["pos"] + origin_pos) * 0.5
+				var widen: float = path["pos"].distance_to(origin_pos) * 0.5 + path["acceleration"].length() * dt * dt / 8.0
+				for cell in Geometry.cells_near(s.system_cells, index, around, reach + widen):
+					var point := Vector3(cell)
+					if ((point - origin_pos).length_squared() <= reach2 and in_view(s, observer, point)) or _passed(s, past, path, point, dt):
+						var id: int = s.cell_ids.get(cell, -1)
+						seen_cells.append([cell, "%d:cell:%d" % [observer["id"], id], id])
+			else:
+				seen_cells = _cells_in_view(s, index, observer, reach2)
+			for seen in seen_cells:
+				var cell: Vector3i = seen[0]
+				# 同一次采样里几个观察者看同一个星系，星系的样子和签名只算一次（_emit 会复制一份发出去）。
+				if not snapshots.has(cell):
+					var fresh := s.snapshot(cell)
+					fresh["cell_dim"] = s.cell_dims.get(s.cell_ids.get(cell,-1),s.dimension)
+					fresh["turn"] = 0 # 签名只反映事实变化，观测时间另存。
+					snapshots[cell] = {"data": fresh, false: hash([fresh, false]), true: hash([fresh, true])}
+				var seen_cell: Dictionary = snapshots[cell]
+				var data: Dictionary = seen_cell["data"]
+				var contact: bool = data["owner"] >= 0 and data["owner"] != owner and Vector3i(observer["pos"].round()) == cell
+				# 和 _emit 里的判断一样：没变、心跳也没到就不发。多数星系每次都是这样，省得每次拼一条消息。
+				var stamp: Dictionary = s.sensor_stamps.get(seen[1], {})
+				if stamp.get("hash", -1) == seen_cell[contact] and s.clock - stamp["time"] < 1.0:
 					continue
-				var data := s.snapshot(cell)
-				data["cell_dim"] = s.cell_dims.get(s.cell_ids.get(cell,-1),s.dimension)
-				data["turn"] = 0 # 签名只反映事实变化，观测时间另存。
-				_emit(s, owner, observer, Vector3(cell), "%d:cell:%d" % [observer["id"], s.cell_ids.get(cell, -1)],
-						{"type": "cell", "cell": cell, "cell_id": s.cell_ids.get(cell, -1), "passive": true, "data": data, "contact": data["owner"] >= 0 and data["owner"] != owner and Vector3i(observer["pos"].round()) == cell}, true)
-			for target in entities:
-				if target["owner"] == owner or (target["pos"] - origin_pos).length_squared() > reach2 or not in_view(s, observer, target["pos"]):
+				_emit(s, owner, observer, Vector3(cell), seen[1],
+						{"type": "cell", "cell": cell, "cell_id": seen[2], "passive": true, "data": data, "contact": contact}, true, INF, seen_cell[contact])
+			for i in _nearby(buckets, entities.size(), _sweep_box(path, origin_pos, dt, reach + 1e-5)):
+				var target: Dictionary = entities[i]
+				if target["owner"] == owner:
 					continue
+				var trail: Dictionary = target["path"]
+				var passed := false
+				var key := ""
+				# 两边这一步都没动，就不会有新进视野的；子步开始时已在视野里的，上一次采样已经看过（seen 为 0）。
+				if sweep and (moving or (not trail.is_empty() and _moved(trail))):
+					var from: Dictionary = trail if not trail.is_empty() else {"pos": target["pos"], "velocity": Vector3.ZERO, "acceleration": Vector3.ZERO}
+					# 两条轨迹离得太远，这一步里不可能看到，现在也不在视野里。
+					if not _may_meet(path["pos"], origin_pos, path["acceleration"], from["pos"], target["pos"], from["acceleration"], dt, reach):
+						continue
+					var seen := _first_seen(s, past, from["pos"] - path["pos"], from["velocity"] - path["velocity"], from["acceleration"] - path["acceleration"], dt)
+					if seen <= 0.0:
+						seen = INF
+					if seen < dt - Balance.TIME_EPSILON and not trail.is_empty():
+						# 在这一步中间进的视野：按那一刻的位置和速度补发，下面按现在再看时航位推算对得上就不重发。
+						key = "%d:entity:%d" % [observer["id"], target["id"]]
+						var data := _entity_data(target, trail, seen, s.step_start)
+						var eye: Vector3 = Kinematics.position(path, seen)
+						_emit(s, owner, observer, data["pos"], key, {"type":"entity","data":data,
+							"contact":target["owner"]>=0 and Vector3i(eye.round())==Vector3i(data["pos"].round())}, true, s.step_start + seen)
+					# 没记下运动的（不动的设施、这一刻才出现的船）不知道之前在哪，进过视野就按现在发出。
+					passed = seen < INF and trail.is_empty()
+				if not passed and ((target["pos"] - origin_pos).length_squared() > reach2 or not in_view(s, observer, target["pos"])):
+					continue
+				if key.is_empty():
+					key = "%d:entity:%d" % [observer["id"], target["id"]]
 				var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
 						"pos": target["pos"], "velocity": target["velocity"], "acceleration": target["acceleration"], "hp": target["hp"]}
 				if target.get("accel_until", INF) < INF:
 					data["accel_until"] = target["accel_until"]
-				_emit(s, owner, observer, target["pos"], "%d:entity:%d" % [observer["id"], target["id"]],
+				_emit(s, owner, observer, target["pos"], key,
 					{"type":"entity","data":data,"contact":target["owner"]>=0 and Vector3i(observer["pos"].round())==Vector3i(target["pos"].round())},true)
 		for ship in civ.ships:
 			var key := "own:%d" % ship.id
-			var data := ship_status(ship)
-			data["assets"]=civ.assets.filter(func(a):return a["carrier"]==ship.id).duplicate(true)
 			var stamp: Dictionary = s.sensor_stamps.get(key, {})
 			# 每年一次常规定位回报；死亡等状态变化立即在当地发出，仍须等传回。
 			var important := hash([ship.dead, ship.dormant, ship.damage, ship.weapons])
 			if s.clock - stamp.get("time", -INF) < 1.0 and stamp.get("hash", -1) == important:
 				continue
+			var data := ship_status(ship)
+			data["assets"]=civ.assets.filter(func(a):return a["carrier"]==ship.id).duplicate(true)
 			s.sensor_stamps[key] = {"time": s.clock, "hash": important}
 			send(s, owner, ship.pos, controller(civ), "report", {"type": "own", "data": data,
 					"t_observed": s.clock, "source_id": ship.id, "epoch": s.space_epoch})
@@ -975,7 +1207,9 @@ static func path_open(s: GameState, a: Vector3, b: Vector3) -> bool:
 	return true
 
 
-static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary]) -> void:
+## 预警范围（球形）里的敌方战舰、水滴、光粒和载荷。dt 是上一个子步的长度（0 表示只看现在）：
+## 这一步中间闯进范围的，按闯进那一刻的位置和速度补发预警。targets 里的 "path" 由 sample 先填好。
+static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary], dt := 0.0) -> void:
 	for asset in civ.assets:
 		if asset["kind"] != "warning":
 			continue
@@ -983,9 +1217,22 @@ static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary]) 
 			continue
 		var observer := {"id":asset["id"],"pos":entity(s,s.civs.find(civ),asset["id"])["pos"]}
 		var radius: float = Balance.WARNING_RANGE+asset.get("warning_level",civ.warnings.get(asset["at"],0))
+		var view := {"radius": radius, "dir": Vector3.ZERO}
+		var path := _path(s, asset["carrier"], observer["pos"]) if dt > 0.0 else {}
 		for target in targets:
 			if target["owner"] == s.civs.find(civ) or target["kind"] not in [Ship.WARSHIP,Ship.DROPLET,Ship.GRAIN,"payload"]:
 				continue
+			var trail: Dictionary = target.get("path", {})
+			var key := "warning:%d:%d"%[asset["id"],target["id"]]
+			if dt > 0.0 and not trail.is_empty() and _may_meet(path["pos"], observer["pos"], path["acceleration"], trail["pos"], target["pos"], trail["acceleration"], dt, radius / s.physical_cell_size()):
+				var seen := _first_seen(s, view, trail["pos"] - path["pos"], trail["velocity"] - path["velocity"], trail["acceleration"] - path["acceleration"], dt)
+				if seen < dt - Balance.TIME_EPSILON:
+					var early := _entity_data(target, trail, seen, s.step_start)
+					early.erase("owner")
+					early.erase("hp")
+					if target.has("payload"):
+						early["payload_kind"] = target["payload"]["kind"]
+					_emit(s,s.civs.find(civ),observer,early["pos"],key,{"type":"warning","data":early},true,s.step_start + seen)
 			if observer["pos"].distance_to(target["pos"])*s.physical_cell_size()>radius:
 				continue
 			var data := {"id":target["id"],"kind":target["kind"],"pos":target["pos"],"velocity":target["velocity"],"acceleration":target["acceleration"]}
@@ -993,4 +1240,4 @@ static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary]) 
 				data["accel_until"]=target["accel_until"]
 			if target.has("payload"):
 				data["payload_kind"] = target["payload"]["kind"]
-			_emit(s,s.civs.find(civ),observer,target["pos"],"warning:%d:%d"%[asset["id"],target["id"]],{"type":"warning","data":data},true)
+			_emit(s,s.civs.find(civ),observer,target["pos"],key,{"type":"warning","data":data},true)

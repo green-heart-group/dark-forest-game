@@ -77,7 +77,6 @@ static func advance(s: GameState, duration: float) -> void:
 		dt = minf(dt, Hazards.next_change(s))
 		if s.clock < s.remap_until:
 			dt = minf(dt, s.remap_until - s.clock)
-		dt = minf(dt, s.next_sensor_time - s.clock)
 		dt = minf(dt, next_completion(s))
 		# 广播光线过光速不同的边界时，在子步里自己分段走（Hazards.light_travel），不让整个世界停下；消息发出时就算好了到达时刻。
 		var uniform := Hazards.uniform_light(s)
