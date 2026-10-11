@@ -61,3 +61,10 @@
 | 2026-10-10 | [v01-branch-comparison.md](v01-branch-comparison.md) | 实现对照 | 待评审 | 科技数值实验快照与群聊方向的对应、差额、冲突与验证边界；2026-10-11 补充之后实验线的提速和降维前沿看不见的问题。 |
 
 2026-10-10 的科技与数值实现范围补入[科技修订原文](tech-tree-revision.md#整理补充科技与数值的实现范围)，动画回退与后续规则补入[降维后续提议](dimension-followup-tasks.md#补充意见动画回退与后续降维规则)。Mac 实机试玩与联机方向在[路线图](../roadmap.md)维护，不另设群聊方向总览。
+
+## 2026-10-11 新增讨论
+
+- [feedback-latest-discussion.md](feedback-latest-discussion.md)：E7F6、ccl、RainZL 的新增试玩与规则意见，状态为待整理；直接提取消息 439～712 中的空间全局可见、十年尺度、运动、死线、光粒、整数经济和交付要求，区分已有候选与待验证项。
+- [balance-complete.md](balance-complete.md)：ccl 在 2026-10-11 分享的完整数值与数学附录，状态为讨论中；Word 全文转为 Markdown，锁定旧实验快照，原件按用户选择留本地。
+
+本轮只收录提议与来源，不把新讨论自动采纳进现行规则或路线图。九张引用截图见[媒体补充评论](https://github.com/green-heart-group/dark-forest-game/issues/10#issuecomment-6108431810)，新增读取边界见[来源补充](chat-direction-sources.md#新增读取边界2026-10-11)。
