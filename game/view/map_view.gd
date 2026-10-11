@@ -974,7 +974,9 @@ func _animate_flattening() -> void:
 		current = translated
 		_layout_epoch = state.space_epoch
 		_trails.clear()
-		select_object({})
+		# 这里在 refresh 中间，接下来本来就要重画；再调 main.refresh() 会换掉投影，
+		# 外层手里的文明和舰船就不属于新的投影了（画航线时找不到舰船主人）。
+		select_object({}, false)
 	var frame := DimensionSpace.frame(state)
 	_layout_old = current
 	_layout_new = frame["positions"]

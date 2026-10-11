@@ -129,6 +129,7 @@ func run_tests() -> void:
 	await run(test_flat_and_line)
 	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
+	await run(test_redraw_after_space_change_keeps_presentation)
 	await run(test_restart)
 	await run(test_end_turn_in_background)
 	await run(test_debug_view_other_civ)
@@ -1175,6 +1176,23 @@ func test_post_victory_collapse() -> void:
 	view.set_process(true)
 	Balance.FOIL_SPREAD = old_spread
 	await capture("post-victory-collapse")
+
+
+## 规则：界面和操作
+## 空间刚变过时重画：过渡动画清掉选中，但不在重画中途再重画一次。
+## 再重画会换掉投影，外层正在画的舰船在新投影里找不到主人，画航线时报空值。
+func test_redraw_after_space_change_keeps_presentation() -> void:
+	view.debug.view_idx = 0
+	view.reveal.button_pressed = false
+	show_state(GameState.new_game(1))
+	var before: GameState = map._presentation
+	check(before != null, "不是上帝视角，画面用的是投影")
+	map.selected = {"key": "test"}
+	map._layout_epoch = map.state.space_epoch - 1
+	map._shape = []
+	map._animate_flattening()
+	check(map._presentation == before, "过渡动画清掉选中时不再重画，投影不换")
+	check(map.selected.is_empty(), "选中已清掉")
 
 
 ## 规则：界面和操作
