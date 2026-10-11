@@ -25,15 +25,15 @@ static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 	return result
 
 
-## 回合推进时用：同一个 0.05 年采样刻度里，文明的星系、舰船、设施和科技的个数都没变，就沿用上次算好的运营包；
-## 只有压制（跟着舰船进出目标格）每次照算。观测覆盖、舰船所在格这些随时间变的东西，最多晚 0.05 年反映到收支上，
-## 和情报的节拍一样。每次回合推进开始时清空缓存（WorldTime.advance），所以推进以外的调用不会影响结果。
+## 回合推进时用：这一回合里文明的星系、舰船、设施和科技的个数都没变，就沿用上次算好的运营包；
+## 只有压制（跟着舰船进出目标格）每次照算。观测覆盖、舰船所在格这些随时间变的东西，下一回合才反映到收支上。
+## 每次回合推进开始时清空缓存（WorldTime.advance），所以推进以外的调用不会影响结果。
 static func _cached_packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 	var dead := 0
 	for ship in civ.ships:
 		if ship.dead:
 			dead += 1
-	var key := [floori(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON), s.space_epoch, civ.colonies.size(),
+	var key := [s.space_epoch, civ.colonies.size(),
 			civ.ships.size(), dead, civ.assets.size(), civ.techs.size()]
 	var index := s.civs.find(civ)
 	var hit: Array = s.package_cache.get(index, [])

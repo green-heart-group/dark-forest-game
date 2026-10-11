@@ -304,7 +304,8 @@ static func predict_path(s: GameState,civ: Civ,ship: Ship,years: int) -> Array[V
 				moving.slow_start=false
 			var motion:=Kinematics.motion(view,me,moving,remaining)
 			# 和正式时钟一样跨过有限精度的限速边界；不能在 cap_time≈0 时永久停住预览。
-			var dt:=minf(remaining,maxf(Balance.TIME_EPSILON,minf(Balance.PHYSICS_MAX_DT,minf(motion["cap_time"],motion["arrival"]))))
+			# 出己方视野（慢速起步结束）、进黑域这些速度变化不单独找时刻，每段最长 ROUGH_DT 年，预览只求大致准。
+			var dt:=minf(remaining,maxf(Balance.TIME_EPSILON,minf(Balance.ROUGH_DT,minf(motion["cap_time"],motion["arrival"]))))
 			moving.pos=Kinematics.position(motion,dt)
 			moving.speed=motion["speed"]+motion["acceleration"].length()*view.physical_cell_size()*dt
 			view.clock+=dt

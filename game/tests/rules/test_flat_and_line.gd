@@ -151,14 +151,14 @@ func test_hidden_weapon_matches_dimension() -> void:
 	Balance.HIDDEN_HEAR_RANGE=1e6
 	var s:=_two_dimensional_match()
 	s.hidden_listen.append({"id":s.next_id(),"from":Vector3i(-1,4,4),"target":Vector3i(3,3,4),"left":5,"received":s.clock-1,"next_check":s.clock})
-	Information.resolve(s)
+	Information.hidden_strikes(s)
 	check(s.payloads.size()==1 and s.payloads[0]["from_dim"]==2 and s.payloads[0]["target"].z==4,"二维隐藏文明用单向维度载荷")
 	s.payloads.clear()
 	_finish_line(s)
 	s.clock=s.remap_until
 	s.hidden_listen.clear()
 	s.hidden_listen.append({"id":s.next_id(),"from":Vector3i(-1,s.line_y,4),"target":s.human().home,"left":5,"received":s.clock-1,"next_check":s.clock})
-	Information.resolve(s)
+	Information.hidden_strikes(s)
 	check(s.payloads.is_empty() and s.hidden_ships.size()==1,"一维隐藏攻击保留光粒分支")
 
 

@@ -70,9 +70,10 @@
   现在有的几处捷径：回合末所有文明看一遍之前，`_begin_view_cache()` 先把这段时间里不会变的东西算好
   （星系格子按位置分好、光速几乎为 0 的格子、星系快照），看完就清空；
   `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
-  回合推进里，同一个 0.05 年采样刻度内文明的星系、舰船、设施和科技个数都没变时，沿用上次的运营包（`Economy._cached_packages`）；
+  一次回合推进里文明的星系、舰船、设施和科技个数都没变时，沿用上次的运营包（`Economy._cached_packages`）；
   在途消息按到达的刻度分组，收消息时只看到时候的那几组（`Signals._indexed`）；只有几个格子降了维时，只重算路线穿过它们的消息和广播光线（`Signals.retime`、`Information._swap_medium`）。
   按 ID 找舰船、设施先看上次的位置（`Civ.ship_by_id`、`Civ.asset_by_id`）；只关心附近星系时用 `Geometry.cells_near` 先粗筛，顺序和全部看一遍一样。
+  看视野时目标按位置分桶、不动的观察者记住看得到哪些星系（`Signals._entity_buckets`、`Signals._cells_in_view`）。
   这些缓存不进存档，规则见[调试模式](debug-tools.md#写规则代码时要注意)。
 - **只增不减的记录**（日志、事件、账本、回执、传感器签名、舰上目标等）由 `GameState._trim_records()` 每回合修剪，各留多少写在 `GameState` 开头的 `XXX_KEEP`。
   新加这类记录时，想好它最多会有多少条、什么时候删，一起加进去，并在 `test_v01_records_are_trimmed_every_turn` 里补一项。

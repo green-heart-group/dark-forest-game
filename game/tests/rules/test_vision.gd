@@ -77,14 +77,15 @@ func test_steady_course_is_not_resent_every_sample() -> void:
 	check(a.length()>0.0,"夹具里的战舰在加速")
 	# 预警要飞 1.5 年才到，期间发出的每一条都还在路上，逐段数一遍就是发了多少条。
 	var sent:={}
+	# 每 0.05 年推进一次、看一次视野，看照旧每次都发的话会多发多少条。
 	var advance:=func(years: float):
-		for i in roundi(years/Balance.PHYSICS_MAX_DT):
-			WorldTime.advance(s,Balance.PHYSICS_MAX_DT)
+		for i in roundi(years/0.05):
+			WorldTime.advance(s,0.05)
 			for m in s.messages:
 				if m["body"].get("type")=="warning" and m["body"]["data"]["id"]==ship.id:
 					sent[m["id"]]=true
 	advance.call(2.9)
-	# 每 0.05 年采样一次；照旧每次都发的话，2.9 年要发 58 条。
+	# 照旧每次都发的话，2.9 年要发 58 条。
 	check(sent.size()<=3,"加速度和航向不变时只有首发和每年的心跳，实际 %d 条" % sent.size())
 	var alert: Dictionary=me.alerts.filter(func(x):return x["id"]==ship.id)[0]
 	var known:=Combat.observed(s,alert)

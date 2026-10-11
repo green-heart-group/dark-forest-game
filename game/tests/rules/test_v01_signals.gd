@@ -129,7 +129,7 @@ func test_v01_retime_never_moves_arrival_earlier() -> void:
 
 
 ## 规则：情报传回，黑域
-func test_v01_growing_domain_retimes_only_nearby_messages_each_tick() -> void:
+func test_v01_growing_domain_retimes_only_nearby_messages_each_piece() -> void:
 	var s := _two_civs(Vector3i(8, 8, 8))
 	s.ensure_cells()
 	var body := {"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0}
@@ -141,8 +141,8 @@ func test_v01_growing_domain_retimes_only_nearby_messages_each_tick() -> void:
 	s.message_medium = Signals.medium(s)
 	var started: float = far["sent"]
 	var before: float = near["eta"]
-	s.clock += Balance.PHYSICS_MAX_DT
-	check(Signals.medium(s) != s.message_medium, "有黑域时每个 0.05 年刻度都要再看一次")
+	s.clock += Balance.ROUGH_DT
+	check(Signals.medium(s) != s.message_medium, "黑域长大时每 0.2 年换一次半径，要再看一次")
 	Signals.retime(s, s.message_medium)
 	check_eq(far["sent"], started, "离黑域远的消息不重算")
 	check(near["sent"] == s.clock and near["eta"] >= before - 1e-6, "黑域旁边的消息按扩大后的黑域重算，不会提前")
@@ -217,8 +217,9 @@ func test_v01_message_meets_a_receiver_flying_toward_it() -> void:
 	check(absf(message["eta"] - meet) < 0.05, "瞄准光和探测器相遇的时刻 %s，算出 %s" % [meet, message["eta"]])
 	# 照原来的航向飞：到了就收下，不会因为先飞到发出时的位置再折回来而晚很多。
 	var got := INF
+	# 每 0.05 年看一次收没收到。
 	for tick in 200:
-		s.clock = tick * Balance.PHYSICS_MAX_DT
+		s.clock = tick * 0.05
 		probe.pos = Vector3(6.0 - speed * s.clock, 0, 0)
 		Signals.receive_due(s)
 		if me.telemetry.has(999):
@@ -238,7 +239,7 @@ func test_v01_message_aimed_ahead_is_not_early_when_receiver_turns() -> void:
 	# 探测器半路掉头，到时不在瞄准点：不能按瞄准点交付，要接着追。
 	probe.direction = Vector3(1, 0, 0)
 	probe.pos = Vector3(7, 0, 0)
-	s.clock = ceilf(eta / Balance.PHYSICS_MAX_DT) * Balance.PHYSICS_MAX_DT
+	s.clock = ceilf(eta / 0.05) * 0.05
 	Signals.receive_due(s)
 	check(not me.telemetry.has(999), "光还没到探测器现在的位置，不能收到")
 	check(message["eta"] >= Signals.travel_time(s, Vector3.ZERO, Vector3(7, 0, 0)) - 1e-6, "改到不早于光真正走到它那里")

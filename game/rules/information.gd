@@ -238,10 +238,6 @@ static func next_change(s: GameState, uniform := false) -> float:
 					time = minf(time,sample["remaining"]/speed)
 			else:
 				time = minf(time,Hazards.light_travel(s,sample["pos"],sample["direction"],sample["remaining"],INF)["arrival"])
-	# 隐藏文明在 0.05 年的传感刻度上决定要不要出手，不为每个监听者单独停一次。
-	for listener in s.hidden_listen:
-		var tick: float = ceilf(listener["next_check"]/Balance.PHYSICS_MAX_DT - Balance.TIME_EPSILON)*Balance.PHYSICS_MAX_DT
-		time = minf(time,maxf(0.0,tick-s.clock))
 	return time
 
 
@@ -455,7 +451,6 @@ static func resolve(s: GameState) -> void:
 			Signals.send(s,wave["owner"],sample["pos"],wave["source_id"],"sensor",body)
 	s.broadcasts = s.broadcasts.filter(_live)
 	s.scans = s.scans.filter(_live)
-	_hidden_strikes(s)
 
 
 static func _live(wave: Dictionary) -> bool:
@@ -477,7 +472,9 @@ static func _hear(s: GameState, wave: Dictionary, civ: Civ, pos: Vector3, at: fl
 	Signals.catch_up(s,message,s.clock-at)
 
 
-static func _hidden_strikes(s: GameState) -> void:
+## 隐藏文明听到广播以后每年决定一次要不要出手，在回合开始时决定（WorldTime.advance 开头），不为它切开一年。
+## 到了 next_check 的才决定，所以只会比「听到后满一年」晚，不会早。
+static func hidden_strikes(s: GameState) -> void:
 	for listener in s.hidden_listen:
 		if listener["left"] <= 0 or s.clock < listener["next_check"]-Balance.TIME_EPSILON:
 			continue

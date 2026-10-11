@@ -89,6 +89,20 @@ static func _speed(env: Dictionary, at: Vector3, time: float) -> float:
 	return speed*factor
 
 
+## 光从 a 走向 b、时间从 start 到 end 的这一段里偏慢的光速：两端、以及线段上离各黑域中心最近的点，
+## 在开始和结束两个时刻各看一次，取最小的。单个黑域里光速在离中心最近处最慢、黑域越大越慢，所以不会比实际快。
+static func _slowest(env: Dictionary, a: Vector3, b: Vector3, start: float, end: float, speed: float) -> float:
+	var points: Array[Vector3]=[a,b]
+	var d:=b-a
+	for field in env["domains"]:
+		var part:=clampf((field["pos"]-a).dot(d)/d.length_squared(),0.0,1.0) if d.length_squared()>1e-15 else 0.0
+		points.append(a+d*part)
+	for at in points:
+		for time in [start,end]:
+			speed=minf(speed,_speed(env,at,time))
+	return speed
+
+
 static func _boundary(env: Dictionary, motion: Dictionary, at: float, dt: float) -> float:
 	var next:=Kinematics.next_cell_boundary(motion)
 	for field in env["domains"]:
@@ -150,11 +164,19 @@ static func _trace(ray: Dictionary, env: Dictionary, start: float, end: float) -
 		return
 	while t<end-1e-12:
 		var speed:=_speed(env,ray["pos"],t)
-		var dt:=minf(Balance.PHYSICS_MAX_DT,end-t)
+		# 没有黑域时，光速只在格子和死线边界变（_boundary 会切开），一段可以走到底。
+		# 有黑域时光速随位置和时间连续变：每段最长 ROUGH_DT 年，取这一段里偏慢的光速（_slowest），只会晚到。
+		var dt:=end-t if env["domains"].is_empty() else minf(Balance.ROUGH_DT,end-t)
 		if speed>0.0:
 			var remaining: float=ray["pos"].distance_to(ray["goal"])*env["size"]
 			var motion: Dictionary={"pos":ray["pos"],"velocity":direction*speed/env["size"],"acceleration":Vector3.ZERO}
 			dt=minf(dt,maxf(_boundary(env,motion,t,dt),Balance.TIME_EPSILON))
+			if not env["domains"].is_empty():
+				speed=_slowest(env,ray["pos"],Kinematics.position(motion,dt),t,t+dt,speed)
+				if speed<=0.0:
+					t+=dt
+					continue
+				motion["velocity"]=direction*speed/env["size"]
 			if remaining/speed<=dt:
 				ray["arrival"]=t+remaining/speed
 				ray["pos"]=ray["goal"]

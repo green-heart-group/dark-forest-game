@@ -264,7 +264,7 @@ static func retime(s: GameState, before: Array = []) -> void:
 	var now := medium(s)
 	var near := before.size() == now.size()
 	for i in now.size() if near else 0:
-		if before[i] != now[i] and not (i == MEDIUM_TICK or (i == MEDIUM_CELLS and not s.converted_cells.is_empty())):
+		if before[i] != now[i] and not (i >= MEDIUM_HAZARDS or (i == MEDIUM_CELLS and not s.converted_cells.is_empty())):
 			near = false
 	var shapes := hazard_shapes(s)
 	if near:
@@ -283,7 +283,7 @@ static func retime(s: GameState, before: Array = []) -> void:
 	s.message_index.clear()
 
 
-## 黑域和死线影响光速的范围：[一端, 另一端, 半径]，单位是格。黑域取到下一个 0.05 年刻度时的半径（它一直在扩大）。
+## 黑域和死线影响光速的范围：[一端, 另一端, 半径]，单位是格。黑域取算光速用的半径（Hazards.field_radius）。
 static func hazard_shapes(s: GameState) -> Array:
 	var shapes := []
 	for source in s.black_domains:
@@ -294,7 +294,7 @@ static func hazard_shapes(s: GameState) -> Array:
 
 
 static func domain_shape(s: GameState, source: Dictionary) -> Array:
-	var reach := Hazards.radius(s, source, s.clock + Balance.PHYSICS_MAX_DT) + 1e-6
+	var reach := Hazards.field_radius(s, source) + 1e-6
 	return [source["pos"], source["pos"], reach / s.physical_cell_size()]
 
 
@@ -337,15 +337,22 @@ static func _touches(boxes: Array[AABB], shapes: Array, a: Vector3, b: Vector3) 
 
 
 ## 决定什么时候要重新算到达时间：这些东西变了，光速就可能变了。
-## 有黑域或死线时，黑域会扩大、死线会延长，所以每个 0.05 年刻度再看一次（只重算附近的消息）。
-## medium 里第几项是各格维度、第几项是刻度（retime 据此认出可以只重算一部分的情况）。
+## medium 里第几项是各格维度，从第几项起是黑域和死线（retime 据此认出可以只重算一部分的情况）：
+## 黑域和死线的变化只影响它们新旧范围里的光速，所以只重算路线碰到这些范围的消息。
+## 黑域长大时每 ROUGH_DT 年换一次半径（Hazards.field_radius），死线随船延长时多一小段，都会让这里变。
 const MEDIUM_CELLS := 3
-const MEDIUM_TICK := 7
+const MEDIUM_HAZARDS := 4
 
 
 static func medium(s: GameState) -> Array:
+	var growth := []
+	for source in s.black_domains:
+		growth.append(Hazards.field_radius(s, source))
+	var pieces := 0
+	for line in s.deadlines:
+		pieces += Hazards.pieces(line).size()
 	return [s.space_epoch, s.dimension, hash(s.light), hash(s.cell_dims), s.black_domains.size(), s.deadlines.size(),
-			s.domain_cells.size(), floori(s.clock / Balance.PHYSICS_MAX_DT + Balance.TIME_EPSILON) if Hazards.any(s) else 0]
+			hash(s.domain_cells), growth, pieces]
 
 ## 这几种消息到了就改动实体或执行命令，要在到达的那一刻处理。
 const EXACT_KINDS := ["command", "conversion_ready", "conversion_execute"]

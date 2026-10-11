@@ -48,6 +48,7 @@ static func advance(s: GameState, duration: float) -> void:
 		Assets.ensure(s, civ)
 	Signals.sample(s)
 	Signals.receive_due(s)
+	Information.hidden_strikes(s)
 	Combat.reserve_round(s)
 	var guard := 0
 	while s.clock < end - 1e-12 and not s.is_over():
@@ -93,9 +94,23 @@ static func advance(s: GameState, duration: float) -> void:
 				var motion := Kinematics.motion(s, civ, ship, dt)
 				motions[ship.id] = motion
 				dt = minf(dt, minf(motion["cap_time"], motion["arrival"]))
-				dt = minf(dt, Hazards.next_boundary(s, motion, dt))
+				dt = minf(dt, Hazards.next_boundary(s, motion, dt, ship.kind == Ship.GRAIN))
+				# 黑域里光速随位置变，船速跟着变，没有简单的式子：每段最长 ROUGH_DT 年，用这段开头的速度。
+				if motion["speed"] > 0.0 and Hazards.in_field(s, ship.pos):
+					dt = minf(dt, Balance.ROUGH_DT)
 				if ship.pause_until > s.clock:
 					dt = minf(dt, ship.pause_until - s.clock)
+				# 慢速起步和曲率限速都看船在不在己方星系视野里：进出视野的那一刻速度上限会变，要切开。
+				if ship.slow_start or ship.warp:
+					dt = minf(dt, Kinematics.next_vision_edge(s, civ, motion, dt))
+				# 曲率船速度超过普通上限以后才留下航迹（_move），加速越过上限的那一刻也要切开。
+				if ship.warp and motion["acceleration"] != Vector3.ZERO:
+					var normal_top := Kinematics.normal_limits(s,ship,ship.pos)[0] if Kinematics.uses_relative_speed(ship) else ship.max_speed
+					var acc: float = motion["acceleration"].length() * s.physical_cell_size()
+					# 切在速度刚好比上限多出 _move 的容差之后，下一步开头就会留下航迹。
+					var over := normal_top + 2.0 * Balance.TIME_EPSILON
+					if motion["speed"] <= normal_top + Balance.TIME_EPSILON and acc > 0.0:
+						dt = minf(dt, maxf((over - motion["speed"]) / acc, Balance.TIME_EPSILON))
 		for ship in s.hidden_ships:
 			if not ship.dead:
 				motions[ship.id] = Kinematics.motion(s, null, ship, dt)
@@ -103,6 +118,8 @@ static func advance(s: GameState, duration: float) -> void:
 			if not payload["dead"]:
 				motions[payload["id"]] = SpaceEvents.motion(s, payload)
 				dt = minf(dt, Hazards.next_boundary(s, motions[payload["id"]], dt))
+				if motions[payload["id"]]["speed"] > 0.0 and Hazards.in_field(s, payload["pos"]):
+					dt = minf(dt, Balance.ROUGH_DT)
 		for shot in s.projectiles:
 			if not shot["dead"]:
 				var speed: float = Combat.projectile_motion(s, shot)["speed"]

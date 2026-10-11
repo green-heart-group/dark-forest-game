@@ -20,9 +20,33 @@ static func radius(s: GameState, source: Dictionary, at: float) -> float:
 	return minf(Balance.DOMAIN_RADIUS, maxf(0.0, at - source["created"]) * Balance.DOMAIN_SPREAD * s.background_light())
 
 
+## 算光速时用的黑域半径。长大的时候，从释放那一刻起每 ROUGH_DT 年算一段，段内都用这一段结束时的大小：
+## 半径越大光越慢，所以只会算慢、不会算快，消息不会早到。长到最大以后就是最大半径。
+static func field_radius(s: GameState, source: Dictionary) -> float:
+	var end := _growth_piece_end(s, source)
+	return Balance.DOMAIN_RADIUS if end == INF else radius(s, source, end)
+
+
+## 黑域还在长大时，现在所在那一段在什么时刻结束；已经长到最大时为 INF。
+static func _growth_piece_end(s: GameState, source: Dictionary) -> float:
+	var age: float = s.clock - source["created"]
+	if age * Balance.DOMAIN_SPREAD * s.background_light() >= Balance.DOMAIN_RADIUS:
+		return INF
+	return source["created"] + (floorf(age / Balance.ROUGH_DT + Balance.TIME_EPSILON) + 1.0) * Balance.ROUGH_DT
+
+
+## 这一点在不在某个黑域里面（光速随位置连续变化的地方）。在里面飞的东西每段最长 ROUGH_DT 年。
+static func in_field(s: GameState, pos: Vector3) -> bool:
+	for source in s.black_domains:
+		if pos.distance_to(source["pos"]) * s.physical_cell_size() <= field_radius(s, source) + 1e-8:
+			return true
+	return false
+
+
 static func refresh(s: GameState) -> void:
 	s.ensure_cells()
-	# 到期的黑域和死线马上要删掉，那里光速会变快：先把经过那里的消息按还没变的光速挪到现在的位置（suppression 在到期那一刻仍算它们）。
+	# 到期的黑域和死线马上要删掉、黑域里到期的格子马上不再受影响，那里光速会变快：
+	# 先把经过那里的消息按还没变的光速挪到现在的位置（到期那一刻 suppression 仍算它们，标记 "lapsed" 以后才不算）。
 	var ending := []
 	for source in s.black_domains:
 		if source["expires"] <= s.clock:
@@ -30,9 +54,19 @@ static func refresh(s: GameState) -> void:
 	for line in s.deadlines:
 		if line["expires"] <= s.clock:
 			ending.append(Signals.deadline_shape(s, line))
-	if not ending.is_empty():
-		var none: Array[Vector3i] = []
-		Signals.before_light_change(s, none, ending)
+	var lapsed := {}
+	for id in s.domain_cells:
+		if s.clock >= s.domain_cells[id]["expires"] and not s.domain_cells[id].get("lapsed", false):
+			lapsed[id] = true
+	var lapsed_cells: Array[Vector3i] = []
+	if not lapsed.is_empty():
+		for cell in s.cell_ids:
+			if lapsed.has(s.cell_ids[cell]):
+				lapsed_cells.append(cell)
+	if not ending.is_empty() or not lapsed_cells.is_empty():
+		Signals.before_light_change(s, lapsed_cells, ending)
+	for id in lapsed:
+		s.domain_cells[id]["lapsed"] = true
 	s.black_domains = s.black_domains.filter(func(source): return source["expires"] > s.clock)
 	for source in s.black_domains:
 		source["left"] = source["expires"] - s.clock
@@ -99,13 +133,14 @@ static func suppression(s: GameState, position: Vector3) -> float:
 	var relative := 1.0
 	var cell := Vector3i(position.round())
 	var life: Dictionary = s.domain_cells.get(s.cell_ids.get(cell, -1), {})
-	var ignores: bool = not life.is_empty() and s.clock >= life["expires"] and s.clock < life["immune_until"]
+	# 到期那一刻还算受影响，refresh 先按还没变的光速挪好在途消息、标上 lapsed 以后才不算（和黑域本身一样）。
+	var ignores: bool = not life.is_empty() and (s.clock > life["expires"] or life.get("lapsed", false)) and s.clock < life["immune_until"]
 	if not ignores:
 		var weight := 0.0
 		for source in s.black_domains:
 			if source["expires"] < s.clock:
 				continue
-			var reach := radius(s, source, s.clock)
+			var reach := field_radius(s, source)
 			var distance: float = position.distance_to(source["pos"]) * s.physical_cell_size()
 			if distance > reach + 1e-8:
 				continue
@@ -127,8 +162,8 @@ static func leave_deadline(s: GameState, a: Vector3, b: Vector3, ship: Ship, dur
 	if a.distance_squared_to(b) < 1e-15:
 		return
 	var piece: Dictionary={"a":a,"b":b,"created":s.clock-duration,"ended":s.clock,"expires":s.clock+Balance.DEADLINE_LIFETIME}
-	var slot:=floori((s.clock-duration+Balance.TIME_EPSILON)/Balance.PHYSICS_MAX_DT)
-	# 同一固定采样区间的直线段共享身份。消息到达细分不能再制造新航迹和新回报。
+	var slot:=floori(s.clock-duration+Balance.TIME_EPSILON)
+	# 同一年里接着走的直线段共享身份。消息到达等切分不能再制造新航迹和新回报。
 	# 子段的形成时段、几何和到期仍各自保留，不能靠延伸刷新旧段寿命。
 	for i in range(s.deadlines.size()-1,-1,-1):
 		var line: Dictionary=s.deadlines[i]
@@ -246,7 +281,7 @@ static func _field_edge(s: GameState, at: Vector3, direction: Vector3, limit: fl
 	var motion := {"pos": at, "velocity": direction, "acceleration": Vector3.ZERO}
 	var best := minf(Kinematics.straight_cell_exit(at, direction), limit / size)
 	for source in s.black_domains:
-		for r in [Balance.DOMAIN_CORE, radius(s, source, s.clock)]:
+		for r in [Balance.DOMAIN_CORE, field_radius(s, source)]:
 			best = minf(best, _surface(motion, {"a": source["pos"], "b": source["pos"], "r": r / size, "growth": 0.0}, best))
 	for line in s.deadlines:
 		best = minf(best, _surface(motion, {"a": line["a"], "b": line["b"], "r": Balance.DEADLINE_RADIUS / size, "growth": 0.0}, best))
@@ -274,11 +309,11 @@ static func _field(s: GameState, at: Vector3, direction: Vector3, piece: float) 
 		return {}
 	var domains := []
 	var life: Dictionary = s.domain_cells.get(id, {})
-	if life.is_empty() or s.clock < life["expires"] or s.clock >= life["immune_until"]:
+	if life.is_empty() or (s.clock <= life["expires"] and not life.get("lapsed", false)) or s.clock >= life["immune_until"]:
 		for source in s.black_domains:
 			if source["expires"] < s.clock:
 				continue
-			var reach := radius(s, source, s.clock)
+			var reach := field_radius(s, source)
 			var distance: float = mid.distance_to(source["pos"]) * size
 			if reach <= 0.0 or distance > reach + 1e-8:
 				continue
@@ -381,17 +416,21 @@ static func _distance_integral(u: float, b2: float) -> float:
 		value += b2 * signf(u) * log(ratio + sqrt(ratio * ratio + 1.0))
 	return 0.5 * value
 
-## 局部光速的不连续边界必须分段；场内连续权重使用最大步长积分并做减半收敛测试。
-static func next_boundary(s: GameState, motion: Dictionary, dt: float) -> float:
+## 动的东西下一次碰到光速算法会变的地方：格子边界、黑域表面和中心、死线边界。
+## 黑域半径在一段里不变（field_radius），长大时每段结束另外切开（next_change）。
+## grain 为真时再加上光粒失效的那一层：单个黑域里光速正好等于 GRAIN_MIN_LIGHT 的球面（几个黑域重叠时只是近似）。
+static func next_boundary(s: GameState, motion: Dictionary, dt: float, grain := false) -> float:
 	var best := Kinematics.next_cell_boundary(motion)
 	if motion["velocity"].length_squared() + motion["acceleration"].length_squared() < 1e-20:
 		return best
 	var scale := s.physical_cell_size()
 	for source in s.black_domains:
-		for r in [Balance.DOMAIN_CORE, radius(s, source, s.clock)]:
-			var growth: float = Balance.DOMAIN_SPREAD * s.background_light() / scale if r != Balance.DOMAIN_CORE and r < Balance.DOMAIN_RADIUS else 0.0
-			var shape := {"a": source["pos"], "b": source["pos"], "r": r / scale, "growth": growth}
-			best = minf(best, _surface(motion, shape, dt))
+		var reach := field_radius(s, source)
+		var radii := [Balance.DOMAIN_CORE, reach]
+		if grain:
+			radii.append(reach * (1.0 - (1.0 / Balance.GRAIN_MIN_LIGHT - 1.0) / Balance.DOMAIN_WEIGHT))
+		for r in radii:
+			best = minf(best, _surface(motion, {"a": source["pos"], "b": source["pos"], "r": r / scale, "growth": 0.0}, dt))
 	for line in s.deadlines:
 		best = minf(best, _surface(motion, {"a": line["a"], "b": line["b"], "r": Balance.DEADLINE_RADIUS / scale, "growth": 0.0}, dt))
 	return best
@@ -429,6 +468,8 @@ static func next_change(s: GameState) -> float:
 	var next := INF
 	for source in s.black_domains:
 		next = minf(next, maxf(0.0, source["expires"] - s.clock))
+		# 还在长大时，每段结束换一次半径（field_radius）。
+		next = minf(next, _growth_piece_end(s, source) - s.clock)
 	for life in s.domain_cells.values():
 		for value in [life["expires"], life["immune_until"]]:
 			if value > s.clock:

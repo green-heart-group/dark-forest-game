@@ -53,6 +53,6 @@
 | 2026-10-08 | [dimension-followup-tasks.md](dimension-followup-tasks.md) | E7F6、RainZL、hrwu1、ccl | 大部分已采纳（2026-10-08） | 降维后续需求、验收条件与参考图。定下的是 U2～U6；做到哪一步见[路线图](../roadmap.md)；还没定的挪到 [E10～E13](../design/archive/open-questions-before-v01.md#一览) |
 | 2026-10-09 | [interface-clarity.md](interface-clarity.md) | 用户 | 已采纳 | 全屏横向科技树、图例默认收起、减少广播圈和中盘显示层次。 |
 | 2026-10-10 | [long-game-performance.md](long-game-performance.md) | RainZL | 讨论中 | 长局越来越慢的原因（广播光线在格子边界停、移动目标的观测每次采样都重发）和 P1～P5 建议，以及航位推算、固定节拍处理等第二批改动的结果；注明做法的出处。 |
-| 2026-10-11 | [one-year-step.md](one-year-step.md) | RainZL | 讨论中 | 结算最大步长从 0.05 年改成 1 年，Y1～Y6 都已定，待实施：能用公式就直接算，难解的用 0.2 年、极少数用 0.05 年；先修消息穿过黑域早到，情报按准确时刻收发、视野直接解出进入时刻、黑域和死线按准确时刻变化。 |
+| 2026-10-11 | [one-year-step.md](one-year-step.md) | RainZL | 已采纳（2026-10-11） | 结算最大步长从 0.05 年改成 1 年，第 0～8 项都已做：能用公式就直接算，难解的用 0.2 年；消息穿过黑域按公式算、情报按准确时刻收发、视野补算进入时刻、黑域和死线按准确时刻变化。和原计划不同的地方、以后可以改成事件队列的想法，都写在提议里。 |
 
 - [V0.1 授权输入与实施边界](v01-authorized-input.md)：正式设计、III 侦察战报确认与后续验收要求。

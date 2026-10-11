@@ -58,6 +58,17 @@ static func in_owned_system_vision(s: GameState, civ: Civ, pos: Vector3) -> bool
 	return false
 
 
+## 按 motion 走，最多看 dt 年，下一次进出己方星系视野（in_owned_system_vision 的那些球）是什么时候。
+static func next_vision_edge(s: GameState, civ: Civ, motion: Dictionary, dt: float) -> float:
+	var best := INF
+	if civ == null or motion["velocity"].length_squared() + motion["acceleration"].length_squared() < 1e-20:
+		return best
+	for at in civ.colonies:
+		var radius := (Balance.VISION_HOME if at == civ.home else Balance.VISION_COLONY) + civ.vision_bonus()
+		best = minf(best, Hazards._surface(motion, {"a": Vector3(at), "b": Vector3(at), "r": radius / s.physical_cell_size(), "growth": 0.0}, minf(dt, best)))
+	return best
+
+
 ## 返回逻辑格上的二次轨迹；在cap_time处必须分段，再读取当地光速。
 static func motion(s: GameState, civ: Civ, ship: Ship, duration: float) -> Dictionary:
 	var velocity := Vector3.ZERO
@@ -98,14 +109,25 @@ static func first_contact(r: Vector3, v: Vector3, a: Vector3, radius: float, dur
 	if r.length_squared() <= radius * radius:
 		return 0.0
 	if a.length_squared() < 1e-18:
-		var vv := v.length_squared()
+		# 先找最近点，再按最近距离算进球的时刻。不用「rv² − vv·(r² − 半径²)」：坐标是单精度，
+		# 离得远时两个大数相减的误差比碰撞半径的平方还大，会把正对着的碰撞算漏。各分量取出来按双精度算。
+		var rx := r.x
+		var ry := r.y
+		var rz := r.z
+		var vx := v.x
+		var vy := v.y
+		var vz := v.z
+		var vv := vx * vx + vy * vy + vz * vz
 		if vv < 1e-18:
 			return INF
-		var rv := r.dot(v)
-		var discriminant := rv * rv - vv * (r.length_squared() - radius * radius)
-		if discriminant < 0.0:
+		var closest := -(rx * vx + ry * vy + rz * vz) / vv
+		var cx := rx + vx * closest
+		var cy := ry + vy * closest
+		var cz := rz + vz * closest
+		var miss := cx * cx + cy * cy + cz * cz
+		if miss > radius * radius:
 			return INF
-		var hit := (-rv - sqrt(discriminant)) / vv
+		var hit := closest - sqrt((radius * radius - miss) / vv)
 		return hit if hit >= 0.0 and hit <= duration else INF
 	return _curved_contact(r, v, a, radius, 0.0, duration)
 
