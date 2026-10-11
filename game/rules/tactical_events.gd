@@ -68,25 +68,6 @@ static func integrate(s: GameState, civ: Civ, plan: Dictionary, dt: float) -> Ar
 	return due
 
 
-static func box_entry(motion: Dictionary, cell: Vector3i, duration: float) -> float:
-	var near := 0.0
-	var far := duration
-	for axis in 3:
-		var lo := float(cell[axis]) - Geometry.CELL_HALF
-		var hi := float(cell[axis]) + Geometry.CELL_HALF
-		var v: float = motion["velocity"][axis]
-		var x: float = motion["pos"][axis]
-		if absf(v) < 1e-12:
-			if x < lo or x > hi:
-				return INF
-			continue
-		var a := (lo - x) / v
-		var b := (hi - x) / v
-		near = maxf(near, minf(a, b))
-		far = minf(far, maxf(a, b))
-	return near if near <= far and far >= 0.0 else INF
-
-
 ## 到了目标星系会自己停下的几种船（events_in 的 arrival_stop）。
 const STOP_KINDS := [Ship.COLONY, Ship.DEVOURER, Ship.DROPLET, Ship.SOPHON]
 ## events_in 只看这几种船：会停下的，加上光粒。别的船跳过，不用逐艘查。

@@ -15,7 +15,7 @@ static func entity(s: GameState, owner: int, id: int) -> Dictionary:
 	if not asset.is_empty():
 		if asset["carrier"] >= 0:
 			var carrier := civ.ship_by_id(asset["carrier"])
-			return {"id":id,"pos":carrier.pos,"asset":asset} if carrier != null and not carrier.dead else {}
+			return {"id":id,"pos":carrier.pos,"asset":asset,"carrier":carrier} if carrier != null and not carrier.dead else {}
 		return {"id": id, "pos": Vector3(asset["at"]), "asset": asset}
 	return {}
 
@@ -30,8 +30,8 @@ static func controller(civ: Civ) -> int:
 
 ## 消息不在每个子步里挪动：发出时就按途经各格的光速算好什么时候到（eta），到时才收。
 ## source 是这一段的起点，target 是这一段瞄准的位置，sent 是从 source 出发的时刻。
-## 收件者在动时瞄的是它发出那一刻的位置；到了发现它已经走开，就从那里再追一段（见 receive_due）。
-## 这样只会比真实的拦截晚到，不会早到，玩家拿不到光还没送到的情报。
+## 收件者在动时瞄的是光和它相遇的地方（见 _aim）；到了发现它不在那里（中途改了航向），就从那里再追一段（见 receive_due）。
+## 光确实在到达时刻走到了瞄准点，收件者也确实在那里才收下，所以不会早到，玩家拿不到光还没送到的情报。
 ## 同一刻从同一处发给同一收件者的情报走的是同一条路、同一刻到，合成一条（内容放进 more），收到时逐条拆开。
 ## merge 为 false：调用方之后还要单独改这条消息（比如 catch_up 改出发时刻），不能和别的合在一起。
 static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind: String, body: Dictionary, private_id:=0, merge := true) -> Dictionary:
@@ -44,9 +44,13 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 	var fallback: Vector3 = body.get("recipient_pos", source)
 	var message := {"id": s.next_id() if private_id==0 else private_id, "owner": owner, "pos": source, "source": source,
 			"recipient": recipient, "kind": kind, "body": body.duplicate(true),
-			"sent": s.clock, "distance": 0.0, "epoch": s.space_epoch, "dead": false,
-			"target": receiver["pos"] if not receiver.is_empty() else fallback}
-	message["eta"] = s.clock + travel_time(s, source, message["target"])
+			"sent": s.clock, "distance": 0.0, "epoch": s.space_epoch, "dead": false, "target": fallback}
+	if receiver.is_empty():
+		message["eta"] = s.clock + travel_time(s, source, fallback)
+	else:
+		var aim := _aim(s, owner, receiver, source, 0.0)
+		message["target"] = aim[0]
+		message["eta"] = s.clock + aim[1]
 	if merge and private_id == 0 and kind in MERGE_KINDS:
 		message["more"] = []
 	message["n"] = s.message_serial
@@ -56,6 +60,46 @@ static func send(s: GameState, owner: int, source: Vector3, recipient: int, kind
 	_expect(s, message)
 	s.messages.append(message)
 	return message
+
+## 光从 from 出发去找收件者：返回 [瞄准点, 光从 from 走到瞄准点要多少年]。lag 是光从 from 出发到现在已经过了多久。
+## 收件者是在飞的船（或船上的设施）时，按它现在的运动往前推（加速到最高速度为止、到目的地停下），
+## 反复几次：光到它现在的位置要 t，它那时在哪，光到那里又要多久……船比光慢，几次就差不多对上了。
+## 推得不准（中途改航向、各处光速不同）也不要紧：到时它不在瞄准点，receive_due 会从那里再追，只会晚到。
+static func _aim(s: GameState, owner: int, receiver: Dictionary, from: Vector3, lag: float) -> Array:
+	var target: Vector3 = receiver["pos"]
+	var travel := travel_time(s, from, target)
+	var ship: Ship = receiver.get("ship", receiver.get("carrier"))
+	if ship == null or travel == INF:
+		return [target, travel]
+	var motion := Kinematics.motion(s, s.civs[owner], ship, 0.0)
+	if motion["velocity"] == Vector3.ZERO and motion["acceleration"] == Vector3.ZERO:
+		return [target, travel]
+	var here := [target, travel]
+	var reach := Balance.COLLISION_EPSILON / s.physical_cell_size()
+	for i in AIM_ROUNDS:
+		var ahead := _ahead(motion, maxf(0.0, travel - lag))
+		if ahead.distance_to(target) <= reach:
+			break
+		target = ahead
+		travel = travel_time(s, from, target)
+		if travel == INF:
+			return here
+	# 算出来光现在已经过了某个将来的位置：receive_due 会当场按它现在的位置交付，那不对，改回瞄它现在的位置。
+	if travel <= lag and target != here[0]:
+		return here
+	return [target, travel]
+
+## 往前推算收件者位置最多几次（前后两次差不到碰撞距离就停）。
+const AIM_ROUNDS := 8
+
+
+## 船按 motion 走 t 年后在哪：加速到 cap_time 为止，之后匀速；到了目的地就停在那里。
+static func _ahead(motion: Dictionary, t: float) -> Vector3:
+	if t >= motion["arrival"]:
+		return motion["target"]
+	var speeding_up := minf(t, motion["cap_time"])
+	return motion["pos"] + motion["velocity"] * t + motion["acceleration"] * speeding_up * (t - 0.5 * speeding_up)
+
 
 ## 可以合并的消息种类：只是情报，收到后不改动实体。
 const MERGE_KINDS := ["sensor", "report"]
@@ -221,14 +265,31 @@ static func retime(s: GameState, before: Array = []) -> void:
 
 ## 黑域和死线影响光速的范围：[一端, 另一端, 半径]，单位是格。黑域取到下一个 0.05 年刻度时的半径（它一直在扩大）。
 static func hazard_shapes(s: GameState) -> Array:
-	var size := s.physical_cell_size()
 	var shapes := []
 	for source in s.black_domains:
-		var reach := Hazards.radius(s, source, s.clock + Balance.PHYSICS_MAX_DT) + 1e-6
-		shapes.append([source["pos"], source["pos"], reach / size])
+		shapes.append(domain_shape(s, source))
 	for line in s.deadlines:
-		shapes.append([line["a"], line["b"], (Balance.DEADLINE_RADIUS + 1e-6) / size])
+		shapes.append(deadline_shape(s, line))
 	return shapes
+
+
+static func domain_shape(s: GameState, source: Dictionary) -> Array:
+	var reach := Hazards.radius(s, source, s.clock + Balance.PHYSICS_MAX_DT) + 1e-6
+	return [source["pos"], source["pos"], reach / s.physical_cell_size()]
+
+
+static func deadline_shape(s: GameState, line: Dictionary) -> Array:
+	return [line["a"], line["b"], (Balance.DEADLINE_RADIUS + 1e-6) / s.physical_cell_size()]
+
+
+## 光速马上要变（cells 里的格子、shapes 里的范围）：先把走过或要走这些地方的在途消息，按还没变的光速挪到现在的位置。
+## 到达时间留给之后的 retime 重算。不先挪的话，retime 会把变化之前走的那段也按新光速重走一遍，光速变快时消息就提前到了。
+static func before_light_change(s: GameState, cells: Array[Vector3i], shapes: Array) -> void:
+	var boxes := Geometry.cell_boxes(cells)
+	for message in s.messages:
+		if not message["dead"] and message.has("eta") and message["sent"] < s.clock \
+				and _touches(boxes, shapes, message["source"], message["target"]):
+			_rebase_one(s, message)
 
 
 ## 只重算剩下的路线碰到 cells 里某一格、或者碰到 shapes 里某一处范围的消息。
@@ -291,7 +352,7 @@ static func next_arrival(s: GameState) -> float:
 static func receive_due(s: GameState, depth := 0) -> void:
 	assert(depth < 8, "本地零距离收据不能无限重发")
 	var arrived: Array[Dictionary] = []
-	var changed := false
+	var dropped := 0 # 收件者已经不在、直接作废的条数
 	var receivers: Dictionary={}
 	# 时钟落在 0.05 年的传感刻度上才拆开情报类消息。按时钟本身判断，不看 next_sensor_time：
 	# 这一刻采样后它已指向下一刻度，而采样当场发出、距离为零的本地回报也要在这一刻收到。
@@ -344,16 +405,17 @@ static func receive_due(s: GameState, depth := 0) -> void:
 		if receiver.is_empty():
 			# 收件者死亡不能令远端命令在发送瞬间退款，从余额泄露真实战况。
 			message["dead"] = true
-			changed = true
+			dropped += 1
 			if message["kind"] == "command":
 				s._receive_command(message, false)
 			continue
 		if receiver["pos"].distance_squared_to(message["target"]) > reach2:
-			# 收件者已经走开：从瞄准点出发，再追到它现在的位置。
+			# 收件者不在瞄准点：从瞄准点出发再追它。光到瞄准点以后已经又走了 clock - eta 年。
+			var aim := _aim(s, owner, receiver, message["target"], s.clock - message["eta"])
 			message["source"] = message["target"]
 			message["sent"] = message["eta"]
-			message["target"] = receiver["pos"]
-			message["eta"] += travel_time(s, message["source"], receiver["pos"])
+			message["target"] = aim[0]
+			message["eta"] += aim[1]
 			if message["eta"] > due:
 				_file(index, message)
 				next_any = minf(next_any, message["eta"])
@@ -377,9 +439,9 @@ static func receive_due(s: GameState, depth := 0) -> void:
 			part["body"] = body
 			part.erase("more")
 			_deliver(s, part)
-	if changed or not arrived.is_empty():
+	if dropped > 0 or not arrived.is_empty():
 		# 收过的消息攒到总数的八分之一再一起删掉，不用每收一批就整份重排。
-		index["dead"] += arrived.size() + (1 if changed else 0)
+		index["dead"] += arrived.size() + dropped
 		if index["dead"] * 8 >= s.messages.size():
 			s.messages = s.messages.filter(func(m): return not m["dead"])
 			index["dead"] = 0
@@ -673,6 +735,7 @@ static func _emit(s: GameState, owner: int, observer: Dictionary, origin: Vector
 		facts = data.duplicate()
 		facts.erase("pos")
 		facts.erase("velocity")
+		facts.erase("accel_until") # 每次算出来都差一点浮点误差，不能因此重发；到了最高速度加速度会变成 0，那时照样重发。
 	var signature := hash([facts,body.get("contact",false)])
 	var stamp: Dictionary = s.sensor_stamps.get(key, {})
 	var same: bool = stamp.get("hash", -1) == signature
@@ -750,6 +813,8 @@ static func sample(s: GameState, force := false) -> void:
 					continue
 				var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
 						"pos": target["pos"], "velocity": target["velocity"], "acceleration": target["acceleration"], "hp": target["hp"]}
+				if target.get("accel_until", INF) < INF:
+					data["accel_until"] = target["accel_until"]
 				_emit(s, owner, observer, target["pos"], "%d:entity:%d" % [observer["id"], target["id"]],
 					{"type":"entity","data":data,"contact":target["owner"]>=0 and Vector3i(observer["pos"].round())==Vector3i(target["pos"].round())},true)
 		for ship in civ.ships:
@@ -888,6 +953,8 @@ static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary]) 
 			if observer["pos"].distance_to(target["pos"])*s.physical_cell_size()>radius:
 				continue
 			var data := {"id":target["id"],"kind":target["kind"],"pos":target["pos"],"velocity":target["velocity"],"acceleration":target["acceleration"]}
+			if target.get("accel_until",INF)<INF:
+				data["accel_until"]=target["accel_until"]
 			if target.has("payload"):
 				data["payload_kind"] = target["payload"]["kind"]
 			_emit(s,s.civs.find(civ),observer,target["pos"],"warning:%d:%d"%[asset["id"],target["id"]],{"type":"warning","data":data},true)

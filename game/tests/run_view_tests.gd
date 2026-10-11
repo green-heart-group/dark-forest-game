@@ -1186,6 +1186,10 @@ func test_end_turn_in_background() -> void:
 	panel._end.pressed.emit()
 	check(view.turning() and panel._end.disabled and view.locked_reason() != "", "后台结算时按钮变灰、不能操作")
 	check(view.state == s, "算完之前画面还是原来的局面")
+	# 后台在算时调试面板也不能改局面：改到旧局面上，换上新局面就丢了；改数值还会让后台这一回合前后不一致。
+	var energy := s.human().energy
+	view.debug._dev(func(state: GameState): return state.dev_set(state.human(), "energy", energy + 50))
+	check_eq(s.human().energy, energy, "后台结算时调试面板的改动被拒绝")
 	var started := Time.get_ticks_msec()
 	while view.turning() and Time.get_ticks_msec() - started < 60000:
 		await process_frame

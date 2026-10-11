@@ -418,7 +418,8 @@ static func resolve(s: GameState) -> void:
 				continue
 			sample["done"] = true
 			# 光速处处相同时到达不切子步，这里可能比到达晚一点；一律按准确的到达时刻记。
-			var at: float = minf(s.clock, sample.get("arrived_at", s.clock))
+			# 不和现在取小：到达时刻可能比现在晚不到 TIME_EPSILON，取小就记早了。
+			var at: float = sample.get("arrived_at", s.clock)
 			if sample.has("cell_id"):
 				wave["visited"][sample["cell_id"]] = at
 				var civ := s.coord_owner(sample["cell"])

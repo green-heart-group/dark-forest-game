@@ -237,17 +237,6 @@ func count(kind: String) -> int:
 	return n
 
 
-## 据点的位置：自己的星系，加上星舰。
-func bases() -> Array[Vector3]:
-	var result: Array[Vector3] = []
-	for c in colonies:
-		result.append(Vector3(c))
-	var ss := starship()
-	if ss != null:
-		result.append(ss.pos)
-	return result
-
-
 ## 可以作为发射源的格子：自己的星系，加上星舰所在的格子。
 func origins() -> Array[Vector3i]:
 	var result: Array[Vector3i] = colonies.duplicate()
@@ -335,10 +324,6 @@ func reduce_cost() -> int:
 ## 实体当前维度。全球几何阶段不改变尚未迁维实体的产出。
 func entity_dimension() -> int:
 	return 1 if line_reduced else (2 if reduced else 3)
-
-
-func work_factor() -> float:
-	return Balance.DIMENSION_WORK[str(entity_dimension())]
 
 
 ## 产能Q、光速c和工作倍率分别读取，不能互相代用。

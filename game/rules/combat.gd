@@ -14,7 +14,7 @@ static func targets(s: GameState, include_grain := false, observe := false) -> A
 				continue
 			var motion := _motion(s, civ, ship, observe)
 			result.append({"id": ship.id, "kind": ship.kind, "owner": owner, "pos": ship.pos,
-					"velocity": motion["velocity"], "acceleration": motion["acceleration"],
+					"velocity": motion["velocity"], "acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF),
 					"hp": ship.max_hp() - ship.damage, "ship": ship})
 		for asset in civ.assets:
 			if asset["kind"] not in ["miner", "advanced_miner"]:
@@ -23,7 +23,7 @@ static func targets(s: GameState, include_grain := false, observe := false) -> A
 			var motion := {"velocity": Vector3.ZERO, "acceleration": Vector3.ZERO} if carrier == null else _motion(s, civ, carrier, observe)
 			result.append({"id": asset["id"], "kind": asset["kind"], "owner": owner,
 					"pos": Signals.entity(s,owner,asset["id"])["pos"], "velocity": motion["velocity"],
-					"acceleration": motion["acceleration"], "hp": 1, "asset": asset})
+					"acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF), "hp": 1, "asset": asset})
 	for payload in s.payloads:
 		if not payload.get("dead", false):
 			result.append({"id": payload["id"], "kind": "payload", "owner": payload["owner"],
@@ -34,14 +34,17 @@ static func targets(s: GameState, include_grain := false, observe := false) -> A
 			if not ship.dead:
 				var motion := _motion(s, null, ship, observe)
 				result.append({"id": ship.id, "kind": ship.kind, "owner": -1, "pos": ship.pos,
-						"velocity": motion["velocity"], "acceleration": motion["acceleration"], "hp": 0, "ship": ship})
+						"velocity": motion["velocity"], "acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF), "hp": 0, "ship": ship})
 	return result
 
 
 ## 速度和加速度取实际运动用的那一组（已按当地限速），航位推算才对得上。
+## accel_until 是加速到这种船最高速度的时刻，之后不再加速；最高速度人人知道，带上它不泄露什么。
 static func _motion(s: GameState, civ: Civ, ship: Ship, observe: bool) -> Dictionary:
 	if observe:
-		return Kinematics.motion(s, civ, ship, 0.0)
+		var motion := Kinematics.motion(s, civ, ship, 0.0)
+		motion["accel_until"] = s.clock + motion["cap_time"]
+		return motion
 	return {"velocity": ship.direction * ship.speed / s.physical_cell_size(), "acceleration": Vector3.ZERO}
 
 
@@ -185,7 +188,9 @@ static func observed(s: GameState,contact: Dictionary) -> Dictionary:
 	var t := maxf(0.0,s.clock-delay-t0)
 	var velocity: Vector3 = contact.get("velocity",Vector3.ZERO)
 	var acceleration: Vector3 = contact.get("acceleration",Vector3.ZERO)
-	return {"pos":contact["pos"]+velocity*t+0.5*acceleration*t*t,"velocity":velocity+acceleration*t,"t":t0+t}
+	# 加速到最高速度（accel_until）就不再加速，之后匀速。不封顶的话，看不见以后会一直推算到超过最高速度。
+	var speeding_up := clampf(contact.get("accel_until",INF)-t0,0.0,t)
+	return {"pos":contact["pos"]+velocity*t+acceleration*speeding_up*(t-0.5*speeding_up),"velocity":velocity+acceleration*speeding_up,"t":t0+t}
 
 
 ## 从 observed 那一刻起，按那时的速度直线推算现在的位置。凡是用别人位置的地方都要先推算，

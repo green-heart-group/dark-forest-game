@@ -2,6 +2,9 @@ class_name Hazards
 extends RefCounted
 ## 有界黑域与曲率死线。时间用世界时钟；同一格的硬到期不会被后来的源延长。
 
+## 光走到格子边界上时，查光速前沿前进方向挪这么多格，免得按刚离开的那一格算。
+const LIGHT_NUDGE := 1e-6
+
 
 static func activate(s: GameState, center: Vector3, id := -1) -> Dictionary:
 	var source := {"id": s.next_id() if id < 0 else id, "center": Vector3i(center.round()), "pos": center,
@@ -19,6 +22,17 @@ static func radius(s: GameState, source: Dictionary, at: float) -> float:
 
 static func refresh(s: GameState) -> void:
 	s.ensure_cells()
+	# 到期的黑域和死线马上要删掉，那里光速会变快：先把经过那里的消息按还没变的光速挪到现在的位置（suppression 在到期那一刻仍算它们）。
+	var ending := []
+	for source in s.black_domains:
+		if source["expires"] <= s.clock:
+			ending.append(Signals.domain_shape(s, source))
+	for line in s.deadlines:
+		if line["expires"] <= s.clock:
+			ending.append(Signals.deadline_shape(s, line))
+	if not ending.is_empty():
+		var none: Array[Vector3i] = []
+		Signals.before_light_change(s, none, ending)
 	s.black_domains = s.black_domains.filter(func(source): return source["expires"] > s.clock)
 	for source in s.black_domains:
 		source["left"] = source["expires"] - s.clock
@@ -89,7 +103,7 @@ static func suppression(s: GameState, position: Vector3) -> float:
 	if not ignores:
 		var weight := 0.0
 		for source in s.black_domains:
-			if source["expires"] <= s.clock:
+			if source["expires"] < s.clock:
 				continue
 			var reach := radius(s, source, s.clock)
 			var distance: float = position.distance_to(source["pos"]) * s.physical_cell_size()
@@ -104,7 +118,7 @@ static func suppression(s: GameState, position: Vector3) -> float:
 			relative = 1.0 / (1.0 + weight)
 	for line in s.deadlines:
 		# 连续共线子段的胶囊并集正好等于首尾胶囊；内部接缝不是场强边界。
-		if line["expires"] > s.clock and segment_distance(position, line["a"], line["b"]) * s.physical_cell_size() <= Balance.DEADLINE_RADIUS:
+		if line["expires"] >= s.clock and segment_distance(position, line["a"], line["b"]) * s.physical_cell_size() <= Balance.DEADLINE_RADIUS:
 			relative = minf(relative, Balance.DEADLINE_FACTOR)
 	return relative
 
@@ -149,9 +163,9 @@ static func next_light_edge(s: GameState, start: Vector3, velocity: Vector3, dt:
 		return INF
 	if not table.is_empty() and table["speeds"].is_empty():
 		return INF
-	var here := light_speed(s, table, start)
-	# 边界上的点按前进方向归到下一格。
-	var nudge := velocity.normalized() * 1e-6
+	# 边界上的点按前进方向归到下一格（Vector3i(round()) 在 .5 处往远离 0 的方向取整，往负方向走时会归回上一格）。
+	var nudge := velocity.normalized() * LIGHT_NUDGE
+	var here := light_speed(s, table, start + nudge)
 	var pos := start
 	var t := 0.0
 	for i in 8:
@@ -168,18 +182,19 @@ static func next_light_edge(s: GameState, start: Vector3, velocity: Vector3, dt:
 ## 光或消息从 pos 沿 direction 走 duration 年，最多走 remaining（物理距离）。
 ## 在一个子步里自己分段：每段用这一段起点的光速，到光速会变的地方（next_light_edge）换一段。
 ## 返回走了多远（distance）、到达终点用了多久（arrival，没到为 INF）、实际走了多久（time）。光速为 0 的地方走不动。
+## 每段至少走 TIME_EPSILON 年，所以不限段数也一定会停；一维的长直线上可能要分几百段。
 static func light_travel(s: GameState, pos: Vector3, direction: Vector3, remaining: float, duration: float, table := {}) -> Dictionary:
 	var size := s.physical_cell_size()
 	var t := 0.0
 	var moved := 0.0
-	for i in 256:
+	while true:
 		var need := remaining - moved
 		if need <= 0.0:
 			return {"distance": remaining, "arrival": t}
 		if t >= duration:
 			break
 		var at := pos + direction * moved / size
-		var speed := light_speed(s, table, at)
+		var speed := light_speed(s, table, at + direction * LIGHT_NUDGE)
 		if speed <= 0.0:
 			break
 		var left := minf(duration - t, need / speed)

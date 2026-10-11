@@ -146,3 +146,111 @@ func test_v01_growing_domain_retimes_only_nearby_messages_each_tick() -> void:
 	Signals.retime(s, s.message_medium)
 	check_eq(far["sent"], started, "离黑域远的消息不重算")
 	check(near["sent"] == s.clock and near["eta"] >= before - 1e-6, "黑域旁边的消息按扩大后的黑域重算，不会提前")
+
+## 规则：情报传回
+func test_v01_light_reads_the_next_cell_after_an_edge() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	# 光从格子边界出发时按前进方向那一格的光速走；往负方向走也一样，不按刚离开的那一格算。
+	var table := {"speed": 1.0, "speeds": {Vector3i(1, 0, 0): 0.6}}
+	var expected := 0.5 + 1.0 / 0.6 + 1.0 + 0.5
+	for start in [Vector3(2, 0, 0), Vector3(-1, 0, 0)]:
+		var direction: Vector3 = (Vector3(1, 0, 0) - start).normalized()
+		var trip := Hazards.light_travel(s, start, direction, 3.0, INF, table)
+		check(absf(trip["arrival"] - expected) < 1e-6, "从 %s 出发应走 %s 年，实际 %s" % [start, expected, trip["arrival"]])
+
+
+## 规则：情报传回
+func test_v01_long_light_path_with_many_speed_changes_arrives() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	# 一维时一条直线上可能有几百段光速不同的格子，光照样能走到。
+	var table := {"speed": 1.0, "speeds": {}}
+	for i in 401:
+		table["speeds"][Vector3i(i, 0, 0)] = 0.5 if i % 2 == 1 else 0.8
+	var trip := Hazards.light_travel(s, Vector3.ZERO, Vector3.RIGHT, 400.0, INF, table)
+	check(trip["arrival"] > 400.0 / 0.8 and trip["arrival"] < 400.0 / 0.5, "走了 %s 年" % trip["arrival"])
+
+
+## 规则：情报传回
+func test_v01_faster_light_does_not_make_messages_early() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	s.ensure_cells()
+	s.set_light_at(Vector3i(1, 0, 0), 0.2)
+	s.set_light_at(Vector3i(2, 0, 0), 0.2)
+	var body := {"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0}
+	var message := Signals.send(s, 0, Vector3(0, 0, 0), -5, "report", body.merged({"recipient_pos": Vector3(6, 0, 0)}), 0, false)
+	s.message_medium = Signals.medium(s)
+	var eta: float = message["eta"]
+	# 消息早已慢慢穿过这两格，现在两格恢复原来的光速：已经走过的那段不能按新光速重走。
+	s.clock = 12.6
+	s.set_light_at(Vector3i(1, 0, 0), 1.0)
+	s.set_light_at(Vector3i(2, 0, 0), 1.0)
+	Signals.retime(s, s.message_medium)
+	check(absf(message["eta"] - eta) < 1e-6, "到达时刻不变：原来 %s，现在 %s" % [eta, message["eta"]])
+
+
+## 规则：情报传回
+func test_v01_dropped_messages_are_counted_like_a_copy_would() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	s.ensure_cells()
+	var body := {"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0}
+	for i in 30:
+		Signals.send(s, 0, Vector3.ZERO, -5, "report", body.merged({"recipient_pos": Vector3(6, 0, 0)}), 0, false)
+	# 收件者不存在：到了就作废。三条一起作废，待清理的条数也要加三，和复制后从头数的一样。
+	for i in 3:
+		Signals.send(s, 0, Vector3.ZERO, 987654, "report", body.merged({"recipient_pos": Vector3(0.5, 0, 0)}), 0, false)
+	s.clock = 1.0
+	Signals.receive_due(s)
+	var dead := s.messages.filter(func(m): return m["dead"]).size()
+	check_eq(Signals._indexed(s)["dead"], dead, "待清理的条数等于实际作废的条数")
+	check_eq(StateCopy.copy(s).checksum(), s.checksum(), "复制出来的局面校验值一样")
+
+## 规则：情报传回，移动
+func test_v01_message_meets_a_receiver_flying_toward_it() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	var probe := _ship(s, me, Ship.PROBE, Vector3(6, 0, 0), Vector3(-1, 0, 0))
+	var light := 6.0 / Signals.travel_time(s, Vector3.ZERO, Vector3(6, 0, 0))
+	var speed: float = Kinematics.motion(s, me, probe, 0.0)["velocity"].length()
+	var meet := 6.0 / (light + speed)
+	var body := {"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0}
+	var message := Signals.send(s, 0, Vector3.ZERO, probe.id, "report", body, 0, false)
+	check(absf(message["eta"] - meet) < 0.05, "瞄准光和探测器相遇的时刻 %s，算出 %s" % [meet, message["eta"]])
+	# 照原来的航向飞：到了就收下，不会因为先飞到发出时的位置再折回来而晚很多。
+	var got := INF
+	for tick in 200:
+		s.clock = tick * Balance.PHYSICS_MAX_DT
+		probe.pos = Vector3(6.0 - speed * s.clock, 0, 0)
+		Signals.receive_due(s)
+		if me.telemetry.has(999):
+			got = s.clock
+			break
+	check(got >= meet - 1e-6 and got < meet + 0.15, "相遇 %s 年，收到 %s 年" % [meet, got])
+
+
+## 规则：情报传回，移动
+func test_v01_message_aimed_ahead_is_not_early_when_receiver_turns() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	var probe := _ship(s, me, Ship.PROBE, Vector3(6, 0, 0), Vector3(-1, 0, 0))
+	var body := {"type": "own", "data": {"id": 999}, "t_observed": 0.0, "source_id": 999, "epoch": 0}
+	var message := Signals.send(s, 0, Vector3.ZERO, probe.id, "report", body, 0, false)
+	var eta: float = message["eta"]
+	# 探测器半路掉头，到时不在瞄准点：不能按瞄准点交付，要接着追。
+	probe.direction = Vector3(1, 0, 0)
+	probe.pos = Vector3(7, 0, 0)
+	s.clock = ceilf(eta / Balance.PHYSICS_MAX_DT) * Balance.PHYSICS_MAX_DT
+	Signals.receive_due(s)
+	check(not me.telemetry.has(999), "光还没到探测器现在的位置，不能收到")
+	check(message["eta"] >= Signals.travel_time(s, Vector3.ZERO, Vector3(7, 0, 0)) - 1e-6, "改到不早于光真正走到它那里")
+
+
+## 规则：情报传回，移动
+func test_v01_dead_reckoning_stops_speeding_up_at_top_speed() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	# 观测时每年加速 0.1 格，2 年后到最高速度；之后看不见了，推算也只能按最高速度匀速走。
+	var contact := {"pos": Vector3.ZERO, "velocity": Vector3(0.1, 0, 0), "acceleration": Vector3(0.1, 0, 0),
+			"accel_until": 2.0, "t_observed": 0.0, "t_received": 0.0}
+	s.clock = 10.0
+	var known := Combat.observed(s, contact)
+	check(known["velocity"].is_equal_approx(Vector3(0.3, 0, 0)), "速度停在最高速度：%s" % known["velocity"])
+	check(known["pos"].is_equal_approx(Vector3(2.8, 0, 0)), "先加速 2 年再匀速 8 年：%s" % known["pos"])

@@ -199,14 +199,6 @@ static func _migrate_value(value: Variant, anchor: Vector3i, to_line: bool, old:
 			_migrate_value(value[key], anchor, to_line, old, speed_scale)
 
 
-## 换坐标后的方向：进二维去掉 z，进一维只留 x。正好沿压掉的轴飞的变成零（停下）。
-static func flatten_direction(direction: Vector3, to_line: bool) -> Vector3:
-	direction.z = 0.0
-	if to_line:
-		direction.y = 0.0
-	return direction.normalized() if direction.length() > 1e-6 else Vector3.ZERO
-
-
 ## 所有键均为本阶段的逻辑坐标；渲染的位置绝不写回规则。
 ## 展开中用和演示一样的球形扩张（Layout.sample_spread）；规则压平的格子画面上也已铺平。
 static func frame(s: GameState) -> Dictionary:
