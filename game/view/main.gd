@@ -14,6 +14,7 @@ const Tip := preload("res://view/tip.gd")
 const WebFiles := preload("res://view/web_files.gd")
 const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
+const DesktopMenu := preload("res://view/desktop_menu.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -24,6 +25,7 @@ var panel := SidePanel.new()
 var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
 var saves := SavedGames.new()
+var desktop_menu := DesktopMenu.new()
 var tech_tree := TechTree.new()
 var panel_toggle := Button.new()
 var compact := false
@@ -40,6 +42,7 @@ var autosave_path := Replay.DIR.path_join("last.replay")
 
 func _ready() -> void:
 	get_window().title = WINDOW_TITLE
+	get_tree().auto_accept_quit = false
 	var seed_value := randi() % 1000000
 	# 命令行参数（写在 `--` 后面）：
 	#   seed=123            指定种子，重现同一张星图
@@ -70,8 +73,10 @@ func _ready() -> void:
 	_layer.add_child(panel)
 	add_child(saves)
 	saves.setup(self)
+	desktop_menu.setup(self)
+	_layer.add_child(desktop_menu)
 	panel_toggle.text = "收起面板"
-	panel_toggle.tooltip_text = "展开或收起操作面板（Ctrl+B）"
+	panel_toggle.tooltip_text = shortcut_text("展开或收起操作面板（Ctrl+B）")
 	panel_toggle.anchor_left = 1.0
 	panel_toggle.anchor_right = 1.0
 	panel_toggle.offset_left = -120
@@ -104,6 +109,18 @@ func _ready() -> void:
 		debug.load_replay(replay_path)
 	elif debug != null and debug.default_preset() != "":
 		debug.new_game(seed_value, false)  # 用调试面板里设的「新开一局时用的方案」
+	if DisplayServer.get_name() != "headless":
+		saves.begin_session(args.is_empty())
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and is_instance_valid(saves) and saves.main != null:
+		request_quit()
+
+
+func request_quit() -> void:
+	if saves.prepare_exit():
+		get_tree().quit()
 
 
 ## 画面显示的是哪个文明看到的（平时是玩家，调试时可以换成任意文明）。
@@ -141,6 +158,7 @@ func refresh() -> void:
 	tech_tree.refresh(me)
 	if debug != null:
 		debug.refresh_panel()
+	saves.save_if_changed()
 
 
 ## 换一个局面（新开一局、回放跳到别的回合）：重画网格，不播放压平的动画。
@@ -217,6 +235,21 @@ func _input(event: InputEvent) -> void:
 	_on_key(event, get_viewport())
 
 
+## 事件快捷键与每帧相机轮询共用，弹窗的焦点可能属于另一个 Viewport。
+func game_input_blocked() -> bool:
+	var focus := get_viewport().gui_get_focus_owner()
+	return tech_tree.visible or saves.modal_open() or overlay._restart_dialog.visible \
+			or focus is LineEdit or focus is TextEdit
+
+
+static func command_pressed(key: InputEventKey) -> bool:
+	return key.ctrl_pressed or (OS.has_feature("macos") and key.meta_pressed)
+
+
+static func shortcut_text(text: String) -> String:
+	return text.replace("Ctrl", "⌘").replace("Alt", "Option") if OS.has_feature("macos") else text
+
+
 ## 快捷键。调试面板是单独的窗口，焦点在它上面时按键也转到这里（from 是收到按键的那个窗口）。
 func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
@@ -232,15 +265,14 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 			saves.cancel()
 		from.set_input_as_handled()
 		return
-	if from == get_viewport() and (saves._dialog.visible or overlay._restart_dialog.visible):
+	if from == get_viewport() and game_input_blocked():
 		return
 	# 只在游戏窗口接游戏操作键；输入框和弹窗保留原有键盘操作。
-	if from == get_viewport() and not from.gui_get_focus_owner() is LineEdit and not from.gui_get_focus_owner() is TextEdit \
-			and not saves._dialog.visible and not overlay._restart_dialog.visible:
+	if from == get_viewport():
 		if _game_key(key):
 			from.set_input_as_handled()
 			return
-	if key.ctrl_pressed and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
+	if command_pressed(key) and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
 		var step := 0.0 if key.keycode in [KEY_0, KEY_KP_0] else (-0.1 if key.keycode in [KEY_MINUS, KEY_KP_SUBTRACT] else 0.1)
 		window_settings.set_ui_scale(window_settings.default_ui_scale() if step == 0.0
 				else window_settings.ui_scale + step)
@@ -306,7 +338,7 @@ func update_layout() -> void:
 
 
 func _game_key(key: InputEventKey) -> bool:
-	if key.ctrl_pressed:
+	if command_pressed(key):
 		match key.keycode:
 			KEY_B:
 				toggle_panel()

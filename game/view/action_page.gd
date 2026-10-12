@@ -18,6 +18,13 @@ const RULE_NAMES := {
 	Action.BROADCAST: "broadcast", Action.FOIL: "launch_foil", Action.LINE_FOIL: "launch_line_foil",
 	Action.DOMAIN: "launch_black_domain", Action.SINGULARITY: "launch_singularity",
 }
+## 只用于收起尚未解锁的入口；执行条件仍由规则判断。
+const ACTION_TECH := {
+	Action.DISPATCH: "probe", Action.COLONY: "colony", Action.STARSHIP: "starship",
+	Action.SETTLE: "starship", Action.GRAIN: "grain", Action.ANTIMATTER: "antimatter",
+	Action.SOPHON: "sophon", Action.BROADCAST: "broadcaster", Action.FOIL: "dimension",
+	Action.LINE_FOIL: "dimension", Action.DOMAIN: "domain", Action.SINGULARITY: "dimension",
+}
 
 var main: Node
 var state: GameState:
@@ -61,6 +68,8 @@ var _dist_label := Label.new()
 ## 算出来的目标格子（写在距离后面）
 var _target_info := Label.new()
 var _known_pick := OptionButton.new()
+## 放在面板的滚动区外，选择方向时仍能看到执行按钮。
+var footer := VBoxContainer.new()
 var _go := Button.new()
 ## 执行按钮下面的小字：为什么现在不能执行
 var _go_hint := Label.new()
@@ -152,11 +161,11 @@ func setup(p_main: Node) -> void:
 	_target_box.add_child(dist_row)
 	_go.custom_minimum_size.y = 36
 	_go.pressed.connect(_on_go)
-	detail.add_child(_go)
+	footer.add_child(_go)
 	_go_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_go_hint.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
 	_go_hint.add_theme_font_size_override("font_size", 13)
-	detail.add_child(_go_hint)
+	footer.add_child(_go_hint)
 
 
 ## 输入坐标的一列（放在角度圆盘右边）：在星图上点不准时用。
@@ -226,8 +235,6 @@ func refresh(me: Civ) -> void:
 		_action = Action.LINE_FOIL
 	elif not state.all_flat() and _action == Action.LINE_FOIL:
 		_action = Action.FOIL
-	_action_tiles[Action.FOIL].visible = not state.all_flat()
-	_action_tiles[Action.LINE_FOIL].visible = state.all_flat()
 	_pitch_box.visible = not state.all_flat()
 	_yaw_box.visible = not state.all_linear()
 	_line_dirs.visible = state.all_linear()
@@ -245,6 +252,11 @@ func refresh(me: Civ) -> void:
 	var specs := _action_specs()
 	for a in _action_tiles:
 		var tile := _action_tiles[a]
+		tile.visible = a == _action or main.panel.show_locked.button_pressed or me.has_tech(ACTION_TECH[a])
+		if a == Action.FOIL:
+			tile.visible = tile.visible and not state.all_flat()
+		elif a == Action.LINE_FOIL:
+			tile.visible = tile.visible and state.all_flat()
 		var reason := _block(me, a)
 		tile.button_pressed = a == _action
 		tile.modulate.a = 1.0 if reason == "" else 0.5

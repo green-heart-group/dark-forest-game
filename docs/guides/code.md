@@ -83,7 +83,8 @@
 | `action_page.gd` | 右侧面板的「行动」页：选行动、给方向或目标、执行 |
 | `angle_dial.gd` | 「行动」页上调方向的两个圆盘（水平角、俯仰角）。目标 = 发射源 + 方向 × 距离 |
 | `overlay.gd` | 盖在星图左边的一层：回合状态、重开、图例、视角操作说明、网格画法、日志、短暂提示 |
-| `saved_games.gd` | 普通游戏存读档界面：对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
+| `saved_games.gd` | 普通游戏存读档界面：自动存档和继续、退出保护、对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
+| `desktop_menu.gd` | Mac 原生文件菜单，复用存读档和重开入口 |
 | `window_settings.gd` | 窗口位置和大小、界面大小，存在 `user://settings.cfg`；网页版改用随游戏带的字体 |
 | `debug_panel.gd` | 开发者调试面板（用法见 [调试模式](debug-tools.md)） |
 | `web_files.gd` | 网页版专用：读网址里的参数（`?debug&seed=123`），把文件下载到电脑、让玩家上传文件 |
@@ -108,7 +109,7 @@
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
 - **快捷键**：Ctrl / Alt 组合键、Shift+Enter 和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
   视角键在 `map_view.gd`（按住的 WASD 等每帧查，H、V、T、G 在 `_camera_key`）。新加快捷键前先看这两处，别撞键；
-  认键的位置（`physical_keycode`），在输入框里打字时不响应。
+  认键的位置（`physical_keycode`），在输入框里打字时不响应。事件和每帧相机轮询都通过 `main.game_input_blocked()` 检查弹窗、读档和单行/多行输入，不各自维护不同的判断。
 - **界面大小**：按 1280×800 等比缩放（项目设置 `canvas_items` + `expand`），再乘上 `ui_scale`
   （Ctrl + 加号 / 减号，0.6～1.3）。`ui_scale` 不超过 1 时界面坐标至少有 1280×800，不用为更小的窗口另排版；
   玩家自己放大时（最大 1.3 倍，界面坐标约 985×615）面板要滚动才看得全。
@@ -158,6 +159,8 @@
 | --- | --- |
 | `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见 [导出和发布](export.md) |
 | `game/tools/make_macos_templates.py` | 从已安装的官方通用模板提取 Intel、Apple Silicon 模板，输出到被忽略的构建目录；导出工具自动调用，也能为编辑器手动导出准备模板 |
+| `game/tools/sign_macos.py` | Mac 发布包的 Developer ID 签名、公证、票据和 Gatekeeper 验证；凭据从钥匙串读取，成功后生成新 ZIP，不覆盖输入或自动发布 |
+| `game/tests/tools/test_sign_macos.py` | 不使用真实 Apple 凭据，检查签名顺序、拒绝与超时、验证失败中止和原包保留 |
 | `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
 | `game/tests/tools/test_export.py` | 用 Python 标准库检查导出失败处理、完整产物、ZIP 内容和 Godot 路径；完整 `test.py` 会先跑它 |
 | `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
