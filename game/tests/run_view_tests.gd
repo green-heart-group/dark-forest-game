@@ -125,6 +125,7 @@ func run_tests() -> void:
 	await run(test_debug_after_death)
 	await run(test_save_load)
 	await run(test_continue_and_quit_protection)
+	await run(test_modal_input_isolation)
 	await run(test_save_across_dimensions)
 	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
@@ -235,6 +236,42 @@ func test_continue_and_quit_protection() -> void:
 	view.autosave_path = ""
 	DirAccess.remove_absolute(path)
 	DirAccess.remove_absolute("user://_test_continue.replay")
+
+
+func test_modal_input_isolation() -> void:
+	show_state(GameState.new_game(1))
+	view.debug.visible = false
+	map.reset_view(true)
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.physical_keycode = KEY_T
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	for dialog in [view.saves._dialog, view.saves._resume_dialog, view.saves._quit_dialog, overlay._restart_dialog]:
+		dialog.popup_centered()
+		await process_frame
+		check(view.game_input_blocked(), "弹窗统一阻止底层游戏输入")
+		var pitch: float = map._goal_pitch
+		var distance: float = map._goal_distance
+		check(not map._camera_key(key), "弹窗里按视角字母不旋转星图")
+		map._unhandled_input(wheel)
+		check_eq(map._goal_pitch, pitch, "弹窗不改变镜头角度")
+		check_eq(map._goal_distance, distance, "弹窗不改变镜头距离")
+		map._drag_button = MOUSE_BUTTON_LEFT
+		map._poll_camera_keys(1.0)
+		check_eq(map._drag_button, MOUSE_BUTTON_NONE, "弹窗打断旧拖动，关窗后不继续拖")
+		dialog.hide()
+	var edit := TextEdit.new()
+	overlay.add_child(edit)
+	edit.grab_focus()
+	check(view.game_input_blocked() and not map._camera_key(key), "多行文本也不触发相机键")
+	edit.release_focus()
+	edit.queue_free()
+	await process_frame
+	check(not view.game_input_blocked(), "关闭弹窗和文本输入后恢复游戏操作")
+	check(map._camera_key(key), "恢复视角快捷键")
+	map.reset_view(true)
 
 
 func test_game_shortcuts_and_compact_layout() -> void:

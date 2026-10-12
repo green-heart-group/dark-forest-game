@@ -352,9 +352,10 @@ func _process(delta: float) -> void:
 
 ## 按住不放的视角键（WASD、Q/E、R/F、Z/X）。在输入框里打字、按着 Ctrl 或 Alt、焦点在别的窗口时不管。
 func _poll_camera_keys(delta: float) -> void:
-	if main.tech_tree.visible:
+	if main.game_input_blocked():
+		_drag_button = MOUSE_BUTTON_NONE
 		return
-	if not get_window().has_focus() or get_viewport().gui_get_focus_owner() is LineEdit \
+	if not get_window().has_focus() \
 			or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META):
 		return
 	var held := func(key: Key) -> float: return 1.0 if Input.is_physical_key_pressed(key) else 0.0
@@ -375,9 +376,9 @@ func _poll_camera_keys(delta: float) -> void:
 
 ## 一次性的视角键：H 回到母星、V 重置、T 俯视、G 切换网格。在输入框里打字时不管。
 func _camera_key(key: InputEventKey) -> bool:
-	if main.tech_tree.visible:
+	if main.game_input_blocked():
 		return false
-	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed or get_viewport().gui_get_focus_owner() is LineEdit:
+	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
 		return false
 	match key.physical_keycode:
 		KEY_H:
@@ -412,7 +413,8 @@ func _over_ui() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if main.tech_tree.visible:
+	if main.game_input_blocked():
+		_drag_button = MOUSE_BUTTON_NONE
 		return
 	if event is InputEventKey:
 		var key := event as InputEventKey

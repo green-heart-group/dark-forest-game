@@ -108,7 +108,7 @@
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
 - **快捷键**：Ctrl / Alt 组合键、Shift+Enter 和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
   视角键在 `map_view.gd`（按住的 WASD 等每帧查，H、V、T、G 在 `_camera_key`）。新加快捷键前先看这两处，别撞键；
-  认键的位置（`physical_keycode`），在输入框里打字时不响应。
+  认键的位置（`physical_keycode`），在输入框里打字时不响应。事件和每帧相机轮询都通过 `main.game_input_blocked()` 检查弹窗、读档和单行/多行输入，不各自维护不同的判断。
 - **界面大小**：按 1280×800 等比缩放（项目设置 `canvas_items` + `expand`），再乘上 `ui_scale`
   （Ctrl + 加号 / 减号，0.6～1.3）。`ui_scale` 不超过 1 时界面坐标至少有 1280×800，不用为更小的窗口另排版；
   玩家自己放大时（最大 1.3 倍，界面坐标约 985×615）面板要滚动才看得全。

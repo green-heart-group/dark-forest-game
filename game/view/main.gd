@@ -231,6 +231,13 @@ func _input(event: InputEvent) -> void:
 	_on_key(event, get_viewport())
 
 
+## 事件快捷键与每帧相机轮询共用，弹窗的焦点可能属于另一个 Viewport。
+func game_input_blocked() -> bool:
+	var focus := get_viewport().gui_get_focus_owner()
+	return tech_tree.visible or saves.modal_open() or overlay._restart_dialog.visible \
+			or focus is LineEdit or focus is TextEdit
+
+
 ## 快捷键。调试面板是单独的窗口，焦点在它上面时按键也转到这里（from 是收到按键的那个窗口）。
 func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
@@ -246,11 +253,10 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 			saves.cancel()
 		from.set_input_as_handled()
 		return
-	if from == get_viewport() and (saves.modal_open() or overlay._restart_dialog.visible):
+	if from == get_viewport() and game_input_blocked():
 		return
 	# 只在游戏窗口接游戏操作键；输入框和弹窗保留原有键盘操作。
-	if from == get_viewport() and not from.gui_get_focus_owner() is LineEdit and not from.gui_get_focus_owner() is TextEdit \
-			and not saves._dialog.visible and not overlay._restart_dialog.visible:
+	if from == get_viewport():
 		if _game_key(key):
 			from.set_input_as_handled()
 			return
