@@ -18,6 +18,13 @@ const RULE_NAMES := {
 	Action.BROADCAST: "broadcast", Action.FOIL: "launch_foil", Action.LINE_FOIL: "launch_line_foil",
 	Action.DOMAIN: "launch_black_domain", Action.SINGULARITY: "launch_singularity",
 }
+## 只用于收起尚未解锁的入口；执行条件仍由规则判断。
+const ACTION_TECH := {
+	Action.DISPATCH: "probe", Action.COLONY: "colony", Action.STARSHIP: "starship",
+	Action.SETTLE: "starship", Action.GRAIN: "grain", Action.ANTIMATTER: "antimatter",
+	Action.SOPHON: "sophon", Action.BROADCAST: "broadcaster", Action.FOIL: "dimension",
+	Action.LINE_FOIL: "dimension", Action.DOMAIN: "domain", Action.SINGULARITY: "dimension",
+}
 
 var main: Node
 var state: GameState:
@@ -228,8 +235,6 @@ func refresh(me: Civ) -> void:
 		_action = Action.LINE_FOIL
 	elif not state.all_flat() and _action == Action.LINE_FOIL:
 		_action = Action.FOIL
-	_action_tiles[Action.FOIL].visible = not state.all_flat()
-	_action_tiles[Action.LINE_FOIL].visible = state.all_flat()
 	_pitch_box.visible = not state.all_flat()
 	_yaw_box.visible = not state.all_linear()
 	_line_dirs.visible = state.all_linear()
@@ -247,6 +252,11 @@ func refresh(me: Civ) -> void:
 	var specs := _action_specs()
 	for a in _action_tiles:
 		var tile := _action_tiles[a]
+		tile.visible = a == _action or main.panel.show_locked.button_pressed or me.has_tech(ACTION_TECH[a])
+		if a == Action.FOIL:
+			tile.visible = tile.visible and not state.all_flat()
+		elif a == Action.LINE_FOIL:
+			tile.visible = tile.visible and state.all_flat()
 		var reason := _block(me, a)
 		tile.button_pressed = a == _action
 		tile.modulate.a = 1.0 if reason == "" else 0.5

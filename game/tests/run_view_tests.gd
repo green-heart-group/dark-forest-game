@@ -95,6 +95,7 @@ func run_tests() -> void:
 	await process_frame
 	await run(test_panel_layout)
 	await run(test_panel_width)
+	await run(test_locked_options)
 	await run(test_ui_helpers)
 	await capture("start")
 	await run(test_research)
@@ -457,6 +458,40 @@ func test_panel_width() -> void:
 
 
 ## 悬停说明限宽换行；行动说明不占面板，放在悬停说明里；界面大小有上下限。
+func test_locked_options() -> void:
+	var s := fixture()
+	show_state(s)
+	panel.show_locked.button_pressed = false
+	actions._action = actions.Action.DISPATCH
+	view.refresh()
+	check(panel._build_tiles["probe"].visible and not panel._build_tiles["warship"].visible,
+			"开局显示已解锁建造，收起未解锁建造")
+	check(not actions._action_tiles[actions.Action.GRAIN].visible and not panel._reduce_box.visible,
+			"开局收起高级行动和降维")
+	panel.show_locked.button_pressed = true
+	check(panel._build_tiles["warship"].visible and actions._action_tiles[actions.Action.GRAIN].visible,
+			"显示开关能查看未解锁项目")
+	check(panel._build_tiles["warship"].disabled, "显示不会绕过规则解锁")
+	panel.show_locked.button_pressed = false
+	s.human().techs["warship"] = true
+	s.human().techs["grain"] = true
+	s.human().mineral = 0
+	view.refresh()
+	check(panel._build_tiles["warship"].visible and panel._build_tiles["warship"].disabled,
+			"获得科技后出现，缺资源仍可见")
+	check(actions._action_tiles[actions.Action.GRAIN].visible, "解锁后即使未备弹也显示行动")
+	for i in 8:
+		actions.cycle_action(1)
+		check(actions._action_tiles[actions._action].visible and s.human().has_tech(actions.ACTION_TECH[actions._action]),
+				"快捷键只遍历显示的已解锁行动")
+	actions._action = actions.Action.DOMAIN
+	view.refresh()
+	check(actions._action_tiles[actions.Action.DOMAIN].visible and actions._go.disabled,
+			"当前选中项保留并解释不能执行的原因")
+	actions._action = actions.Action.DISPATCH
+	show_state(fixture())
+
+
 func test_ui_helpers() -> void:
 	var tile: Button = actions._action_tiles[actions.Action.DISPATCH]
 	check(tile.get_script() == view.Tip, "面板里的按钮挂上了限宽的悬停说明")
