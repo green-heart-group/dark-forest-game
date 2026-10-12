@@ -105,6 +105,7 @@ func run_tests() -> void:
 	await run(test_hover_intel)
 	await run(test_hover_stored_grain)
 	await run(test_camera)
+	await run(test_trackpad_and_action_footer)
 	await run(test_selection)
 	await run(test_grid_modes)
 	await run(test_ship_paths)
@@ -624,6 +625,74 @@ func test_camera() -> void:
 
 
 ## 只有星图上画出来的东西点得中；选中圈贴着东西的轮廓，东西小圈也小，不闪；点到空处、换局面时取消。
+func test_trackpad_and_action_footer() -> void:
+	show_state(fixture())
+	map.reset_view(true)
+	var pan := InputEventPanGesture.new()
+	pan.delta = Vector2(1.0, 0.5)
+	var before: Vector3 = map._goal_focus
+	var yaw: float = map._goal_yaw
+	map._unhandled_input(pan)
+	check(map._goal_focus.distance_to(before) > 0.01 and map._goal_yaw == yaw, "双指滑动只平移，不旋转")
+	var pinch := InputEventMagnifyGesture.new()
+	pinch.factor = 1.25
+	map._unhandled_input(pinch)
+	check(is_equal_approx(map._goal_distance, map.CAM_DISTANCE / 1.25), "双指张开拉近")
+	pinch.factor = 0.8
+	map._unhandled_input(pinch)
+	check(is_equal_approx(map._goal_distance, map.CAM_DISTANCE), "双指合拢拉远")
+	view.saves._dialog.visible = true
+	before = map._goal_focus
+	map._unhandled_input(pan)
+	map._unhandled_input(pinch)
+	check(map._goal_focus == before and is_equal_approx(map._goal_distance, map.CAM_DISTANCE), "弹窗隔离触控板手势")
+	view.saves._dialog.hide()
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.shift_pressed = true
+	press.pressed = true
+	press.position = Vector2(100, 100)
+	map._unhandled_input(press)
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(150, 120)
+	map._unhandled_input(motion)
+	check(map._goal_focus.distance_to(before) > 0.01 and map._goal_yaw == yaw, "Shift 加单键拖动平移，不旋转")
+	press.position = motion.position
+	press.pressed = false
+	map._unhandled_input(press)
+	check(panel._first_probe.visible, "开局给出第一艘探测器的操作提示")
+	panel._first_probe.pressed.emit()
+	check_eq(panel._tabs.current_tab, 1, "提示打开建造页")
+	panel._build_tiles["probe"].pressed.emit()
+	check_eq(panel._tabs.current_tab, 2, "造好单位自动进入行动页")
+	check(not panel._first_probe.visible and not actions._go.disabled, "造好探测器后可立即派出，不再显示建造提示")
+	var old_size := root.size
+	var old_scale: float = view.window_settings.ui_scale
+	for window_size in [Vector2i(1280, 800), Vector2i(1000, 650), Vector2i(600, 900)]:
+		root.size = window_size
+		view.window_settings._responsive_size()
+		view.window_settings.apply_ui_scale(1.3)
+		await process_frame
+		view.show_panel(2)
+		await process_frame
+		await process_frame
+		var scroll := panel._tabs.get_child(2) as ScrollContainer
+		for position in [0, 10000]:
+			scroll.scroll_vertical = position
+			await process_frame
+			var rect: Rect2 = actions._go.get_global_rect()
+			check(rect.position.y >= 0 and rect.end.y <= root.get_visible_rect().end.y,
+					"%s 窗口滚动到 %d 时执行按钮仍在屏幕里" % [window_size, position])
+			check(rect.end.y <= panel._end.get_global_rect().position.y, "执行与结束回合不重叠")
+		panel._tabs.current_tab = 1
+		check(not actions.footer.visible, "其他页隐藏行动按钮")
+	root.size = old_size
+	view.window_settings._responsive_size()
+	view.window_settings.apply_ui_scale(old_scale)
+	await process_frame
+	view.show_panel(2)
+
+
 func test_selection() -> void:
 	var s := fixture()
 	show_state(s)

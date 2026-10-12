@@ -61,6 +61,8 @@ var _dist_label := Label.new()
 ## 算出来的目标格子（写在距离后面）
 var _target_info := Label.new()
 var _known_pick := OptionButton.new()
+## 放在面板的滚动区外，选择方向时仍能看到执行按钮。
+var footer := VBoxContainer.new()
 var _go := Button.new()
 ## 执行按钮下面的小字：为什么现在不能执行
 var _go_hint := Label.new()
@@ -152,11 +154,11 @@ func setup(p_main: Node) -> void:
 	_target_box.add_child(dist_row)
 	_go.custom_minimum_size.y = 36
 	_go.pressed.connect(_on_go)
-	detail.add_child(_go)
+	footer.add_child(_go)
 	_go_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_go_hint.add_theme_color_override("font_color", Color(1.0, 0.7, 0.4))
 	_go_hint.add_theme_font_size_override("font_size", 13)
-	detail.add_child(_go_hint)
+	footer.add_child(_go_hint)
 
 
 ## 输入坐标的一列（放在角度圆盘右边）：在星图上点不准时用。

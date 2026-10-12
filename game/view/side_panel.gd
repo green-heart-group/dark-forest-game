@@ -24,6 +24,7 @@ var _res_values: Dictionary[String, Label] = {}
 var _origin_pick := OptionButton.new()
 ## 科技、建造、行动、情况四页
 var _tabs := TabContainer.new()
+var _first_probe := Button.new()
 ## 射电望远镜和预警范围的升级按钮
 var _upgrade_tiles: Dictionary[String, Button] = {}
 ## 每一级科技现在开没开放
@@ -63,6 +64,11 @@ func setup(p_main: Node) -> void:
 	_origin_pick.item_selected.connect(func(_i): main.refresh())
 	origin_row.add_child(_origin_pick)
 	outer.add_child(origin_row)
+	_first_probe.text = "先造探测器 → 选方向 → 派出 → 结束回合"
+	_first_probe.add_theme_font_size_override("font_size", 13)
+	_first_probe.tooltip_text = "点击打开建造页。造好探测器后会自动进入行动页，在星图点方向，再按派出。"
+	_first_probe.pressed.connect(func(): _tabs.current_tab = 1)
+	outer.add_child(_first_probe)
 
 	actions.setup(main)
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -73,6 +79,7 @@ func setup(p_main: Node) -> void:
 		_tabs.set_tab_title(_tabs.get_tab_count() - 1, page[0])
 	_tabs.current_tab = 2
 	_tabs.tab_changed.connect(func(_tab): main.refresh())
+	outer.add_child(actions.footer)
 
 	_feedback.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_feedback.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
@@ -184,6 +191,8 @@ func set_feedback(text: String) -> void:
 ## 按现在的局面刷新整个面板。
 func refresh(me: Civ) -> void:
 	_refresh_origins(me)
+	_first_probe.visible = state.turn == 1 and me.ships.is_empty()
+	actions.footer.visible = _tabs.current_tab == 2
 	actions.refresh(me)
 	var finished := state.is_over() and not state.collapse_pending()
 	_end.text = "🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合"
@@ -431,6 +440,7 @@ func _on_build(kind: String) -> void:
 	var ship = r.get("ship")
 	if ship != null:
 		actions.select_unit(ship)
+		_tabs.current_tab = 2
 	main.refresh()
 
 

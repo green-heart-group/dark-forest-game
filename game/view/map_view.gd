@@ -92,7 +92,7 @@ const KEY_TURN_SPEED := 90.0
 const KEY_PAN_SPEED := 0.6
 const KEY_ZOOM_SPEED := 1.8
 ## 视角操作说明（星图左上角「操作」里显示）
-const CONTROLS_TEXT := "左键拖动：旋转　右键 / 中键拖动：平移　滚轮：缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格\n一维时：拖动和 A / D 沿直线走，V 回到自己的据点"
+const CONTROLS_TEXT := "拖动：旋转　Shift + 拖动 / 右键 / 中键：平移　滚轮：缩放\n触控板：双指滑动平移，捏合缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格\n一维时：拖动和 A / D 沿直线走，V 回到自己的据点"
 
 ## 网格怎么画（F4.2）：点阵；视野内画网格线；点阵加视野内的网格线；完整网格线
 enum Grid { DOTS, VISION_LINES, DOTS_AND_VISION, ALL_LINES }
@@ -138,6 +138,7 @@ var _goal_pitch := CAM_PITCH
 var _goal_distance := CAM_DISTANCE
 ## 正在用哪个鼠标键拖动（没在拖动时为 MOUSE_BUTTON_NONE）：左键旋转，右键、中键平移
 var _drag_button := MOUSE_BUTTON_NONE
+var _drag_pan := false
 var _last_pointer := Vector2.ZERO
 ## 网格画法（Grid 里的一个）
 var grid_mode := Grid.DOTS
@@ -420,6 +421,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		var key := event as InputEventKey
 		if key.pressed and not key.echo and _camera_key(key):
 			get_viewport().set_input_as_handled()
+	elif event is InputEventPanGesture:
+		if not _over_ui():
+			# Godot 的双指滚动单位约为鼠标滚轮的一格，换成画面像素。
+			_pan(-event.delta.x * 20.0, event.delta.y * 20.0)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMagnifyGesture:
+		if not _over_ui() and event.factor > 0.0:
+			_zoom(1.0 / event.factor)
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
@@ -431,9 +441,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed:
 			if _drag_button == MOUSE_BUTTON_NONE:
 				_drag_button = mb.button_index
+				_drag_pan = mb.button_index != MOUSE_BUTTON_LEFT or mb.shift_pressed
 				_press_pos = mb.position
 				_last_pointer = mb.position
-			if mb.button_index == MOUSE_BUTTON_LEFT and mb.double_click:
+			if mb.button_index == MOUSE_BUTTON_LEFT and not _drag_pan and mb.double_click:
 				var obj := _pick_object(mb.position)
 				var c := _nearest_cell(mb.position)
 				if not obj.is_empty():
@@ -442,7 +453,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					focus_on(Vector3(c))
 		elif mb.button_index == _drag_button:
 			_drag_button = MOUSE_BUTTON_NONE
-			if mb.button_index == MOUSE_BUTTON_LEFT and mb.position.distance_to(_press_pos) < 5.0:
+			if mb.button_index == MOUSE_BUTTON_LEFT and not _drag_pan and mb.position.distance_to(_press_pos) < 5.0:
 				# 点中东西才算选中；点到空处取消选中，但还是可以瞄准那一格
 				var obj := _pick_object(mb.position)
 				select_object(obj)
@@ -453,7 +464,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mm := event as InputEventMouseMotion
 		var movement := mm.position - _last_pointer
 		_last_pointer = mm.position
-		if _drag_button == MOUSE_BUTTON_LEFT:
+		if not _drag_pan:
 			_turn(-movement.x * 0.3, -movement.y * 0.3)
 			_yaw = _goal_yaw  # 拖动旋转直接跟手，不用追
 			_pitch = _goal_pitch
