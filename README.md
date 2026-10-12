@@ -58,10 +58,10 @@
 
 - 🔭 **视野和光速情报**：星系和舰船只看得到周围一小片。探测器边飞边看，看到的情报按光速传回，越旧越不可靠。
 - 🔬 **科技树**：实际收到的发现、接触、侦察战报与净经常产能共同决定等级权限。
-- ✨ **多种打击手段**：光粒一击毁掉整个星系，但要飞好几个回合；战舰守住附近、清除殖民船；
+- ✨ **多种打击手段**：光粒一击毁掉整个星系，但要飞好几个回合；战舰守住附近、清除运输船；
   二向箔把整张星图压成平面，单向著再把平面压成直线；奇异点也按实际空间传播与存续结算。
 - 🕳️ **防守和躲藏**：黑域让一片空间的光速变慢，光粒在里面没有杀伤力，但舰船、情报也跟着变慢，困久了会出不来。
-  预警系统报告来袭，反物质拦战舰，掩体挡光粒，实体收到准备资格后可在前沿到达时迁维。
+  预警系统报告来袭，反物质炸弹打击已知目标，掩体挡光粒，实体收到准备资格后可在前沿到达时迁维。
 - 📢 **借刀杀人**：广播别人的坐标，可能引来隐藏文明的打击，自己却不暴露。
 - 🛸 **星舰文明**：星系全丢了，只要还有星舰就能活下去，通过付费运输与落地工程恢复殖民。
 - ⭐ **恒星和行星**：裂变、聚变、戴森球与真实采矿提供收入，固定维护制约扩张；每年固定行动点，母星可并行施工，具体容量见[建造规则](docs/design/current-rules.md#建造)。
@@ -82,7 +82,8 @@
 
 Mac 在「 → 关于本机」看芯片，下载对应 ZIP，双击解压，把 `dark-forest.app` 拖到「应用程序」后打开。当前试玩包尚未经过 Apple 公证，首次打开可能被系统阻止；处理方法见 [Apple 的官方说明](https://support.apple.com/102445)，也可以先玩网页版。不要下载 Source code 或名字带 `-dev` 的包来代替普通游戏。
 
-公开的 v0.0.2-test 不含当前源码新增的自动继续、原生 Mac 菜单和触控板改进；这些功能需要新版本发布。操作入门见下方 [操作](#操作)。
+网页版和公开的 v0.0.2-test 都是 V0.1 之前的原型规则（行动点随恒星和殖民地变化、建造立刻完成），也没有自动继续、原生 Mac 菜单和触控板改进。
+上面的玩法亮点、下方 [操作](#操作) 和完整规则写的是这个分支的源码，要从源码运行才能玩到，等新版本发布后试玩包才会跟上。
 
 ### 准备
 
@@ -119,7 +120,7 @@ godot --path game --editor
 - 左键拖动旋转，滚轮缩放；单击星图选中目标，右侧面板分科技、建造、行动、情况四页，最后按「结束回合」。
   研究、建造、派出单位、发射武器各花 1 个行动点；研究和建造还须完成工时。鼠标停在按钮上能看到说明。
 - 看星图、存档读档、快捷键、界面大小见 [操作说明](docs/guides/controls.md)。
-- 按 F12 打开开发者调试面板，`godot --path game -- watch seed=123` 开一局全由 AI 打的观战局，详见 [调试模式](docs/guides/debug-tools.md)。
+- 从源码运行或用 `-dev` 包时按 F12 打开开发者调试面板（普通试玩包要加 `-- debug`），`godot --path game -- watch seed=123` 开一局全由 AI 打的观战局，详见 [调试模式](docs/guides/debug-tools.md)。
 
 ## 开发
 
@@ -163,7 +164,7 @@ godot_console --headless --path game --script res://tools/simulate.gd
 godot_console --headless --path game --script res://tools/simulate.gd -- PROFILE=1 RUNS=10
 
 # 临时覆盖 balance.cfg 里的数值（整数或小数；数组、字典要用数值方案）
-godot_console --headless --path game --script res://tools/simulate.gd -- TIER3_ENERGY=40 RUNS=100
+godot_console --headless --path game --script res://tools/simulate.gd -- COST_PROBE=8 RUNS=100
 
 # 用一个数值方案（game/balance_presets/ 里的，或调试面板里存的自己的方案）
 godot_console --headless --path game --script res://tools/simulate.gd -- PRESET=方案名

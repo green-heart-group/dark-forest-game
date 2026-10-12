@@ -18,6 +18,7 @@
 | --- | --- |
 | `game_state.gd` | 一局状态与统一行动入口；连续计算由下列专门模块协作 |
 | `world_time.gd`、`kinematics.gd` | 连续时钟、加速、限速、到达和分段运动 |
+| `event_queue.gd`、`view_marks.gd` | 连续结算的事件表（取最早的一件，把世界推到那一刻）；看视野时只重看变了的东西和预测会进入视野的几对。都不存档、不算进校验值 |
 | `economy.gd`、`work_order.gd`、`construction.gd`、`order_control.gd` | 千分资源、维护休眠、工程托管、远程开工和取消回执 |
 | `assets.gd`、`earth_transform.gd`、`conversion.gd` | 永久实体、流浪地球、冻结名册与逐实体迁维收据 |
 | `navigation_preview.gd` | 用已知位置、介质和已收威胁比较当前与下一维的距离、航时、射程和准备余量；不修改对局 |
@@ -57,8 +58,8 @@
     不要自己 `get` / `set` 脚本，类型检查只写在这一处。Python 工具读 `balance.cfg` 都用 `sync_balance.py` 的 `read_cfg()`。
   - 数值方案只存和 `balance.cfg` 不一样的值。
 - **行动要花多少、为什么不能做，只写一次**，写在 `GameState` 里：
-  - 花费：`action_cost(规则函数名)`、`dispatch_cost(单位)`、`build_cost(文明, 种类)`（战舰带的武器也算上），
-    科技是 `Tech.cost()`，自身降维是 `Civ.reduce_cost()`（按带上的单位数算）；
+  - 花费：`action_cost(规则函数名)`、`command_cost(文明, 单位)`（派出和转向共用，探测器、殖民船和有暗能量时免费，聚变、反物质收集有折扣）、
+    `build_cost(文明, 种类)`（战舰带的武器也算上），科技是 `Tech.cost()`，自身降维是 `Conversion.quote()`（按冻结名册里的实体数算）；
   - 不能做的原因：每个行动一个 `xxx_error()`，能做时返回空字符串。行动函数自己先调用它，画面也调用它来显示按钮能不能按、为什么。
   - 目标还没选时传 `GameState.ANY_TARGET`，只检查和目标无关的条件（钱、行动点、科技）。
   - AI 也用这些函数，不自己写花费和条件。AI 要挑「钱不够、攒够了就能升」的科技时用 `research_block_error()`（除了钱以外的原因）。
@@ -67,9 +68,8 @@
 - **提速**可以用近似、可以改变结果，标准是玩家看不出来。有三条不能破：
   情报只许晚到、不许早到（不然就是泄露）；AI 和玩家拿到的近似一样；同一版本里「同样的种子 + 同样的操作 = 同样的对局」照旧成立（上一条的对局记录靠它）。
   先用平衡模拟的 `PROFILE=1` 找出慢在哪；改完以后，同样的 `RUNS` 跑出来的胜率、对局长度等统计要和改之前差不多（在多跑几次本来就有的波动范围内），校验值可以变。
-  现在有的几处捷径：回合末所有文明看一遍之前，`_begin_view_cache()` 先把这段时间里不会变的东西算好
-  （星系格子按位置分好、光速几乎为 0 的格子、星系快照），看完就清空；
-  `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
+  现在有的几处捷径：`Geometry._along` 只扫线段附近的小方盒；`_begin_view_cache()`（星系格子按位置分好、光速几乎为 0 的格子、星系快照）
+  现在只在 `test_speedups_match_plain_checks` 里用来和直接算的结果对照，连续结算时看视野走下面的分桶和 `view_marks.gd`。
   一次回合推进里文明的星系、舰船、设施和科技个数都没变时，沿用上次的运营包（`Economy._cached_packages`）；
   在途消息按到达的刻度分组，收消息时只看到时候的那几组（`Signals._indexed`）；只有几个格子降了维时，只重算路线穿过它们的消息和广播光线（`Signals.retime`、`Information._swap_medium`）。
   按 ID 找舰船、设施先看上次的位置（`Civ.ship_by_id`、`Civ.asset_by_id`）；只关心附近星系时用 `Geometry.cells_near` 先粗筛，顺序和全部看一遍一样。

@@ -75,7 +75,7 @@
 3. 定下来的每一条都有编号（问题编号，或试玩意见的 Fk.n），在 [决定记录](design/decision-log.md)
    加一行，写进 [design/game-design.md](design/game-design.md) 的正文并标上编号；
    讨论过程留在提议里，或挪到 [design/archive/](design/archive/README.md) 存档。
-   问题清单中的讨论过程先挪到存档，再把答完的问题从 open-questions.md 删掉，在文件末尾「已经答完的」表里记一笔。
+   问题清单中的讨论过程先挪到存档，再把答完的问题从 open-questions.md 删掉，在文件末尾「已经答完的」一节里记一笔。
    平台、分支这类项目上的决定，另记一条 [decisions/](decisions/README.md)。
 4. 实现以后，按下面的[同步要求](#修改后同步哪些文档)更新文档。
 
