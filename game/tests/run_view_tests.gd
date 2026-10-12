@@ -126,6 +126,7 @@ func run_tests() -> void:
 	await run(test_save_load)
 	await run(test_continue_and_quit_protection)
 	await run(test_modal_input_isolation)
+	await run(test_desktop_file_controls)
 	await run(test_save_across_dimensions)
 	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
@@ -272,6 +273,40 @@ func test_modal_input_isolation() -> void:
 	check(not view.game_input_blocked(), "关闭弹窗和文本输入后恢复游戏操作")
 	check(map._camera_key(key), "恢复视角快捷键")
 	map.reset_view(true)
+
+
+func test_desktop_file_controls() -> void:
+	var saves = view.saves
+	var original_prefs: String = saves.prefs_path
+	saves.prefs_path = "user://_test_save_settings.cfg"
+	DirAccess.remove_absolute(saves.prefs_path)
+	var folder := ProjectSettings.globalize_path("user://")
+	saves._remember_directory(folder)
+	check_eq(saves._default_directory(), folder, "文件选择记住用户选的目录")
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.meta_pressed = OS.has_feature("macos")
+	key.ctrl_pressed = not key.meta_pressed
+	key.keycode = KEY_S
+	view._on_key(key, root)
+	check(saves.modal_open() and saves._dialog.file_mode == FileDialog.FILE_MODE_SAVE_FILE, "平台主快捷键打开保存")
+	check_eq(saves._dialog.current_dir.trim_suffix("/"), folder.trim_suffix("/"), "保存打开上次目录")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	key.keycode = KEY_O
+	view._on_key(key, root)
+	check(saves.modal_open() and saves._dialog.file_mode == FileDialog.FILE_MODE_OPEN_FILE, "平台主快捷键打开读取")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	view.desktop_menu._activate(2)
+	check_eq(saves._dialog.current_dir, ProjectSettings.globalize_path(saves.DIR), "旧存档菜单仍可找到原来的文件")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	check(not saves.modal_open(), "取消原生文件选择后恢复游戏输入")
+	if OS.has_feature("macos"):
+		check_eq(view.shortcut_text("Ctrl+S / Alt+1"), "⌘+S / Option+1", "Mac 帮助使用本机键名")
+	DirAccess.remove_absolute(saves.prefs_path)
+	saves.prefs_path = original_prefs
 
 
 func test_game_shortcuts_and_compact_layout() -> void:

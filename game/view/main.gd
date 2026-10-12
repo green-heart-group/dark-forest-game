@@ -14,6 +14,7 @@ const Tip := preload("res://view/tip.gd")
 const WebFiles := preload("res://view/web_files.gd")
 const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
+const DesktopMenu := preload("res://view/desktop_menu.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -24,6 +25,7 @@ var panel := SidePanel.new()
 var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
 var saves := SavedGames.new()
+var desktop_menu := DesktopMenu.new()
 var tech_tree := TechTree.new()
 var panel_toggle := Button.new()
 var compact := false
@@ -71,8 +73,10 @@ func _ready() -> void:
 	_layer.add_child(panel)
 	add_child(saves)
 	saves.setup(self)
+	desktop_menu.setup(self)
+	_layer.add_child(desktop_menu)
 	panel_toggle.text = "收起面板"
-	panel_toggle.tooltip_text = "展开或收起操作面板（Ctrl+B）"
+	panel_toggle.tooltip_text = shortcut_text("展开或收起操作面板（Ctrl+B）")
 	panel_toggle.anchor_left = 1.0
 	panel_toggle.anchor_right = 1.0
 	panel_toggle.offset_left = -120
@@ -238,6 +242,14 @@ func game_input_blocked() -> bool:
 			or focus is LineEdit or focus is TextEdit
 
 
+static func command_pressed(key: InputEventKey) -> bool:
+	return key.ctrl_pressed or (OS.has_feature("macos") and key.meta_pressed)
+
+
+static func shortcut_text(text: String) -> String:
+	return text.replace("Ctrl", "⌘").replace("Alt", "Option") if OS.has_feature("macos") else text
+
+
 ## 快捷键。调试面板是单独的窗口，焦点在它上面时按键也转到这里（from 是收到按键的那个窗口）。
 func _on_key(event: InputEvent, from: Viewport) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo:
@@ -260,7 +272,7 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 		if _game_key(key):
 			from.set_input_as_handled()
 			return
-	if key.ctrl_pressed and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
+	if command_pressed(key) and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
 		var step := 0.0 if key.keycode in [KEY_0, KEY_KP_0] else (-0.1 if key.keycode in [KEY_MINUS, KEY_KP_SUBTRACT] else 0.1)
 		window_settings.set_ui_scale(window_settings.default_ui_scale() if step == 0.0
 				else window_settings.ui_scale + step)
@@ -326,7 +338,7 @@ func update_layout() -> void:
 
 
 func _game_key(key: InputEventKey) -> bool:
-	if key.ctrl_pressed:
+	if command_pressed(key):
 		match key.keycode:
 			KEY_B:
 				toggle_panel()

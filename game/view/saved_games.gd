@@ -17,18 +17,26 @@ var _session_ready := false
 var _saved_revision: Array = []
 var _resume_dialog := ConfirmationDialog.new()
 var _quit_dialog := ConfirmationDialog.new()
+## 原生文件选择器不一定使 Godot Window.visible 为 true，单独跟踪其生命周期。
+var _file_dialog_open := false
+var prefs_path := "user://settings.cfg"
 
 
 func setup(p_main: Node) -> void:
 	main = p_main
 	_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_dialog.use_native_dialog = OS.has_feature("macos") and DisplayServer.get_name() != "headless"
+	_dialog.mode_overrides_title = false
 	_dialog.filters = PackedStringArray(["*.forest ; 黑暗森林存档"])
 	_dialog.size = Vector2i(700, 500)
 	_dialog.file_selected.connect(func(path):
+		_file_dialog_open = false
+		_remember_directory(path.get_base_dir())
 		if _dialog.file_mode == FileDialog.FILE_MODE_SAVE_FILE:
 			save_file(path)
 		else:
 			load_file(path))
+	_dialog.canceled.connect(func(): _file_dialog_open = false)
 	add_child(_dialog)
 	_progress.title = "读取存档"
 	_progress.ok_button_text = "取消"
@@ -38,9 +46,14 @@ func setup(p_main: Node) -> void:
 	_resume_dialog.title = "欢迎回来"
 	_resume_dialog.dialog_text = "发现上次自动保存的对局。继续游戏，还是开始新的一局？"
 	_resume_dialog.ok_button_text = "继续上次对局"
-	_resume_dialog.cancel_button_text = "新开一局"
+	_resume_dialog.cancel_button_text = "退出游戏"
+	_resume_dialog.add_button("新开一局", true, "new")
 	_resume_dialog.confirmed.connect(func(): load_file(continue_path))
-	_resume_dialog.canceled.connect(func(): _session_ready = true; save_if_changed())
+	_resume_dialog.canceled.connect(main.request_quit)
+	_resume_dialog.custom_action.connect(func(_action):
+		_resume_dialog.hide()
+		_session_ready = true
+		save_if_changed())
 	add_child(_resume_dialog)
 	_quit_dialog.title = "尚未保存，暂未退出"
 	_quit_dialog.dialog_text = "自动保存失败。请重试，或返回游戏用「保存」选择另一个位置。"
@@ -63,7 +76,7 @@ func begin_session(offer_resume := true) -> void:
 
 
 func modal_open() -> bool:
-	return busy or _dialog.visible or _resume_dialog.visible or _quit_dialog.visible
+	return busy or _file_dialog_open or _dialog.visible or _resume_dialog.visible or _quit_dialog.visible
 
 
 func _resume_failed(path: String) -> void:
@@ -106,13 +119,13 @@ func prepare_exit() -> bool:
 	return false
 
 
-func open_dialog(save: bool) -> void:
-	if busy or (main.debug != null and main.debug.seeking):
+func open_dialog(save: bool, legacy := false) -> void:
+	if modal_open() or (main.debug != null and main.debug.seeking):
 		return
 	if main.debug != null:
 		main.debug.pause()
 	DirAccess.make_dir_recursive_absolute(DIR)
-	var name := "%s-seed%d-t%d.forest" % [Time.get_datetime_string_from_system().replace(":", "-"), main.state.seed_value, main.state.turn]
+	var name := "黑暗森林-第%d回合-%s.forest" % [main.state.turn, Time.get_datetime_string_from_system().replace(":", "")]
 	if WebFiles.is_web():
 		if save:
 			var path := DIR.path_join(name)
@@ -123,9 +136,30 @@ func open_dialog(save: bool) -> void:
 		return
 	_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if save else FileDialog.FILE_MODE_OPEN_FILE
 	_dialog.title = "保存对局" if save else "读取对局"
-	_dialog.current_dir = ProjectSettings.globalize_path(DIR)
+	_dialog.ok_button_text = "保存" if save else "读取"
+	_dialog.cancel_button_text = "取消"
+	_dialog.current_dir = ProjectSettings.globalize_path(DIR) if legacy else _default_directory()
 	_dialog.current_file = name if save else ""
+	_file_dialog_open = true
 	_dialog.popup_centered()
+
+
+func _default_directory() -> String:
+	var cfg := ConfigFile.new()
+	cfg.load(prefs_path)
+	var last: String = cfg.get_value("saves", "directory", "")
+	if last != "" and DirAccess.dir_exists_absolute(last):
+		return last
+	if OS.has_feature("macos"):
+		return OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+	return ProjectSettings.globalize_path(DIR)
+
+
+func _remember_directory(path: String) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(prefs_path)
+	cfg.set_value("saves", "directory", path)
+	cfg.save(prefs_path)
 
 
 static func collapse_stamp(s: GameState) -> Array:

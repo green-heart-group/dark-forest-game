@@ -121,7 +121,7 @@ func _resource_bar() -> HBoxContainer:
 func _build_tech_page() -> VBoxContainer:
 	var box := Widgets.page_box()
 	var open := Button.new()
-	open.text = "打开全屏科技树 · Alt+1"
+	open.text = main.shortcut_text("打开全屏科技树 · Alt+1")
 	open.custom_minimum_size.y = 48
 	open.pressed.connect(func(): main.tech_tree.open_tree())
 	box.add_child(open)
