@@ -40,6 +40,7 @@ var autosave_path := Replay.DIR.path_join("last.replay")
 
 func _ready() -> void:
 	get_window().title = WINDOW_TITLE
+	get_tree().auto_accept_quit = false
 	var seed_value := randi() % 1000000
 	# 命令行参数（写在 `--` 后面）：
 	#   seed=123            指定种子，重现同一张星图
@@ -104,6 +105,18 @@ func _ready() -> void:
 		debug.load_replay(replay_path)
 	elif debug != null and debug.default_preset() != "":
 		debug.new_game(seed_value, false)  # 用调试面板里设的「新开一局时用的方案」
+	if DisplayServer.get_name() != "headless":
+		saves.begin_session(args.is_empty())
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and is_instance_valid(saves) and saves.main != null:
+		request_quit()
+
+
+func request_quit() -> void:
+	if saves.prepare_exit():
+		get_tree().quit()
 
 
 ## 画面显示的是哪个文明看到的（平时是玩家，调试时可以换成任意文明）。
@@ -141,6 +154,7 @@ func refresh() -> void:
 	tech_tree.refresh(me)
 	if debug != null:
 		debug.refresh_panel()
+	saves.save_if_changed()
 
 
 ## 换一个局面（新开一局、回放跳到别的回合）：重画网格，不播放压平的动画。
@@ -232,7 +246,7 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 			saves.cancel()
 		from.set_input_as_handled()
 		return
-	if from == get_viewport() and (saves._dialog.visible or overlay._restart_dialog.visible):
+	if from == get_viewport() and (saves.modal_open() or overlay._restart_dialog.visible):
 		return
 	# 只在游戏窗口接游戏操作键；输入框和弹窗保留原有键盘操作。
 	if from == get_viewport() and not from.gui_get_focus_owner() is LineEdit and not from.gui_get_focus_owner() is TextEdit \

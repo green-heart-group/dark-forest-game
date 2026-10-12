@@ -86,8 +86,8 @@ func run_tests() -> void:
 	panel_script.set("prefs_path", "user://_test_debug.cfg")
 	DirAccess.remove_absolute("user://_test_debug.cfg")
 	view = load("res://view/main.tscn").instantiate()
-	root.add_child(view)
 	view.autosave_path = ""  # 不覆盖玩家自己的 last.replay
+	root.add_child(view)
 	map = view.map
 	panel = view.panel
 	actions = view.panel.actions
@@ -124,6 +124,7 @@ func run_tests() -> void:
 	await run(test_debug_presets)
 	await run(test_debug_after_death)
 	await run(test_save_load)
+	await run(test_continue_and_quit_protection)
 	await run(test_save_across_dimensions)
 	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
@@ -192,6 +193,48 @@ func test_save_load() -> void:
 	check_eq(Balance.values(), defaults, "取消恢复读档前的数值")
 	view.saves.slice_msec = 50
 	DirAccess.remove_absolute(path)
+
+
+func test_continue_and_quit_protection() -> void:
+	view.debug.pause()
+	view.debug.replay = null
+	view.debug.view_idx = 0
+	var saves = view.saves
+	var original_path: String = saves.continue_path
+	var path := "user://_test_continue.forest"
+	saves.continue_path = path
+	DirAccess.remove_absolute(path)
+	view.autosave_path = "user://_test_continue.replay"
+	show_state(GameState.new_game(1))
+	saves.begin_session()
+	view.state.build(view.state.human(), "probe")
+	view.refresh()
+	var expected: int = view.state.checksum()
+	check(FileAccess.file_exists(path), "回合内操作自动保存")
+	# 模拟重新启动：尚未选择继续时刷新新星图不能覆盖旧存档。
+	saves._session_ready = false
+	show_state(GameState.new_game(2))
+	saves.begin_session()
+	check(saves._resume_dialog.visible, "重新打开时提供继续")
+	saves._resume_dialog.hide()
+	await saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "继续恢复回合内已造好的探测器")
+	view.end_turn()
+	expected = view.state.checksum()
+	check(saves.prepare_exit(), "退出前保存成功才允许退出")
+	saves._session_ready = false
+	show_state(GameState.new_game(3))
+	await saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "退出后的继续包含最新回合")
+	saves.continue_path = path.path_join("cannot-write.forest")
+	check(not saves.prepare_exit(), "写入失败阻止退出")
+	check(saves._quit_dialog.visible, "保存失败可返回游戏或重试")
+	saves._quit_dialog.hide()
+	saves.continue_path = original_path
+	saves._session_ready = false
+	view.autosave_path = ""
+	DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute("user://_test_continue.replay")
 
 
 func test_game_shortcuts_and_compact_layout() -> void:
