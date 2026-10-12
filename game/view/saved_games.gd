@@ -275,3 +275,5 @@ func cancel() -> void:
 	_progress.hide()
 	main.refresh()
 	main.overlay.show_toast("已取消读档，原对局保留")
+	if not _session_ready:
+		_resume_dialog.popup_centered()

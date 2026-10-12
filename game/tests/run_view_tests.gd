@@ -228,6 +228,16 @@ func test_continue_and_quit_protection() -> void:
 	check(saves.prepare_exit(), "退出前保存成功才允许退出")
 	saves._session_ready = false
 	show_state(GameState.new_game(3))
+	var prior_save := FileAccess.get_file_as_bytes(path)
+	saves.slice_msec = 0
+	saves.load_file(path)
+	check(saves.busy, "启动继续也支持分帧读档")
+	saves.cancel()
+	await process_frame
+	check(saves._resume_dialog.visible and saves.modal_open(), "取消启动读档返回继续选择，不能进入未启用自动存档的新局")
+	check_eq(FileAccess.get_file_as_bytes(path), prior_save, "取消启动读档不覆盖原存档")
+	saves._resume_dialog.hide()
+	saves.slice_msec = 50
 	await saves.load_file(path)
 	check_eq(view.state.checksum(), expected, "退出后的继续包含最新回合")
 	saves.continue_path = path.path_join("cannot-write.forest")
