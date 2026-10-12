@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = []
 # ///
 """从官方 macos.zip 的 Universal 程序生成 Intel、Apple Silicon 两种导出模板。
@@ -11,6 +11,10 @@ export.py 在导出 Mac 前自动调用；也可单独运行，以便在 Godot �
 模板放在 build/macos_templates/，不进 Git；不会修改已安装的官方模板。
 只提取 Mach-O 中已有的程序，不重新编译；由 Godot 在最终导出时重新签名。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import argparse
 import copy

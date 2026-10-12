@@ -79,6 +79,7 @@ winget install --id GodotEngine.GodotEngine --exact --version 4.7.2
 ```
 
 运行测试和导出工具还需要 uv，安装方法见 [uv 官方安装指南](https://docs.astral.sh/uv/getting-started/installation/)。
+`game/tools/` 里的 Python 脚本都用 `uv run` 跑，它会自动准备 Python 3.12 和依赖；直接用 `python` 跑时，脚本会提示改用 uv。
 
 ### 运行
 

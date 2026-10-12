@@ -62,7 +62,7 @@
 - [design/](design/README.md)：设计说明：目标设计（要做成什么样）、决定记录、原型现在实际的规则和存档的旧资料。
 - [proposals/](proposals/README.md)：提议和试玩意见。有新想法或意见，就在这里加一个文件。
 - [decisions/](decisions/README.md)：项目上的重要决定（平台、分支等），记录选了什么、为什么这样选。
-- [guides/](guides/README.md)：开发指南：代码结构、Godot 入门和编辑器设置、开发者调试模式、让 AI 助手操作 Godot。
+- [guides/](guides/README.md)：开发指南：操作说明、导出和发布、代码结构、Godot 入门和编辑器设置、开发者调试模式、让 AI 助手操作 Godot。
 - 仓库首页的演示动图托管与更新方法见[代码指南](guides/code.md#测试和工具)；提议里的草图放在 `proposals/images/`。
 
 代码目录里也有一份说明：[game/balance_presets/README.md](../game/balance_presets/README.md)（共享的数值方案）。

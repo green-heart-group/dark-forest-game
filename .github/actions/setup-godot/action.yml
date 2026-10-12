@@ -50,7 +50,7 @@ runs:
 
     - uses: astral-sh/setup-uv@v6
       with:
-        python-version: "3.11"
+        python-version: "3.12"
         cache-dependency-glob: "game/tools/*.py"
 
     - name: 缓存下载的字体

@@ -29,7 +29,7 @@ jobs:
         with:
           cache-dependency-glob: "game/tools/*.py"
       - name: 检查跨平台导出流程
-        run: uv run --python 3.11 --no-project python -m unittest discover -s game/tests/tools
+        run: uv run --python 3.12 --no-project python -m unittest discover -s game/tests/tools
 
   tests:
     runs-on: ubuntu-latest

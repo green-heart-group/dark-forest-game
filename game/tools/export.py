@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["fonttools", "brotli"]
 # ///
 """跨平台导出工具：同步数值声明、准备网页字体、导入、导出并打包。
@@ -19,6 +19,10 @@ Windows、macOS、Linux 使用相同参数；按导出目标安装相应模板�
 macOS 直接由 Godot 导出 ZIP，保留 .app 的可执行权限，不能重新按普通文件打包。
 只在全部导出成功并检查过产物后，将临时目录里的结果复制到输出目录。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import argparse
 import plistlib

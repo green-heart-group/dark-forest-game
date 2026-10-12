@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["fonttools", "brotli"]
 # ///
 """做网页版要带的字体：网页里用不了电脑上装的字体（微软雅黑等），中文和 emoji 会变成方框。
@@ -13,6 +13,10 @@
 哪个字三种字体里都没有，会列出来（网页上会显示成方框）。
 三种字体都是 SIL Open Font License，可以随游戏一起发。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import urllib.request
 from pathlib import Path

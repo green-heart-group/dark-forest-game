@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["cogapp"]
 # ///
 """一条命令跑全部测试：先检查 Python 工具，再按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
@@ -25,6 +25,10 @@ GitHub 上跑完以后 docs/ 变了就算失败，说明提交的文档是旧的
 用哪个 Godot：有环境变量 GODOT 就用它，否则先找 godot_console（Windows 上会等程序跑完并显示输出），再找 godot。
 有失败时退出码为 1。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import argparse
 import json
