@@ -159,6 +159,8 @@
 | --- | --- |
 | `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见 [导出和发布](export.md) |
 | `game/tools/make_macos_templates.py` | 从已安装的官方通用模板提取 Intel、Apple Silicon 模板，输出到被忽略的构建目录；导出工具自动调用，也能为编辑器手动导出准备模板 |
+| `game/tools/sign_macos.py` | Mac 发布包的 Developer ID 签名、公证、票据和 Gatekeeper 验证；凭据从钥匙串读取，成功后生成新 ZIP，不覆盖输入或自动发布 |
+| `game/tests/tools/test_sign_macos.py` | 不使用真实 Apple 凭据，检查签名顺序、拒绝与超时、验证失败中止和原包保留 |
 | `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
 | `game/tests/tools/test_export.py` | 用 Python 标准库检查导出失败处理、完整产物、ZIP 内容和 Godot 路径；完整 `test.py` 会先跑它 |
 | `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |

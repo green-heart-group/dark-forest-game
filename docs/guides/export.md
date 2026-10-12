@@ -16,6 +16,7 @@
 
 也可以在 GitHub Actions 的「发布」页面手动选择分支运行：只检查和导出，不创建 Release 或部署网页；完成后在运行页面下载产物。
 CI 导出到 `build/release/`，发布前检查测试生成的文档和数值声明是否已提交，全部导出成功才上传。
+Release 同时附上玩家用的芯片选择、安装入口、普通版与调试版区别及签名状态；不会把临时签名标为已公证。
 
 ## 本地导出
 
@@ -54,3 +55,27 @@ uv run game/tools/export.py --help
 - Godot 的查找顺序是环境变量 `GODOT`、`godot_console`、`godot`；也可以用 `--godot "可执行文件路径"` 指定，路径有空格时加引号。
 - 每次导出都先在临时目录检查产物，通过后才复制到输出目录，避免上次的文件掩盖本次失败。
 - 导出工具不运行游戏测试，发布前仍需按 [README「测试和平衡模拟」](../../README.md#测试和平衡模拟)验证。
+
+## Mac 的正式签名和公证
+
+当前自动发布仍生成临时签名包。取得 Apple Developer ID Application 证书后，在 Mac 钥匙串中安装证书及私钥，并安装 Xcode 命令行工具。先用 `security find-identity -v -p codesigning` 确认有效身份。
+
+按 [Apple 的公证流程](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)配置凭据：运行 `xcrun notarytool store-credentials dark-forest-notary`，在终端交互提示中填写，凭据保存在钥匙串。不要把密码、私钥或证书密码写入仓库、导出预设或命令历史。
+
+先用上面的本地导出命令生成两个 Mac ZIP，再分别运行：
+
+```bash
+uv run game/tools/sign_macos.py build/dark-forest-macos-apple-silicon.zip \
+  --identity 'Developer ID Application: 证书中的完整名称 (TEAMID)' \
+  --keychain-profile dark-forest-notary --out-dir build/signed
+
+uv run game/tools/sign_macos.py build/dark-forest-macos-intel.zip \
+  --identity 'Developer ID Application: 证书中的完整名称 (TEAMID)' \
+  --keychain-profile dark-forest-notary --out-dir build/signed
+```
+
+工具只签名副本：启用 hardened runtime 和时间戳、验证签名、提交 Apple 并等待 Accepted、附加并验证公证票据、通过 Gatekeeper 检查，最后用 `ditto` 重新打包以保留权限。只有全部通过才生成输出；原包不变，已有签名包也不会被覆盖。当前游戏没有原生插件；以后加入嵌套框架或辅助程序时须先补内部签名步骤。
+
+如果公证等待超时，Apple 可能仍在处理。先根据工具输出的提交 ID，用 `xcrun notarytool info ID --keychain-profile dark-forest-notary` 查询，失败用 `log` 查看详情，避免盲目重复提交。
+
+发布者在另一台 Mac 下载并首次启动 `build/signed/` 中的最终 ZIP，验证后再上传并在发布说明中改为已公证。此工具不会创建 Release、上传 GitHub 或修改当前自动发布流程；缺少 Apple 凭据时只能验证工具逻辑，不能宣称签名、公证已完成。原理和权限说明见 [Godot 的 macOS 分发指南](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_macos.html#code-signing-and-notarization)。

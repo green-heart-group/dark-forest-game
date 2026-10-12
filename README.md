@@ -70,7 +70,23 @@
 
 ## 快速开始
 
+### 直接玩（不需要安装 Godot）
+
+[网页版](https://green-heart-group.github.io/dark-forest-game/)可以直接打开。桌面试玩包见 [Releases](https://github.com/green-heart-group/dark-forest-game/releases) 的 **Assets**；也要看标记 **Pre-release** 的版本，GitHub 的 Latest 不一定是最新试玩包。
+
+| 电脑 | 下载试玩版 v0.0.2-test |
+| --- | --- |
+| Mac，Apple Silicon（M 系列），macOS 13 或更新 | [dark-forest-macos-apple-silicon.zip](https://github.com/green-heart-group/dark-forest-game/releases/download/v0.0.2-test/dark-forest-macos-apple-silicon.zip) |
+| Mac，Intel，macOS 11 或更新 | [dark-forest-macos-intel.zip](https://github.com/green-heart-group/dark-forest-game/releases/download/v0.0.2-test/dark-forest-macos-intel.zip) |
+| Windows | [dark-forest-windows.zip](https://github.com/green-heart-group/dark-forest-game/releases/download/v0.0.2-test/dark-forest-windows.zip) |
+
+Mac 在「 → 关于本机」看芯片，下载对应 ZIP，双击解压，把 `dark-forest.app` 拖到「应用程序」后打开。当前试玩包尚未经过 Apple 公证，首次打开可能被系统阻止；处理方法见 [Apple 的官方说明](https://support.apple.com/102445)，也可以先玩网页版。不要下载 Source code 或名字带 `-dev` 的包来代替普通游戏。
+
+公开的 v0.0.2-test 不含当前源码新增的自动继续、原生 Mac 菜单和触控板改进；这些功能需要新版本发布。操作入门见下方 [操作](#操作)。
+
 ### 准备
+
+以下适用于从源码运行或参与开发。
 
 需要 [Godot 4.7.2](https://godotengine.org/download)（普通版，不是 .NET 版）。Windows 上可以用 winget 安装：
 
