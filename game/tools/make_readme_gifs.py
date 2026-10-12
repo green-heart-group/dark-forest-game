@@ -14,7 +14,7 @@
 import subprocess
 from pathlib import Path
 
-from test import find_godot  # 同一目录下的 test.py
+from godot import find_godot
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAMES = ROOT / "build" / "readme_frames"
