@@ -55,6 +55,8 @@ func test_base_fix_damage_after_entry_is_not_backdated() -> void:
 		WorldTime.advance(s, 1.0)
 		check(target.damage > 0 and not target.dead, "先进入视野，再受一次非致命命中")
 		var hit_time := target.last_hit
+		var hit_pos := Vector3(2.025, 0, 0) + Vector3.LEFT * target.max_speed * hit_time
+		var earliest_damage := hit_time + Signals.travel_time(s, hit_pos, Vector3.ZERO)
 		check(hit_time > 0.2 and hit_time < 1.0, "实际命中时刻晚于约0.167年的入视野时刻")
 		var early := 0
 		var damaged := 0
@@ -71,7 +73,7 @@ func test_base_fix_damage_after_entry_is_not_backdated() -> void:
 					damaged += 1
 					check(body["t_observed"] >= hit_time - Balance.TIME_EPSILON, "损伤观测时间不得早于实际命中")
 					check(message["sent"] >= hit_time - Balance.TIME_EPSILON, "损伤光信号不得在命中前发出")
-					check(message["eta"] >= hit_time + 1.90, "损伤还需沿实际光程传播到母星")
+					check(message["eta"] >= earliest_damage - 1e-5, "损伤还需沿实际光程传播到母星")
 		check(early > 0 and damaged > 0, "同时保留入视野历史与命中后的新报告")
 		WorldTime.advance(s, 1.3) # 总时刻2.3年，首次进入视野的完整血量已能到，命中后损伤还到不了。
 		var sightings := s.human().sightings.filter(func(x): return x["id"] == target.id)

@@ -513,6 +513,8 @@ func apply_preset() -> void:
 
 ## 把数值换成 balance.cfg 里的、再盖上 values。只改和现在不一样的，每一项都记进对局记录。
 func _apply_values(values: Dictionary, what: String, warnings: Array = []) -> void:
+	if main.saves.busy:
+		return
 	if seeking or replaying() or main.turning():
 		_note = "正在重算要跳去的回合，算完才能改" if seeking else "回放中不能改数值，先按「从这里接着玩」" if replaying() else TURNING_NOTE
 		refresh_panel()
@@ -819,7 +821,7 @@ func refresh_panel() -> void:
 # ---------- 播放 ----------
 
 func toggle_play() -> void:
-	if seeking:
+	if seeking or main.saves.busy or main.turning():
 		return
 	if _timer.is_stopped():
 		_note = ""
@@ -845,7 +847,7 @@ func _on_tick() -> void:
 ## redraw 为 false 时不刷新画面（连续跳很多回合时只在最后刷新一次）。
 func step_forward(manual: bool, redraw := true) -> bool:
 	var s: GameState = main.state
-	if seeking or main.turning():
+	if seeking or main.saves.busy or main.turning():
 		return false
 	if s.is_over():
 		_note = "对局已经结束"
@@ -884,6 +886,8 @@ func remember_turn(s: GameState) -> void:
 ## 补算超过 seek_slice 毫秒时分段算，段和段之间让界面处理输入、显示进度。
 ## 算完才换局面，取消（cancel_seek）时留在原来的局面。
 func seek(n: int) -> void:
+	if main.saves.busy:
+		return
 	pause()
 	cancel_seek()
 	var s: GameState = main.state
@@ -891,9 +895,15 @@ func seek(n: int) -> void:
 	if n == s.steps:
 		refresh_panel()
 		return
+	_before_seek = {"balance": Balance.values(), "replay": replay, "desync": replay.desync_step if replay != null else -1}
+	_seek_id += 1
+	var id := _seek_id
+	seeking = true
+	await main.discard_turn()
+	if id != _seek_id:
+		return
 	if not s.history.any(func(h): return h["step"] == s.steps):
 		snapshots.remember(s, desync_step)  # 这一回合还没人操作过：存下来，跳走以后跳回来不用再算
-	_before_seek = {"balance": Balance.values(), "replay": replay, "desync": replay.desync_step if replay != null else -1}
 	if replay == null:
 		replay = Replay.from_state(s)
 	var r := replay
@@ -904,14 +914,15 @@ func seek(n: int) -> void:
 	else:
 		again = r.begin(n, snapshots)
 	var from := again.steps
-	_seek_id += 1
-	var id := _seek_id
-	seeking = true
 	var slice := Time.get_ticks_msec()
 	var paused := false
 	while again.steps < mini(n, r.last_step()) and not again.is_over():
 		r.advance(again, snapshots, n)
+		if r.desync_step >= 0:
+			break
 		if Time.get_ticks_msec() - slice >= seek_slice:
+			var trial_balance := Balance.values()
+			Balance.apply(_before_seek["balance"])
 			_note = "正在从第 %d 回合补算到第 %d 回合：%d / %d（Esc 或「取消」停下）" \
 					% [from + 1, n + 1, again.steps - from, n - from]
 			if paused:
@@ -922,11 +933,17 @@ func seek(n: int) -> void:
 			await get_tree().process_frame
 			if id != _seek_id:
 				return  # 取消了，或者又开始了另一次跳转
+			Balance.apply(trial_balance)
 			slice = Time.get_ticks_msec()
-	seeking = false
 	r.finish(again)
-	if r.desync_step >= 0 and desync_step < 0:
-		desync_step = r.desync_step
+	if r.desync_step >= 0:
+		var failed := r.desync_step
+		cancel_seek()
+		snapshots.clear() # 不沿用刚才走偏的局面缓存。
+		_note = "跳转失败：第 %d 回合校验不一致，原局面和数值保留" % (failed + 1)
+		refresh_panel()
+		return
+	seeking = false
 	if n >= r.last_step() or again.is_over():
 		replay = null
 	main.set_state(again)
@@ -954,7 +971,7 @@ func cancel_seek() -> void:
 
 ## 丢掉之后的记录，从现在的局面接着打。
 func resume_here() -> void:
-	if seeking:
+	if seeking or main.saves.busy or main.turning():
 		return
 	pause()
 	replay = null
@@ -998,7 +1015,7 @@ func set_view(i: int) -> void:
 
 
 func _on_autoplay(on: bool) -> void:
-	if replaying() or seeking or main.turning():
+	if replaying() or seeking or main.saves.busy or main.turning():
 		refresh_panel()
 		return
 	main.state.set_autoplay(viewed(), on)
@@ -1015,7 +1032,9 @@ func _last_step() -> int:
 
 ## 做一次调试改动（回放中不能改）。action 收到 GameState，返回规则的结果。
 func _dev(action: Callable) -> void:
-	if seeking:
+	if main.saves.busy:
+		_note = "正在读取存档，读完才能改"
+	elif seeking:
 		_note = "正在重算要跳去的回合，算完才能改"
 	elif replaying():
 		_note = "回放中不能改数值，先按「从这里接着玩」"
@@ -1133,6 +1152,8 @@ func _open_dialog() -> void:
 
 ## 打开记录，停在开局。记录时的数值和现在不一样时，换成记录时的（只在这次运行里有效）。
 func load_replay(path: String) -> void:
+	if main.saves.busy:
+		return
 	pause()
 	cancel_seek()
 	var r := Replay.load_file(path)
@@ -1140,6 +1161,7 @@ func load_replay(path: String) -> void:
 		_note = "打不开这个文件（损坏或规则版本不兼容）：%s" % path
 		refresh_panel()
 		return
+	main._finish_turn(false)
 	var diff := r.balance_diff()
 	replay = r if r.last_step() > 0 else null
 	snapshots.clear()
@@ -1157,8 +1179,11 @@ func load_replay(path: String) -> void:
 ## 新开一局。watch 为 true 时所有文明都由 AI 控制。
 ## 数值换回 balance.cfg 里的；设了「新开一局时用的方案」时再换成那个方案。
 func new_game(seed_value: int, watch: bool) -> void:
+	if main.saves.busy:
+		return
 	pause()
 	cancel_seek()
+	main._finish_turn(false)
 	replay = null
 	snapshots.clear()
 	desync_step = -1

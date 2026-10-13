@@ -218,6 +218,9 @@ func load_file(path: String) -> void:
 	_progress.dialog_text = "正在重建对局…"
 	_progress.popup_centered()
 	main.refresh()
+	await main.discard_turn()
+	if generation != _generation:
+		return
 	var r := Replay.from_dict(data["replay"])
 	var s := r.start()
 	var slice := Time.get_ticks_msec()
@@ -226,9 +229,12 @@ func load_file(path: String) -> void:
 			break
 		if Time.get_ticks_msec() - slice >= slice_msec:
 			_progress.dialog_text = "正在读取：%d / %d 回合" % [s.steps, r.last_step()]
+			var trial_balance := Balance.values()
+			Balance.apply(_old_balance)
 			await get_tree().process_frame
 			if generation != _generation:
 				return
+			Balance.apply(trial_balance)
 			slice = Time.get_ticks_msec()
 	r.finish(s)
 	# 终局后的展开不增加回合；恢复保存瞬间的展开进度。
@@ -238,9 +244,12 @@ func load_file(path: String) -> void:
 		if before == collapse_stamp(s):
 			break
 		if Time.get_ticks_msec() - slice >= slice_msec:
+			var trial_balance := Balance.values()
+			Balance.apply(_old_balance)
 			await get_tree().process_frame
 			if generation != _generation:
 				return
+			Balance.apply(trial_balance)
 			slice = Time.get_ticks_msec()
 	var ok: bool = r.desync_step < 0 and s.steps == r.last_step() and s.checksum() == data["checksum"] \
 			and collapse_stamp(s) == data["collapse"]

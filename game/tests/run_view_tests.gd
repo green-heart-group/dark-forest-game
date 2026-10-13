@@ -139,6 +139,8 @@ func run_tests() -> void:
 	await run(test_base_fix_failed_load_preserves_state_and_balance)
 	await run(test_base_fix_seek_cancels_background_and_isolates_balance)
 	await run(test_base_fix_repeated_seek_and_load_do_not_cross_commit)
+	await run(test_base_fix_failed_seek_restores_live_state)
+	await run(test_base_fix_replay_and_restart_drain_turn)
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
@@ -1642,6 +1644,56 @@ func test_base_fix_repeated_seek_and_load_do_not_cross_commit() -> void:
 	await _base_fix_wait_idle()
 	check_eq(view.state.steps, 2, "读取存档可以安全接替分帧跳转")
 	check(not view.debug.replaying(), "读取之后仍可继续操作")
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	view.debug.seek_slice = 100
+	DirAccess.remove_absolute(path)
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_failed_seek_restores_live_state() -> void:
+	var before := Balance.values()
+	var kept := _base_fix_record()
+	kept.dev_balance("ACTION_BASE", before["ACTION_BASE"])
+	kept.dev_balance("ENERGY_PER_STAR", before["ENERGY_PER_STAR"])
+	_base_fix_show_live(kept)
+	var r := Replay.from_state(kept)
+	r.checksums[0] += 1
+	view.debug.replay = r
+	var checksum := kept.checksum()
+	view.debug.seek(1)
+	await _base_fix_wait_idle()
+	check(view.state == kept and view.state.checksum() == checksum, "跳转校验失败不提交偏离历史的局面")
+	check_eq(Balance.values(), before, "跳转失败恢复活动局面全部参数")
+	check(view.debug.replay == r and r.desync_step == -1, "失败恢复原回放记录状态")
+	check(view.debug._note.contains("失败"), "跳转失败显示原因")
+	Balance.apply(before)
+	view.debug.replay = null
+	view.debug.seek_slice = 100
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_replay_and_restart_drain_turn() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_open.replay"
+	var saved := _base_fix_record()
+	Replay.from_state(saved).save(path)
+	_base_fix_show_live(fixture())
+	view.background_turns = true
+	view.end_turn()
+	view.debug.load_replay(path)
+	check_eq([view._turn_task, view.state.seed_value, Balance.ACTION_BASE], [-1, 41, 7], "打开调试回放先收尾旧线程，再切换记录参数")
+	view.debug.resume_here()
+	view.end_turn()
+	view.debug.new_game(43, false)
+	check_eq([view._turn_task, view.state.seed_value, Balance.ACTION_BASE], [-1, 43, 3], "调试重开先收尾旧线程，再恢复默认参数")
+	var debug = view.debug
+	view.debug = null
+	view.end_turn()
+	view.new_game(44)
+	check_eq([view._turn_task, view.state.seed_value], [-1, 44], "普通重开也先收尾旧线程")
+	view.debug = debug
+	view.background_turns = false
 	Balance.apply(before)
 	view.saves.slice_msec = 50
 	view.debug.seek_slice = 100

@@ -875,11 +875,19 @@ static func _passed(s: GameState, past: Dictionary, path: Dictionary, point: Vec
 	return seen > 0.0 and seen < INF
 
 
-## 目标在上一个子步开始后 t 年时的样子（位置、速度、加速度按它这一步的运动 trail 推出）。start 是子步开始的时刻。
-static func _entity_data(target: Dictionary, trail: Dictionary, t: float, start: float) -> Dictionary:
-	var data := {"id": target["id"], "owner": target["owner"], "kind": target["kind"],
+## 伤害提交前冻结实体事实，不保存对象引用，也不进存档或校验值。
+static func capture_facts(s: GameState) -> void:
+	s.step_facts.clear()
+	for target in Combat.targets(s, true):
+		s.step_facts[target["id"]] = {"id": target["id"], "owner": target["owner"], "kind": target["kind"], "hp": target["hp"]}
+
+
+## 目标在上一个子步开始后 t 年时的样子：事实取段首，运动按 trail 推出。
+static func _entity_data(s: GameState, target: Dictionary, trail: Dictionary, t: float, start: float) -> Dictionary:
+	var facts: Dictionary = s.step_facts.get(target["id"], target)
+	var data := {"id": facts["id"], "owner": facts["owner"], "kind": facts["kind"],
 			"pos": Kinematics.position(trail, t), "velocity": trail["velocity"] + trail["acceleration"] * t,
-			"acceleration": trail["acceleration"], "hp": target["hp"]}
+			"acceleration": trail["acceleration"], "hp": facts["hp"]}
 	if trail.get("cap_time", INF) < INF:
 		data["accel_until"] = start + trail["cap_time"]
 	return data
@@ -1166,10 +1174,10 @@ static func _look_entities(s: GameState, look: Dictionary, owner: int, view: Dic
 			var seen := _first_seen(s, past, from["pos"] - path["pos"], from["velocity"] - path["velocity"], from["acceleration"] - path["acceleration"], dt)
 			if seen <= 0.0:
 				seen = INF
-			if seen < dt - Balance.TIME_EPSILON and not trail.is_empty():
+			if seen < dt - Balance.TIME_EPSILON and not trail.is_empty() and s.step_facts.has(target["id"]):
 				# 在这一步中间进的视野：按那一刻的位置和速度补发，下面按现在再看时航位推算对得上就不重发。
 				key = "%d:entity:%d" % [observer["id"], target["id"]]
-				var data := _entity_data(target, trail, seen, s.step_start)
+				var data := _entity_data(s, target, trail, seen, s.step_start)
 				var eye: Vector3 = Kinematics.position(path, seen)
 				_emit(s, owner, observer, data["pos"], key, {"type":"entity","data":data,
 					"contact":target["owner"]>=0 and Vector3i(eye.round())==Vector3i(data["pos"].round())}, true, s.step_start + seen)
@@ -1350,7 +1358,7 @@ static func _sample_warning(s: GameState, civ: Civ, targets: Array[Dictionary], 
 			if dt > 0.0 and not trail.is_empty() and _may_meet(path["pos"], observer["pos"], path["acceleration"], trail["pos"], target["pos"], trail["acceleration"], dt, radius / s.physical_cell_size()):
 				var seen := _first_seen(s, view, trail["pos"] - path["pos"], trail["velocity"] - path["velocity"], trail["acceleration"] - path["acceleration"], dt)
 				if seen < dt - Balance.TIME_EPSILON:
-					var early := _entity_data(target, trail, seen, s.step_start)
+					var early := _entity_data(s, target, trail, seen, s.step_start)
 					early.erase("owner")
 					early.erase("hp")
 					if target.has("payload"):

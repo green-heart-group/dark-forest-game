@@ -178,6 +178,7 @@ func refresh() -> void:
 
 ## 换一个局面（新开一局、回放跳到别的回合）：重画网格，不播放压平的动画。
 func set_state(s: GameState) -> void:
+	_finish_turn(false)
 	migration_preview.hide()
 	state = s
 	panel.set_feedback("")
@@ -216,17 +217,30 @@ func end_turn() -> void:
 
 ## 后台还在算「结束回合」。
 func turning() -> bool:
-	return _turn_task >= 0 and _turn_from == state
+	return _turn_task >= 0
+
+
+## 读档或跳转先弃用旧结果，再分帧等旧线程结束；结束以前必须保留原 Balance。
+## 取消重建也不能让这个旧结果重新接回活动局面。
+func discard_turn() -> void:
+	var task := _turn_task
+	if task < 0:
+		return
+	_turn_from = null
+	while _turn_task == task and not WorkerThreadPool.is_task_completed(task):
+		await get_tree().process_frame
+	if _turn_task == task:
+		_finish_turn(false)
 
 
 ## 等后台的回合算完。期间没换过局面（新开一局、读档、回放跳转）就换上算出来的局面，换过就丢掉。
-func _finish_turn() -> void:
+func _finish_turn(commit := true) -> void:
 	if _turn_task < 0:
 		return
 	WorkerThreadPool.wait_for_task_completion(_turn_task)
 	_turn_task = -1
 	var next := _turn_next
-	var current := _turn_from == state
+	var current := commit and _turn_from == state
 	_turn_from = null
 	_turn_next = null
 	if current:
@@ -263,6 +277,7 @@ func new_game(seed_value: int) -> void:
 	if debug != null:
 		debug.new_game(seed_value, state.spectator)  # 调试面板还要换回数值、清掉回放
 		return
+	_finish_turn(false)
 	Balance.apply(Balance.file_values())
 	var s := GameState.new_game(seed_value)
 	s.add_log(new_game_note(seed_value))
@@ -278,10 +293,10 @@ func _on_map_click(c: Vector3i) -> void:
 
 ## 压平的动画放完以后，如果胜负已分但空间还没压完，每帧再压一步（不再有回合和收入）。
 func _process(delta: float) -> void:
+	if saves.busy or (debug != null and debug.seeking):
+		return
 	if _turn_task >= 0 and WorkerThreadPool.is_task_completed(_turn_task):
 		_finish_turn()
-	if saves.busy:
-		return
 	if map.animating():
 		map.advance_animation(delta)
 		return

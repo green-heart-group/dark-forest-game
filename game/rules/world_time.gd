@@ -42,6 +42,7 @@ static func advance(s: GameState, duration: float) -> void:
 	var end := s.clock + duration
 	s.step_start = s.clock
 	s.step_motions = {}
+	s.step_facts = {}
 	s.view_until = end
 	s.package_cache.clear()
 	s.ensure_cells()
@@ -115,7 +116,11 @@ static func advance(s: GameState, duration: float) -> void:
 						queue.offer(maxf((over - motion["speed"]) / acc, Balance.TIME_EPSILON), "曲率越过上限")
 		for ship in s.hidden_ships:
 			if not ship.dead:
-				motions[ship.id] = Kinematics.motion(s, null, ship, queue.due)
+				var motion := Kinematics.motion(s, null, ship, queue.due)
+				motions[ship.id] = motion
+				queue.offer(Hazards.next_boundary(s, motion, queue.due, ship.kind == Ship.GRAIN), "隐藏单位进入规则不同的格子")
+				if motion["speed"] > 0.0 and Hazards.in_field(s, ship.pos):
+					queue.offer(Balance.ROUGH_DT, "黑域里分段")
 		for payload in s.payloads:
 			if not payload["dead"]:
 				motions[payload["id"]] = SpaceEvents.motion(s, payload)
@@ -154,6 +159,8 @@ static func advance(s: GameState, duration: float) -> void:
 		dt = minf(end - s.clock, maxf(dt, Balance.TIME_EPSILON))
 		if s.profiling:
 			phase=s._lap("连续/边界与相交",phase)
+		# 回填途中入视野的观测时，必须用伤害与空间事件提交以前的实体事实。
+		Signals.capture_facts(s)
 		var tactical_due := integrate(s, plans, dt)
 		Information.advance(s, dt, uniform)
 		SpaceEvents.advance(s, dt)
