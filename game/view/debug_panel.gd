@@ -38,6 +38,8 @@ var desync_step := -1
 var snapshots := Snapshots.new()
 ## 正在跳转、还没算完（这时不能操作，见 locked_reason）
 var seeking := false
+## 后台在算「结束回合」时，改局面会改到旧局面上（算完换上新局面就丢了），改数值还会让后台这一回合前后用的数值不同。
+const TURNING_NOTE := "正在结算这一回合，算完才能改"
 ## 跳转每算这么多毫秒停一下，让界面处理输入、显示进度（测试时设成 0，每算一回合停一下）
 var seek_slice := 100
 ## 每次跳转的编号：取消或开始另一次跳转时加一，正在算的那次在下一次停下时发现编号变了就不再接着算
@@ -511,8 +513,8 @@ func apply_preset() -> void:
 
 ## 把数值换成 balance.cfg 里的、再盖上 values。只改和现在不一样的，每一项都记进对局记录。
 func _apply_values(values: Dictionary, what: String, warnings: Array = []) -> void:
-	if seeking or replaying():
-		_note = "正在重算要跳去的回合，算完才能改" if seeking else "回放中不能改数值，先按「从这里接着玩」"
+	if seeking or replaying() or main.turning():
+		_note = "正在重算要跳去的回合，算完才能改" if seeking else "回放中不能改数值，先按「从这里接着玩」" if replaying() else TURNING_NOTE
 		refresh_panel()
 		return
 	var now := Balance.values()
@@ -798,7 +800,7 @@ func refresh_panel() -> void:
 	_after_death.visible = can_continue_after_death()
 	var me := viewed()
 	_autoplay.set_pressed_no_signal(me.is_ai)
-	_autoplay.disabled = replaying() or not me.alive
+	_autoplay.disabled = replaying() or main.turning() or not me.alive
 	_view_pick.clear()
 	for i in s.civs.size():
 		var c: Civ = s.civs[i]
@@ -832,6 +834,8 @@ func pause() -> void:
 
 
 func _on_tick() -> void:
+	if main.turning():
+		return  # 等「结束回合」在后台算完再接着播
 	if not step_forward(false):
 		pause()
 		refresh_panel()
@@ -841,7 +845,7 @@ func _on_tick() -> void:
 ## redraw 为 false 时不刷新画面（连续跳很多回合时只在最后刷新一次）。
 func step_forward(manual: bool, redraw := true) -> bool:
 	var s: GameState = main.state
-	if seeking:
+	if seeking or main.turning():
 		return false
 	if s.is_over():
 		_note = "对局已经结束"
@@ -994,7 +998,8 @@ func set_view(i: int) -> void:
 
 
 func _on_autoplay(on: bool) -> void:
-	if replaying() or seeking:
+	if replaying() or seeking or main.turning():
+		refresh_panel()
 		return
 	main.state.set_autoplay(viewed(), on)
 	main.autosave()
@@ -1014,6 +1019,8 @@ func _dev(action: Callable) -> void:
 		_note = "正在重算要跳去的回合，算完才能改"
 	elif replaying():
 		_note = "回放中不能改数值，先按「从这里接着玩」"
+	elif main.turning():
+		_note = TURNING_NOTE
 	else:
 		snapshots.drop_after(main.state.steps)  # 实时局面以后的缓存（如果有）不再是这条路
 		var r: Dictionary = action.call(main.state)

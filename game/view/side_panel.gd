@@ -26,6 +26,8 @@ var _res_values: Dictionary[String, Label] = {}
 var _origin_pick := OptionButton.new()
 ## 科技、建造、行动、情况四页
 var _tabs := TabContainer.new()
+var _first_probe := Button.new()
+var show_locked := CheckBox.new()
 ## 射电望远镜和预警范围的升级按钮
 var _upgrade_tiles: Dictionary[String, Button] = {}
 ## 每一级科技现在开没开放
@@ -33,6 +35,7 @@ var _tier_labels: Array[Label] = []
 ## 建造的按钮，键是 BUILD_ORDER 里的种类，另有 "reduce"（自身降维）
 var _build_tiles: Dictionary[String, Button] = {}
 var _reduce_info := Label.new()
+var _reduce_box := VBoxContainer.new()
 ## 「情况」页各项数值的标签，键是左边显示的名字
 var _stat_values: Dictionary[String, Label] = {}
 ## 结束回合按钮上面的提示：上一次操作失败的原因
@@ -71,6 +74,16 @@ func setup(p_main: Node) -> void:
 	_origin_pick.item_selected.connect(func(_i): main.refresh())
 	origin_row.add_child(_origin_pick)
 	outer.add_child(origin_row)
+	_first_probe.text = "先造探测器 → 选方向 → 派出 → 结束回合"
+	_first_probe.add_theme_font_size_override("font_size", 13)
+	_first_probe.tooltip_text = "点击打开建造页。造好探测器后会自动进入行动页，在星图点方向，再按派出。"
+	_first_probe.pressed.connect(func(): _tabs.current_tab = 1)
+	outer.add_child(_first_probe)
+	show_locked.text = "显示未解锁选项"
+	show_locked.add_theme_font_size_override("font_size", 13)
+	show_locked.tooltip_text = "默认收起尚未取得科技的建造与行动。资源或目标不满足时仍显示原因；当前选中的行动也保留。"
+	show_locked.toggled.connect(func(_on): main.refresh())
+	outer.add_child(show_locked)
 
 	actions.setup(main)
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -81,6 +94,7 @@ func setup(p_main: Node) -> void:
 		_tabs.set_tab_title(_tabs.get_tab_count() - 1, page[0])
 	_tabs.current_tab = 2
 	_tabs.tab_changed.connect(func(_tab): main.refresh())
+	outer.add_child(actions.footer)
 
 	_feedback.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_feedback.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
@@ -129,7 +143,7 @@ func _resource_bar() -> HBoxContainer:
 func _build_tech_page() -> VBoxContainer:
 	var box := Widgets.page_box()
 	var open := Button.new()
-	open.text = "打开全屏科技树 · Alt+1"
+	open.text = main.shortcut_text("打开全屏科技树 · Alt+1")
 	open.custom_minimum_size.y = 48
 	open.pressed.connect(func(): main.tech_tree.open_tree())
 	box.add_child(open)
@@ -165,9 +179,10 @@ func _build_build_page() -> VBoxContainer:
 		Widgets.explain_disabled(tile,set_feedback)
 		grid.add_child(tile)
 		_build_tiles[kind] = tile
-	box.add_child(Widgets.title("自身降维"))
+	box.add_child(_reduce_box)
+	_reduce_box.add_child(Widgets.title("自身降维"))
 	var row := Widgets.tile_grid(4)
-	box.add_child(row)
+	_reduce_box.add_child(row)
 	var reduce := Widgets.tile("🔻", "自身降维", "")
 	reduce.pressed.connect(_on_build.bind("reduce"))
 	Widgets.explain_disabled(reduce,set_feedback)
@@ -175,7 +190,7 @@ func _build_build_page() -> VBoxContainer:
 	_build_tiles["reduce"] = reduce
 	_reduce_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_reduce_info.add_theme_font_size_override("font_size", 13)
-	box.add_child(_reduce_info)
+	_reduce_box.add_child(_reduce_info)
 	advanced.setup(main)
 	box.add_child(advanced)
 	return box
@@ -201,10 +216,13 @@ func set_feedback(text: String) -> void:
 func refresh(me: Civ) -> void:
 	_refresh_origins(me)
 	_refresh_completed_units(me)
+	_first_probe.visible = state.turn == 1 and me.ships.is_empty()
+	show_locked.visible = _tabs.current_tab in [1, 2]
+	actions.footer.visible = _tabs.current_tab == 2
 	actions.refresh(me)
 	var finished := state.is_over() and not state.collapse_pending()
-	_end.text = "🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合"
-	_end.disabled = main.saves.busy or (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
+	_end.text = "⏳ 正在结算这一回合……" if main.turning() else ("🔄 再来一局（新的星图）" if finished else "⏭️ 结束回合")
+	_end.disabled = main.saves.busy or main.turning() or (state.is_over() and not finished) or (main.debug != null and (main.debug.replaying() or main.debug.seeking))
 
 	_refresh_resources(me)
 	_res_values["actions"].text = "%d / %d" % [me.actions_left, me.action_points(state.map)]
@@ -241,6 +259,7 @@ func _refresh_completed_units(me: Civ) -> void:
 	if _build_state!=state:
 		_build_state=state
 		_build_orders.clear()
+	var completed: Ship = null
 	for id in _build_orders.keys():
 		if _build_orders[id]!=state.civs.find(me):
 			continue
@@ -250,8 +269,13 @@ func _refresh_completed_units(me: Civ) -> void:
 		elif report.get("status","")=="completed":
 			var ship:=Signals.reported_ship(state,me,report.get("result_ship",-1))
 			if ship!=null:
-				actions.select_unit(ship)
+				completed=ship
 				_build_orders.erase(id)
+	# 收到完工回报：在「行动」页里预先选中它并切过去，方便马上派出。
+	# 切页会触发刷新、再次进到这里，所以放在循环外、编号删掉以后。
+	if completed!=null:
+		actions.select_unit(completed)
+		_tabs.current_tab = 2
 
 
 ## 星系会增减（殖民、被打掉），每次刷新时重建发射源列表，尽量保持原来的选择。
@@ -323,6 +347,7 @@ func _refresh_build_tiles(me: Civ) -> void:
 	_build_progress.visible=not progress.is_empty()
 	for kind in BUILD_ORDER:
 		var tile := _build_tiles[kind]
+		tile.visible = show_locked.button_pressed or me.has_tech(GameState.BUILD_TECH[kind])
 		var reason := state.build_error(me, kind, at,advanced.selected_modules(kind))
 		tile.disabled = reason != ""
 		tile.set_meta("disabled_reason",reason)
@@ -332,6 +357,7 @@ func _refresh_build_tiles(me: Civ) -> void:
 		tile.tooltip_text = "%s %s\n%s%s" % [BUILD_ICONS[kind], GameState.BUILD_NAMES[kind], _build_desc(kind),
 				"\n\n现在不能建：" + reason if reason != "" else ""]
 	var reduce := _build_tiles["reduce"]
+	_reduce_box.visible = show_locked.button_pressed or me.has_tech("dimension")
 	var reason:=advanced.prepare_error(me)
 	reduce.disabled=reason!=""
 	reduce.set_meta("disabled_reason",reason)

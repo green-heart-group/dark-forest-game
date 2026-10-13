@@ -10,6 +10,8 @@ var survey_sequence := -1
 
 ## 仅供模拟统计；不参与规则状态或回放校验。
 signal civilization_eliminated(civ: Civ, cause: String)
+## 每写一行日志发一次（日志只留最近的，模拟统计要全部的就接这个）。
+signal line_logged(line: String)
 ## 一局游戏的全部规则状态。画面只读取它，通过它的方法来行动。
 ## 日志只写玩家应该知道的事：自己的行动、自己被打、有文明灭亡。
 ## AI 怎么行动在 ai.gd。
@@ -26,6 +28,13 @@ const NEVER := 1 << 30
 const FACILITIES := Construction.FACILITIES
 ## 调试时 dev_set 不能直接改的文明属性：直接改会让别处对不上（比如灭亡了却还占着星系）
 const DEV_SET_LOCKED := ["is_ai", "alive", "name", "home"]
+## 只增不减的记录各留多少（见 _trim_records）。只为让长局的内存和存档不一直变大。
+const LOG_KEEP := 200
+const EVENT_KEEP := 500
+const LEDGER_KEEP := 200
+const RESULT_KEEP := 64
+## 舰船和设施记着的当地目标，这么多年没有新观测就删掉（还看得见的目标每年至少重发一次）。
+const CONTACT_KEEP := 3.0
 ## 造好后停在星系里、要另外派出的单位
 const UNITS := Construction.UNITS
 const BUILD_NAMES := Construction.NAMES
@@ -39,7 +48,14 @@ const SOPHON_REPORTS := {"dispatch": "派出了一个单位", "turn_ship": "让�
 		"start_reduce": "开始自身降维", "launch_singularity": "发射了奇异点", "send_sophon": "派智子去 %s",
 		"upgrade": "升级了射电望远镜或预警范围"}
 
-var dimension := 3
+var dimension := 3:
+	set(value):
+		dimension = value
+		_cell_size = Balance.DIMENSION_CELL_SIZE[str(value)]
+		_background_light = Balance.DIMENSION_LIGHT[str(value)]
+## 当前维度的格子边长和背景光速，维度一变就跟着换（上面的 set）。规则里每个子步要查几万次，存下来不用每次查表。
+var _cell_size: float = Balance.DIMENSION_CELL_SIZE["3"]
+var _background_light: float = Balance.DIMENSION_LIGHT["3"]
 var space_epoch := 0
 var fold_anchor := Vector3i.ZERO
 var line_anchor := Vector3i.ZERO
@@ -57,10 +73,40 @@ var payloads: Array[Dictionary] = []
 var events: Array[Dictionary] = []
 var applied_hits: Dictionary[int, bool] = {}
 var messages: Array[Dictionary] = []
+## 上次算消息到达时间时的光速情况（Signals.medium）；变了就重新算（Signals.retime）。
+var message_medium: Array = []
+## 在途消息里最早的到达时刻：[命令类, 全部]。还没到就不用逐条检查（Signals.receive_due）；-INF 表示要重新查一遍。
+var message_due: Array = [-INF, -INF]
+## 发出消息的流水号，记在消息的 "n" 里。同一批到的消息按它的先后处理，复制出来的局面也是同样的顺序。
+var message_serial := 0
+## 在途消息按到达的 0.05 年刻度分好的索引（Signals._indexed）。只为算得快，不打包（StateCopy.SKIP）；空的时候从 messages 重建。
+var message_index: Dictionary = {}
+## 维度变了、还没据此重算在途消息到达时间的格子（SpaceEvents.convert_cell 记下，Signals.retime 用完清空）。
+var converted_cells: Array[Vector3i] = []
+## 上次算消息到达时间时黑域和死线影响光速的范围（Signals.hazard_shapes）。下次只重算路线碰到旧范围或新范围的消息。
+var hazard_shapes: Array = []
+## 回合推进里运营包的缓存（Economy._cached_packages）。只为算得快，复制局面和存档时不带（StateCopy.SKIP），不进校验值。
+var package_cache: Dictionary = {}
+## 上一个子步从什么时刻开始、各船这一步怎么动（WorldTime.advance 记下）。消息在子步中间到达、子步末才收时，
+## 用它找出收件者在到达那一刻的位置（Signals.position_at）。只为算得准，复制局面和存档时不带（StateCopy.SKIP）。
+var step_start := 0.0
+var step_motions: Dictionary = {}
+## 不动的观察者看得到哪些星系（Signals._cells_in_view）。只为算得快，同样不打包。
+var view_cells: Dictionary = {}
+## 看视野时「什么变了」的记录和预测（ViewMarks），算到哪一刻为止（WorldTime.advance 记下这一回合结算到哪里）。
+## 每回合开头重新记，只为算得快，同样不打包、不进校验值。
+var view_marks: Dictionary = {}
+var view_until := 0.0
+## 核对模式：每一刀只看变了的以后，再把所有视野全看一遍（不发出），有漏发的就报错（Signals._check_missed）。测试里打开。
+var view_check := false
+var view_dry := false
+var view_missed: Array = []
+var view_missed_total := 0
+## 上次算的光速表（LightFront.environment），只为算得快，同样不打包。
+var environment_cache: Dictionary = {}
 var scans: Array[Dictionary] = []
 var neutral_assets: Array[Dictionary] = []
 var sensor_stamps: Dictionary = {}
-var next_sensor_time := 0.0
 var domain_cells: Dictionary[int, Dictionary] = {}
 var zero_zones: Array[Dictionary] = []
 var remap_until := -1.0
@@ -84,8 +130,10 @@ var flattened: Dictionary[Vector3i, int] = {}
 var black_domains: Array[Dictionary] = []
 ## 每格的光速（G14），下标见 _li。还没出现过黑域时为空，表示处处都是 1.0。
 var light := PackedFloat64Array()
-## 光速还在变（有黑域中心，或者还没扩散均匀）。不变时不用每回合重算。
-var _light_moving := false
+## 各格光速或维度改过几次：只经 set_light_at、set_cell_dim 和换图改，改一次加 1。Hazards.uniform_light 等据此沿用上次的结果。
+var light_version := 0
+## Hazards.uniform_light 上次的结果：[换图次数, 维度, light_version, 格子数, 结果]。只为提速，不打包。
+var uniform_cache := []
 ## 隐藏文明的位置，在星图外面。它们看不见、打不到，只对广播做出反应。
 var hidden: Array[Vector3i] = []
 ## 听到了广播、还在考虑要不要出手的隐藏文明：每项是 {"from": 隐藏文明的位置, "target": 被广播的坐标, "left": 还会等几回合}
@@ -340,10 +388,11 @@ func _dev_record(civ_index: int, name: String, args: Array) -> void:
 
 
 ## 当前局面的校验值：两次计算出的局面一样，校验值就一样。只取主要的数据，够发现回放走偏就行。
+## 已收的消息不算：它们攒够了才从 messages 删掉，复制出来的局面删的时机可能不同。
 func checksum() -> int:
 	var parts: Array = [turn, clock, winner, steps, _next_id, flattened.size(), linearized.size(), dimension, space_epoch, map.extent, light, rng.state, cell_ids, cell_dims]
-	parts.append([map.stars, map.rocky, map.gas, map.habitable, messages, projectiles, payloads,
-			domain_cells, black_domains, deadlines, sensor_stamps, next_sensor_time, zero_zones, remap_until, applied_hits])
+	parts.append([map.stars, map.rocky, map.gas, map.habitable, messages.filter(func(m): return not m["dead"]), projectiles, payloads,
+			domain_cells, black_domains, deadlines, sensor_stamps, zero_zones, remap_until, applied_hits])
 	parts.append([scans,neutral_assets,hidden_listen,foil_zones,line_zones,pending_battle_surveys,battle_archive,battle_tokens,survey_sequence])
 	for wave in broadcasts:
 		parts.append([wave["id"],wave["from"],wave["target"],civs.find(wave["sender"]),wave["samples"],wave["visited"],wave.get("propagation",{})])
@@ -402,6 +451,7 @@ func _end_turn() -> void:
 			if not is_over() and civ.is_ai and Balance.TECH_BURST_CHANCE>0.0 and rng.randf()<Balance.TECH_BURST_CHANCE:
 				_tech_burst(civ)
 			start_turn(civ)
+	_trim_records()
 	if not is_over():
 		turn += 1
 		add_log("第 %d 回合开始" % turn)
@@ -514,11 +564,6 @@ func _tech_burst(civ: Civ) -> void:
 		add_log("技术爆炸：免费获得%s"%Tech.title(obtained))
 
 
-## 射电望远镜（"telescope"）或预警范围（"warning"）升一级要多少能量。
-static func upgrade_cost(kind: String) -> int:
-	return Balance.TELESCOPE_UPGRADE_COST[0][0] if kind == "telescope" else Balance.WARNING_UPGRADE_COST[0]
-
-
 func upgrade_price(civ: Civ, kind: String, at: Vector3i = AT_HOME) -> Array:
 	if at == AT_HOME:
 		at = civ.home
@@ -590,27 +635,6 @@ func build_cost(_civ: Civ, kind: String, modules: Array = []) -> Array:
 	return cost
 
 
-## 现在造的战舰会带哪些武器：升级过的都带上（T23）。
-static func warship_weapons(_civ: Civ) -> Array[String]:
-	# 裸舰是始终保留的型号；武器由建造/改装订单的选装清单决定。
-	return []
-
-
-## 带一种武器，造战舰多花的 [能量, 矿石]。
-static func weapon_extra(w: String) -> Array:
-	return Balance.MODULE_COST[w]
-
-
-## 一种武器开一次火花的 [能量, 矿石]。
-static func weapon_shot(w: String) -> Array:
-	return Balance.WEAPON_DATA[w]["cost"]
-
-
-## 一种武器的射程（格）。
-static func weapon_range(w: String) -> float:
-	return Balance.WEAPON_DATA[w]["range"]
-
-
 ## 为什么不能在 at 建这个（能建时为空）。
 func build_error(civ: Civ, kind: String, at: Vector3i, modules: Array = []) -> String:
 	var error := _common_error(civ)
@@ -623,14 +647,15 @@ func build_error(civ: Civ, kind: String, at: Vector3i, modules: Array = []) -> S
 	if kind == "landing":
 		return "运输船抵达后从行动页建立殖民地"
 	var host := construction_host(civ, at)
-	var known:=Knowledge.site(self,civ,at)
-	var info:=Knowledge.snapshot(self,civ,at)
 	if host == -2:
 		return "先选择自己的星系或星舰作为建造地点"
 	if construction_busy(civ, at, host):
 		return "这里的 %d 个建造槽已占满，已有施工或正在等待回报；收到完工或取消回报后释放对应槽位" % construction_capacity(civ,at,host)
 	if host >= 0 and FACILITIES.has(kind):
 		return "普通星舰上不能建造天体设施"
+	# 前面几项便宜，先查；据点的样子要拼一整份，查到这里才拼。
+	var known:=Knowledge.site(self,civ,at)
+	var info:=Knowledge.snapshot(self,civ,at)
 	if known.get("dormant",false) or (host >= 0 and Signals.reported_ship(self,civ,host).dormant):
 		if kind not in ["probe", "colony"]:
 			return "休眠救援队列只支持基础探测器或运输船"
@@ -770,14 +795,6 @@ static func dispatch_cost(s: Ship) -> int:
 		return Balance.COST_TURN
 	return {Ship.PROBE: Balance.COST_PROBE_LAUNCH, Ship.WARSHIP: Balance.COST_WARSHIP_LAUNCH,
 			Ship.DEVOURER: Balance.COST_DEVOURER_LAUNCH}.get(s.kind, 0)
-
-
-## 舰船所在的格子光速几乎为 0，派出去也飞不动（G14）。
-const STUCK_ERROR := "这里的光速几乎为 0，派出去也飞不动"
-
-
-func _stuck_at(s: Ship) -> bool:
-	return s.max_speed * light_at(s.cell()) < Balance.SHIP_MIN_SPEED
 
 
 ## 为什么不能派出这个单位（能派出时为空）。
@@ -992,7 +1009,7 @@ func antimatter_origins(civ: Civ) -> Array[Dictionary]:
 	for asset in Knowledge.assets(self,civ):
 		if asset["kind"] == "anchor" and not Knowledge.site(self,civ,asset["at"]).get("dormant",false):
 			origins.append({"id":asset["id"],"pos":Vector3(asset["at"])})
-	for ship in Signals.reported_ships(self,civ):
+	for ship in Signals.reported_ships(self,civ,[Ship.WARSHIP]):
 		if ship.kind == Ship.WARSHIP and not ship.dormant:
 			origins.append({"id":ship.id,"pos":ship.pos})
 	return origins
@@ -1004,10 +1021,11 @@ func antimatter_targets(civ: Civ) -> Array[Ship]:
 		if contact.get("owner",-1)==civs.find(civ) or not Ship.NAMES.has(contact["kind"]) or contact["kind"]==Ship.GRAIN:
 			continue
 		var distance := INF
+		var pos := Combat.predicted(self,contact)
 		for origin in antimatter_origins(civ):
-			distance = minf(distance,origin["pos"].distance_to(contact["pos"])*physical_cell_size())
+			distance = minf(distance,origin["pos"].distance_to(pos)*physical_cell_size())
 		if distance <= Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
-			var seen := Ship.make(contact["kind"],contact["pos"],contact["id"])
+			var seen := Ship.make(contact["kind"],pos,contact["id"])
 			found.append([distance,seen])
 	found.sort_custom(func(a,b):return a[0]<b[0])
 	var result: Array[Ship] = []
@@ -1064,13 +1082,14 @@ func _fire_antimatter(civ: Civ, source: int, target: int) -> bool:
 	if not contacts.has(target):
 		return false
 	var contact: Dictionary = contacts[target]
-	if receiver["pos"].distance_to(contact["pos"])*physical_cell_size()>Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
+	var predicted := Combat.predicted(self,contact)
+	if receiver["pos"].distance_to(predicted)*physical_cell_size()>Balance.ANTIMATTER_RANGE+Balance.COLLISION_EPSILON:
 		return false
 	var speed := light_speed_at(receiver["pos"])
 	if speed <= 0.0:
 		return false
 	var shot := {"id":next_id(),"owner":civs.find(civ),"source":source,"weapon":"antimatter","pos":receiver["pos"],
-		"direction":Combat.aim(receiver["pos"],contact["pos"],contact["velocity"],speed/physical_cell_size()),
+		"direction":Combat.aim(receiver["pos"],predicted,Combat.observed(self,contact)["velocity"],speed/physical_cell_size()),
 		"remaining":Balance.ANTIMATTER_RANGE,"distance":0.0,"created":clock,"epoch":space_epoch,"dead":false}
 	projectiles.append(shot)
 	if receiver.has("ship"):
@@ -1113,24 +1132,6 @@ func send_sophon(civ: Civ, id: int, target: Vector3i) -> Dictionary:
 	return {"error": ""}
 
 
-func _sophon_arrive(civ: Civ, s: Ship) -> void:
-	var c := s.cell()
-	var victim := coord_owner(c)
-	if victim == null or victim == civ or victim.home != c:
-		if not civ.is_ai:
-			add_log("%s到达 %s，这里不是别的文明的母星系，原地待命" % [s.label(), c])
-		return
-	s.lock = civs.find(victim)
-	s.lock_turn = turn
-	civ.known[c] = turn
-	if not civ.is_ai:
-		add_log("%s锁住了 %s：%d 回合不能升级科技，%d 回合内达到的科技等级条件不算，它做的事你都看得到" % [
-				s.label(), victim.name, Balance.SOPHON_RESEARCH_TURNS, Balance.SOPHON_TIER_TURNS])
-	if not victim.is_ai:
-		add_log("别人的智子到了你的母星系：%d 回合不能升级科技，%d 回合内达到的科技等级条件不算，你做的事对方都看得到。自己造出智子就能解除" % [
-				Balance.SOPHON_RESEARCH_TURNS, Balance.SOPHON_TIER_TURNS])
-
-
 ## 锁住这个文明的别人的智子。
 func sophons_on(victim: Civ) -> Array[Ship]:
 	var idx := civs.find(victim)
@@ -1171,17 +1172,6 @@ func _sophon_left(civ: Civ, turns: int) -> int:
 	return left
 
 
-## 被锁的文明自己造出智子：锁住它的智子都没用了，全部效果消失。
-func _free_from_sophons(civ: Civ) -> void:
-	for s in sophons_on(civ):
-		var owner := ship_owner(s)
-		_destroy(owner, s, "")
-		if owner == human():
-			add_log("%s 造出了自己的智子，你的%s失效了" % [civ.name, s.label()])
-		elif civ == human():
-			add_log("你造出了智子，%s 的智子失效了" % owner.name)
-
-
 ## 能广播的地方：有恒星广播器、没被星际探测器封锁的星系；有引力波广播（203）时所有自己的星系。
 func can_broadcast_from(civ: Civ, c: Vector3i) -> bool:
 	var status:=Knowledge.site(self,civ,c)
@@ -1194,14 +1184,6 @@ func can_broadcast_now(civ: Civ, c: Vector3i) -> bool:
 	if civ.has_tech("gravity"):
 		return true
 	return civ.broadcasters.has(c) and not jammed(civ, c)
-
-
-## 能听到广播：有引力波广播（203），或者至少有一个能用的恒星广播器（E7F6 2026-10-06）。
-func can_hear(civ: Civ) -> bool:
-	for c in civ.broadcasters:
-		if civ.owns(c) and not civ.dormant_colonies.has(c):
-			return true
-	return civ.has_tech("gravity") and not civ.colonies.is_empty()
 
 
 ## 有别人的星际探测器停在这个星系上，恒星广播器不能用。
@@ -1257,228 +1239,12 @@ func broadcast(civ: Civ, target: Vector3i, source: Vector3i = AT_HOME, ship_id :
 	return {"error": ""}
 
 
-func _spread_broadcasts() -> void:
-	var still: Array[Dictionary] = []
-	for b in broadcasts:
-		b["radius"] += 1.0
-		var from: Vector3 = b["from"]
-		var target: Vector3i = b["target"]
-		for civ in civs:
-			if not civ.alive or civ == b["sender"] or b["heard"].has(civ) or not can_hear(civ):
-				continue
-			if not _light_reaches_bases(civ, from, b["radius"]):
-				continue
-			b["heard"][civ] = true
-			civ.heard[target] = turn
-			_discover(civ, "听到了广播")
-			var owner := coord_owner(target)
-			if owner != null and owner != civ:
-				civ.known[target] = turn
-			var ex: Vector3i = b["exposed"]
-			if ex != NO_HIT and coord_owner(ex) == b["sender"]:
-				civ.known[ex] = turn
-			if civ == human():
-				add_log("听到广播：坐标 %s%s" % [target, "（广播者暴露在 %s）" % ex if ex != NO_HIT else ""])
-				if owner == civ:
-					add_log("你的星系 %s 被别人广播了" % target)
-		for h in hidden:
-			if b["hidden_heard"].has(h) or not _light_within(from, Vector3(h), b["radius"]):
-				continue
-			b["hidden_heard"][h] = true
-			hidden_listen.append({"from": h, "target": target, "left": Balance.HIDDEN_PATIENCE})
-		if b["radius"] < map.extent.length() * 6:
-			still.append(b)
-	broadcasts = still
-
-
-## 听到广播的隐藏文明每回合按机会出手：大多数时候发一颗光粒，少数时候往被广播的坐标投送降维箔（G5）：
-## 三维时是二向箔，二维时是单向著（目标挪到平面上）；压成直线以后没有箔可发，只发光粒（F5.3）。
-## 离被广播的坐标越近，越可能出手。
-func _hidden_strikes() -> void:
-	var still: Array[Dictionary] = []
-	for l in hidden_listen:
-		var h: Vector3i = l["from"]
-		var target: Vector3i = l["target"]
-		var d := Vector3(h).distance_to(Vector3(target))
-		var chance := Balance.HIDDEN_STRIKE_CHANCE * maxf(0.0, 1.0 - d / Balance.HIDDEN_HEAR_RANGE)
-		if chance > 0.0 and rng.randf() < chance:
-			if rng.randf() < Balance.HIDDEN_FOIL_CHANCE and not all_linear():
-				if all_flat():
-					target.z = flat_plane
-				var f := Foil.new(Vector3(h), target, 0, all_flat())
-				f.precise = true
-				f.speed = Balance.HIDDEN_FOIL_SPEED
-				hidden_foils.append(f)
-			else:
-				var g := Ship.make(Ship.GRAIN, Vector3(h), next_id())
-				g.docked = false
-				g.direction = (Vector3(target) - Vector3(h)).normalized()
-				hidden_ships.append(g)
-			continue
-		l["left"] -= 1
-		if l["left"] > 0:
-			still.append(l)
-	hidden_listen = still
-
-
 # ---------- 移动和交战 ----------
 
-func _move_all_ships() -> void:
-	for civ in civs:
-		for s in civ.ships.duplicate():
-			# 文明灭亡后，它已经发出的光粒接着飞（_die 只留下光粒）
-			if not s.dead and (civ.alive or s.kind == Ship.GRAIN):
-				_move_ship(civ, s)
-	for s in hidden_ships:
-		if not s.dead:
-			_move_ship(null, s)
-	_clean_dead()
-
-
-## 单位在 at 时的 [最高速度, 每回合加速]：曲率引擎在自己视野外换成更快的，慢速出发时在自己视野内限速。
-func _speed_limits(civ: Civ, s: Ship, at: Vector3, slow_start: bool) -> Array[float]:
-	var top := s.max_speed
-	var acc := s.accel
-	if s.warp and civ != null and not in_own_vision(civ, at):
-		top = Balance.WARP_MOVE[0]
-		acc = Balance.WARP_MOVE[1]
-	if slow_start and civ != null and in_own_vision(civ, at):
-		top = minf(top, Balance.SLOW_START_SPEED)
-	return [top, acc]
-
-
 ## 照现在的速度，civ 的单位 s 接下来 turns 个回合大概在哪（第一项是现在的位置），画航线用。
-## 加速、曲率引擎、慢速出发和光速都和 _move_ship 一样算；不管吞噬者停下来吃行星、星舰停在别人星系旁边、被困住。
+## 加速、曲率引擎、慢速出发和光速都和正式结算一样算；不管吞噬者停下来吃行星、星舰停在别人星系旁边。
 func predict_path(civ: Civ, ship: Ship, turns: int) -> Array[Vector3]:
 	return Knowledge.predict_path(self,civ,ship,turns)
-
-
-
-## 单位先加速、再沿直线移动（G1），检查这一步扫过的格子。有目的地的，最后一步直接落在目的地上。
-func _move_ship(civ: Civ, s: Ship) -> void:
-	if s.docked or s.parked or s.direction == Vector3.ZERO:
-		return
-	if s.eat_wait > 0:
-		s.eat_wait -= 1
-		return
-	if s.slow_start and (civ == null or not in_own_vision(civ, s.pos)):
-		s.slow_start = false
-	var limits := _speed_limits(civ, s, s.pos, s.slow_start)
-	s.speed = minf(s.speed + limits[1], limits[0])
-	var from := s.pos
-	var mine := civ != null and not civ.is_ai
-	# 实际速度还要乘以所在格的光速（G14）。慢到几乎不动就停在原地，停久了就消失
-	if s.kind != Ship.GRAIN and s.speed * light_at(s.cell()) < Balance.SHIP_MIN_SPEED:
-		s.stuck += 1
-		if s.stuck >= Balance.SHIP_STUCK_TURNS:
-			if mine:
-				add_log("%s困在光速几乎为 0 的地方，%d 回合后消失了" % [s.label(), s.stuck])
-			_destroy(civ, s, "")
-		return
-	s.stuck = 0
-	var step := _travel(from, s.direction, s.speed)
-	var to := from + s.direction * step
-	var arrived := false
-	if s.has_target:
-		# 星舰的目的地是别人的星系（下令时不知道）：停在离它 1 格的地方（已经在 1 格以内就原地停下）。
-		# 星舰的视野（VISION_COLONY）比 1 格大，到这里本来就看得到那个星系
-		var goal := s.target
-		var dest := Vector3i(s.target.round())
-		var dest_owner := coord_owner(dest)
-		var blocked := s.kind == Ship.STARSHIP and civ != null and dest_owner != null and dest_owner != civ
-		if blocked:
-			goal = s.target - s.direction * 1.0 if from.distance_to(s.target) > 1.0 else from
-		if from.distance_to(goal) <= step + 1e-6:
-			to = goal
-			arrived = true
-			if blocked:
-				civ.known[dest] = turn
-				if not civ.is_ai:
-					add_log("星舰飞到 %s 旁边，发现那里是别人的星系，停了下来" % dest)
-	# 光粒、智子不是舰船，不留航迹
-	if step > Balance.WAKE_SPEED and s.kind != Ship.GRAIN and s.kind != Ship.SOPHON:
-		wakes.append({"a": from, "b": to, "turn": turn, "gone": false})
-	var radius := Balance.GRAIN_RADIUS if s.kind == Ship.GRAIN else 0.0
-	var cells := Geometry.segment_cells(from, to, radius, map.bounds())
-	# 光粒在光速低于 GRAIN_MIN_LIGHT 的地方失去杀伤力（G14）：出发的格子也要看
-	if s.kind == Ship.GRAIN and light_at(s.cell()) < Balance.GRAIN_MIN_LIGHT:
-		_disarm_grain(civ, s)
-		return
-	for c in cells:
-		if s.kind == Ship.GRAIN and light_at(c) < Balance.GRAIN_MIN_LIGHT:
-			_disarm_grain(civ, s)
-			return
-		if not cell_exists(c) or (civ != null and not cell_survives(civ, c)):
-			if s.kind == Ship.GRAIN:
-				continue
-			if mine:
-				add_log("%s飞进被压平的空间，消失了" % s.label())
-			_destroy(civ, s, "")
-			return
-		var owner := coord_owner(c)
-		match s.kind:
-			Ship.GRAIN:
-				if owner != null and owner != civ and map.star_at(c) != StarMap.Star.NONE:
-					_grain_hit(c, owner, s, civ)
-					_destroy(civ, s, "")
-					return
-			Ship.COLONY:
-				if owner != null and owner != civ:
-					if mine:
-						add_log("%s经过别人的星系，被毁掉了" % s.label())
-					_destroy(civ, s, "")
-					return
-			Ship.PROBE:
-				if s.interstellar and owner != null and owner != civ:
-					s.pos = Vector3(c)
-					s.parked = true
-					s.speed = 0.0
-					if mine:
-						add_log("%s停在了 %s 的一个星系上" % [s.label(), owner.name])
-					return
-			Ship.DEVOURER:
-				if owner == null and map.rocky.get(c, 0) > 0:
-					s.pos = Vector3(c)
-					s.speed = 0.0
-					s.eat_wait = 1
-					_eat(civ, c)
-					return
-	s.pos = to
-	if arrived:
-		s.speed = 0.0
-		s.direction = Vector3.ZERO
-		s.has_target = false
-		if s.kind == Ship.COLONY:
-			_settle(civ, s)
-			return
-		if s.kind == Ship.SOPHON:
-			_sophon_arrive(civ, s)
-			return
-		if mine:
-			add_log("%s到达 %s" % [s.label(), s.cell()])
-	# 飞出星图才消失；隐藏文明的光粒从星图外出发，往星图里飞的时候不算
-	var center := Vector3(map.origin) + Vector3(map.extent - Vector3i.ONE) / 2.0
-	if s.is_outside(map.bounds()) and (not Ship.outside(from, map.bounds()) or to.distance_to(center) >= from.distance_to(center)):
-		if mine or (s.kind == Ship.GRAIN and civ == human()):
-			add_log("%s飞出星图%s" % [s.label(), "，没打中" if s.kind == Ship.GRAIN else ""])
-		_destroy(civ, s, "")
-
-
-func _disarm_grain(civ: Civ, g: Ship) -> void:
-	if civ == human():
-		add_log("光粒飞进光速变慢的地方（黑域），失去了杀伤力")
-	_destroy(civ, g, "")
-
-
-## 吞噬者吃掉 c 的一颗类地行星。吃掉的可能是宜居行星，那样这个星系就不能再殖民（T14）。
-func _eat(civ: Civ, c: Vector3i) -> void:
-	var before: int = map.rocky[c]
-	map.rocky[c] = before - 1
-	if map.habitable.has(c) and rng.randf() < 1.0 / before:
-		map.habitable.erase(c)
-	civ.mineral += Balance.DEVOURER_MINERAL
-	if not civ.is_ai:
-		add_log("吞噬者在 %s 吃掉一颗类地行星，得到 %dM" % [c, Balance.DEVOURER_MINERAL])
 
 
 ## 殖民船到了目的地：能殖民就建殖民地（船用掉）；不能就停在那里，可以再派去别处（F4.4）。
@@ -1491,216 +1257,6 @@ func _settle(civ: Civ, s: Ship) -> void:
 ## 这个格子能不能建立殖民地：宜居、还有恒星、没有活着的文明占着。
 func can_settle(c: Vector3i) -> bool:
 	return cell_exists(c) and map.is_habitable(c) and map.star_at(c) != StarMap.Star.NONE and coord_owner(c) == null
-
-
-## 光粒打中 c：毁掉 1 颗恒星（连同它的戴森球），抹掉那里的文明；有掩体时文明留下（B1、T10、D1）。
-func _grain_hit(c: Vector3i, owner: Civ, g: Ship, shooter: Civ) -> void:
-	owner.times_hit += 1
-	owner.hit_dirs.append({"at": c, "dir": -g.direction, "turn": turn})
-	if shooter != null:
-		shooter.record_hits[c] = true
-		shooter.record_empty.erase(c)
-	var weapon := "光粒" if shooter != null else "来历不明的光粒"
-	if (dimension == 3 and owner.reduced) or (dimension == 2 and owner.line_reduced):
-		if owner == human() or shooter == human():
-			add_log("%s打中 %s，但对方已降维，光粒无效" % [weapon, c])
-		return
-	var left := map.star_at(c) - 1
-	map.stars[c] = left
-	if owner.dysons.get(c, 0) > 0:
-		owner.dysons[c] -= 1
-		if owner.dysons[c] == 0:
-			owner.dysons.erase(c)
-	_cap_dysons(owner)
-	if owner.bunkers.has(c):
-		if owner == human():
-			add_log("%s打中你的星系 %s，毁掉 1 颗恒星（剩 %d 颗），躲在掩体里的人活了下来" % [weapon, c, left])
-		elif shooter == human():
-			add_log("光粒打中 %s，毁掉 1 颗恒星，但对方躲在掩体里活了下来" % c)
-		return
-	if owner == human():
-		add_log("%s打中你的星系 %s，那里的文明被抹掉了" % [weapon, c])
-	elif shooter == human():
-		add_log("光粒打中 %s，毁掉了那里的文明" % c)
-	if shooter != null:
-		shooter.known.erase(c)
-	# 停在这里的星舰也一起毁掉
-	for civ in civs:
-		var ss := civ.starship()
-		if civ.alive and ss != null and ss.cell() == c and ss.direction == Vector3.ZERO:
-			_destroy(civ, ss, "光粒")
-	_lose_system(c, owner, "光粒")
-
-
-## 戴森球不能比恒星多。
-func _cap_dysons(civ: Civ) -> void:
-	var extra := civ.dyson_count() - civ.star_total(map)
-	for c in civ.dysons.keys():
-		if extra <= 0:
-			break
-		var n: int = civ.dysons[c]
-		var take := mini(n, extra)
-		civ.dysons[c] = n - take
-		extra -= take
-		if civ.dysons[c] == 0:
-			civ.dysons.erase(c)
-
-
-## 交战（游戏设计 §6、§12）：
-## 1. 一方的舰船和另一方的舰船（光粒、智子除外）相距 CONTACT_RANGE 以内，双方都算接触过（II 级的条件，E8）。
-## 2. 带武器的战舰朝射程里的敌方战舰开火（T23），所有战舰同时开火。
-## 3. 还活着的战舰和敌方战舰、星舰相遇，一起毁掉。
-## 4. 其余在飞的战舰每回合打一个目标：先打附近的敌方殖民船，再打附近没有反物质的敌方星系。
-func _combat() -> void:
-	var units: Array = []  # [文明, 单位]
-	for civ in civs:
-		if not civ.alive:
-			continue
-		for s in civ.ships:
-			if not s.dead and s.kind != Ship.GRAIN and s.kind != Ship.SOPHON:
-				units.append([civ, s])
-	for i in units.size():
-		for j in range(i + 1, units.size()):
-			var a: Array = units[i]
-			var b: Array = units[j]
-			if a[0] != b[0] and not (a[1].docked and b[1].docked) \
-					and a[1].pos.distance_to(b[1].pos) <= Balance.CONTACT_RANGE + 1e-6:
-				_engage(a[0], b[0])
-	_fire_weapons(units)
-	var r := Balance.WARSHIP_RANGE + 1e-6
-	var pairs: Array = []
-	for i in units.size():
-		for j in range(i + 1, units.size()):
-			var a: Array = units[i]
-			var b: Array = units[j]
-			if a[0] == b[0] or (a[1].docked and b[1].docked) or a[1].dead or b[1].dead:
-				continue
-			var kinds := [a[1].kind, b[1].kind]
-			var d: float = a[1].pos.distance_to(b[1].pos)
-			if d > r:
-				continue
-			if kinds.has(Ship.WARSHIP) and (kinds.count(Ship.WARSHIP) == 2 or kinds.has(Ship.STARSHIP)):
-				pairs.append([d, a, b])
-	pairs.sort_custom(func(x, y): return x[0] < y[0])
-	for p in pairs:
-		var a: Array = p[1]
-		var b: Array = p[2]
-		if a[1].dead or b[1].dead:
-			continue
-		if a[0] == human() or b[0] == human():
-			add_log("%s的%s和%s的%s相遇，一起毁掉了" % [a[0].name, a[1].label(), b[0].name, b[1].label()])
-		_destroy(a[0], a[1], "舰船交战")
-		_destroy(b[0], b[1], "舰船交战")
-	for u in units:
-		var civ: Civ = u[0]
-		var s: Ship = u[1]
-		if s.dead or s.kind != Ship.WARSHIP:
-			continue
-		if s.docked or not civ.alive:
-			continue
-		_warship_strike(civ, s)
-	_clean_dead()
-
-
-## 一方的舰船和另一方的舰船接触：双方都算达到 II 级的条件（E8）。
-func _engage(a: Civ, b: Civ) -> void:
-	for civ in [a, b]:
-		_reach_tier(civ, 2, "和别的文明的舰船接触")
-
-
-## 带武器的战舰开火（T23）：射程里有敌方战舰时，按次声波氢弹、高能粒子束、星际鱼雷的顺序，
-## 用第一种够得着、付得起的武器打最近的一艘。先定好所有战舰打谁，再一起结算，所以两艘可以同时打掉对方。
-## 两边都停在星系里的不打（和相遇一样）。
-func _fire_weapons(units: Array) -> void:
-	var shots: Array = []  # [开火的文明, 战舰, 武器, 目标的文明, 目标]
-	for u in units:
-		var civ: Civ = u[0]
-		var s: Ship = u[1]
-		if s.kind != Ship.WARSHIP or s.weapons.is_empty():
-			continue
-		for w in Tech.WEAPONS:
-			if not s.weapons.has(w) or _cant_afford_shot(civ, w):
-				continue
-			var best: Array = []
-			var best_d := weapon_range(w) + 1e-6
-			for v in units:
-				var t: Ship = v[1]
-				if v[0] == civ or t.kind != Ship.WARSHIP or (s.docked and t.docked):
-					continue
-				var d := s.pos.distance_to(t.pos)
-				if d <= best_d and not blocked(s.pos, t.pos):
-					best_d = d
-					best = v
-			if not best.is_empty():
-				shots.append([civ, s, w, best[0], best[1]])
-				break
-	for shot in shots:
-		var civ: Civ = shot[0]
-		var w: String = shot[2]
-		var other: Civ = shot[3]
-		var t: Ship = shot[4]
-		if t.dead or _cant_afford_shot(civ, w):
-			continue
-		var pay := weapon_shot(w)
-		civ.energy -= pay[0]
-		civ.mineral -= pay[1]
-		var who := "%s的%s" % [civ.name, shot[1].label()]
-		var whom := "%s的%s" % [other.name, t.label()]
-		var told := civ == human() or other == human()
-		match w:
-			"beam":
-				if told:
-					add_log("%s用高能粒子束毁掉了%s" % [who, whom])
-				_destroy(other, t, "战舰")
-			"torpedo":
-				t.damage += 1
-				if t.damage >= Balance.TORPEDO_HITS:
-					if told:
-						add_log("%s用星际鱼雷打中%s，%s毁掉了" % [who, whom, t.label()])
-					_destroy(other, t, "战舰")
-				elif told:
-					add_log("%s用星际鱼雷打中%s（%d/%d）" % [who, whom, t.damage, Balance.TORPEDO_HITS])
-			"hbomb":
-				civ.energy += t.cost[0]
-				civ.mineral += t.cost[1]
-				if told:
-					add_log("%s用次声波氢弹杀死了%s的船员，收回 %dE、%dM" % [who, whom, t.cost[0], t.cost[1]])
-				_destroy(other, t, "战舰")
-
-
-## 开一次火的钱够不够（够时为 false）。
-func _cant_afford_shot(civ: Civ, w: String) -> bool:
-	var pay := weapon_shot(w)
-	return civ.energy < pay[0] or civ.mineral < pay[1]
-
-
-## 战舰每回合打一个目标：附近的敌方殖民船，再是附近没有反物质的敌方星系。
-func _warship_strike(civ: Civ, s: Ship) -> void:
-	var r := Balance.WARSHIP_RANGE + 1e-6
-	for other in civs:
-		if other == civ or not other.alive:
-			continue
-		for t in other.ships:
-			if not t.dead and t.kind == Ship.COLONY and t.pos.distance_to(s.pos) <= r:
-				if other == human() or civ == human():
-					add_log("%s的%s打掉了%s的%s" % [civ.name, s.label(), other.name, t.label()])
-				_destroy(other, t, "战舰")
-				return
-	for other in civs:
-		if other == civ or not other.alive or other.antimatter > 0:
-			continue
-		for c in other.colonies:
-			if Vector3(c).distance_to(s.pos) <= r and not blocked(s.pos, Vector3(c)):
-				other.times_hit += 1
-				other.hit_dirs.append({"at": c, "dir": (s.pos - Vector3(c)).normalized(), "turn": turn})
-				civ.record_hits[c] = true
-				civ.known.erase(c)
-				if other == human():
-					add_log("敌方战舰打到你的星系 %s，那里的文明被抹掉了" % c)
-				elif civ == human():
-					add_log("%s抹掉了 %s 在 %s 的星系" % [s.label(), other.name, c])
-				_lose_system(c, other, "战舰")
-				return
 
 
 ## 单位毁掉：做个记号，回合里统一拿掉。
@@ -1728,7 +1284,6 @@ func _destroy(civ: Civ, s: Ship, cause: String) -> void:
 			else:
 				surviving.append(project)
 		civ.pending = surviving
-
 
 
 func _remove_ship(civ: Civ, s: Ship) -> void:
@@ -1802,15 +1357,9 @@ func in_own_vision(civ: Civ, p: Vector3) -> bool:
 	return false
 
 
-func sees_now(civ: Civ, c: Vector3i) -> bool:
-	for o in observers(civ):
-		if o["base"] and in_view(o, Vector3(c)) and not blocked(o["pos"], Vector3(c)):
-			return true
-	return false
-
-
 ## 星系 c 现在的样子（情报里记下的）。
-func snapshot(c: Vector3i) -> Dictionary:
+## counts 是 snapshot_counts 的结果：一次要拍很多个星系时先数好，不用每个星系都把主人的舰船和箔扫一遍。结果一样。
+func snapshot(c: Vector3i, counts := {}) -> Dictionary:
 	var owner := coord_owner(c)
 	var info := {"turn": turn, "stars": map.star_at(c), "rocky": map.rocky.get(c, 0), "gas": map.gas.get(c, 0),
 			"habitable": map.is_habitable(c), "owner": civs.find(owner) if owner != null else -1, "dysons": 0, "warships": 0, "broadcaster": false, "grain": false, "foil": false,
@@ -1820,6 +1369,10 @@ func snapshot(c: Vector3i) -> Dictionary:
 		info["broadcaster"] = owner.broadcasters.has(c)
 		info["grain"] = owner.grains.has(c)
 		info["bunker"] = owner.bunkers.has(c)
+		if not counts.is_empty():
+			info["warships"] = counts["warships"][info["owner"]].get(c, 0)
+			info["foil"] = counts["foils"][info["owner"]].has(c)
+			return info
 		for s in owner.ships:
 			if s.kind == Ship.WARSHIP and s.docked and s.cell() == c:
 				info["warships"] += 1
@@ -1827,6 +1380,32 @@ func snapshot(c: Vector3i) -> Dictionary:
 			if f.prepare_left > 0 and Vector3i(f.origin.round()) == c:
 				info["foil"] = true
 	return info
+
+
+## snapshot 要数的东西，按文明、按格子先数好：{"warships": [{格子: 停着的战舰数}], "foils": [{格子: true}]}。
+func snapshot_counts() -> Dictionary:
+	var counts := {"warships": [], "foils": []}
+	for civ in civs:
+		var docked := {}
+		for s in civ.ships:
+			if s.kind == Ship.WARSHIP and s.docked:
+				docked[s.cell()] = docked.get(s.cell(), 0) + 1
+		var foils := {}
+		for f in civ.foils:
+			if f.prepare_left > 0:
+				foils[Vector3i(f.origin.round())] = true
+		counts["warships"].append(docked)
+		counts["foils"].append(foils)
+	return counts
+
+
+## snapshot 用到的所有事实合成一个签名（counts 是 snapshot_counts 的结果）：签名没变，就没有哪个星系的快照变了。
+## 只为提速：一次原生的 hash 比逐个星系拍快照便宜得多。黑域和死线在场时光速随时间变，签名管不了，调用方要先看 Hazards.any。
+func cell_facts(counts: Dictionary) -> int:
+	var owners := []
+	for civ in civs:
+		owners.append([civ.alive, civ.colonies, civ.dysons, civ.broadcasters, civ.grains, civ.bunkers])
+	return hash([dimension, cell_dims, light, map.stars, map.habitable, map.rocky, map.gas, owners, counts])
 
 
 ## 回合末所有文明看一遍之前，先把这段时间里不会变的东西算好，省得每只眼睛都重算（只为提速，结果不变）：
@@ -1848,7 +1427,6 @@ func _begin_view_cache() -> void:
 			if light[i] < Balance.SHIP_MIN_SPEED:
 				dark.append(Vector3(map.origin + Vector3i(i / (n.y * n.z), (i / n.z) % n.y, i % n.z)))
 	_view_cache = {"grid": grid, "dark": dark, "snaps": {}}
-
 
 
 ## 离 pos 每个方向都不超过 reach 的星系格子（round 时还要直线距离不超过 reach），顺序和 system_cells 一样。
@@ -1877,145 +1455,54 @@ func _systems_near(pos: Vector3, reach: float, round := false) -> Array[Vector3i
 	return result
 
 
-## 星系快照，回合末看的时候同一个星系只拍一次。
-func _snapshot_once(c: Vector3i) -> Dictionary:
-	if _view_cache.is_empty():
-		return snapshot(c)
-	var snaps: Dictionary = _view_cache.get("snaps", {})
-	if not snaps.has(c):
-		snaps[c] = snapshot(c)
-	return snaps[c]
-
-
-## 每只眼睛看一遍：据点看到的当回合就知道；舰船、探测器看到的按光速传回（G7.6）。
-func _observe(civ: Civ) -> void:
-	var home_pos := Vector3(civ.home)
-	if civ.colonies.is_empty() and civ.has_starship():
-		home_pos = civ.starship().pos
-	var bases := civ.bases()
-	var snaps: Dictionary = _view_cache.get("snaps", {})
-	for o in observers(civ):
-		var pos: Vector3 = o["pos"]
-		var report := {"cells": {}, "ships": [], "wakes": [], "turn": turn}
-		# 球形视野：和 in_view 一样只看 r 以内，找的时候就按距离挑好。圆锥边上还加了半格，多找 1 格，再用 in_view 挑
-		var sphere: bool = o["dir"] == Vector3.ZERO
-		var reach: float = o["r"] + (1e-6 if sphere else 1.0)
-		var cells: Dictionary = report["cells"]
-		var may_block := _may_block(pos - Vector3.ONE * reach, pos + Vector3.ONE * reach)
-		var near := _systems_near(pos, reach, sphere)
-		for c in near:
-			var p := Vector3(c)
-			if (not sphere and not in_view(o, p)) or (may_block and blocked(pos, p)):
-				continue
-			if not snaps.has(c):
-				snaps[c] = snapshot(c)
-			cells[c] = snaps[c]
-		for other in civs:
-			if other == civ or not other.alive:
-				continue
-			for s in other.ships:
-				# 智子太小，看不到
-				if not s.dead and not s.docked and s.kind != Ship.SOPHON and in_view(o, s.pos) and not blocked(pos, s.pos):
-					# 看到别的文明的舰船（光粒除外）也算发现别人（I 级）
-					report["ships"].append({"pos": s.pos, "kind": s.kind, "turn": turn,
-							"civ_ship": s.kind != Ship.GRAIN})
-			for f in other.foils:
-				if f.prepare_left == 0 and in_view(o, f.position()):
-					report["ships"].append({"pos": f.position(), "kind": foil_kind(f), "turn": turn})
-		for s in hidden_ships:
-			if in_view(o, s.pos):
-				report["ships"].append({"pos": s.pos, "kind": s.kind, "turn": turn})
-		for i in wakes.size():
-			var w: Dictionary = wakes[i]
-			if w["gone"] or civ.wakes_seen.has(i):
-				continue
-			var a: Vector3 = w["a"]
-			var b: Vector3 = w["b"]
-			if in_view(o, a) or in_view(o, b) or in_view(o, (a + b) / 2.0):
-				report["wakes"].append(i)
-		if o["base"]:
-			_apply_detail(civ, report)
-			_apply_home(civ, report)
-		else:
-			# 按光速传回：经过光速低的地方会慢一些，经过光速几乎为 0 的地方传不回来（G14）
-			var to_base := INF
-			for b in bases:
-				# 光走的时间不会比直线距离短，比已经找到的还远的据点不用细算
-				if pos.distance_to(b) <= to_base + 1e-6:
-					to_base = minf(to_base, light_time(pos, b))
-			if to_base == INF:
-				continue
-			var to_home := light_time(pos, home_pos)
-			report["detail_at"] = turn + ceili(to_base - 1e-6)
-			report["home_at"] = turn + ceili(to_home - 1e-6) if to_home != INF else NEVER
-			report["detail_done"] = false
-			civ.reports.append(report)
-	_sophon_watch(civ)
-
-
-## 智子锁住的文明：它的星系和在飞的单位当回合就知道，不用等光传回（D5）。
-func _sophon_watch(civ: Civ) -> void:
-	for s in civ.ships:
-		if s.kind != Ship.SOPHON or s.dead or s.lock < 0:
-			continue
-		var victim := civs[s.lock]
-		if not victim.alive:
-			continue
-		for c in victim.colonies:
-			civ.intel[c] = _snapshot_once(c)
-			civ.known[c] = turn
-		for t in victim.ships:
-			if not t.dead and not t.docked and t.kind != Ship.SOPHON:
-				civ.sightings.append({"pos": t.pos, "kind": t.kind, "turn": turn})
-
-
-## 情报传回最近的据点：记下细节（鼠标停在格子上能看到）。
-func _apply_detail(civ: Civ, report: Dictionary) -> void:
-	for c in report["cells"]:
-		var info: Dictionary = report["cells"][c]
-		if not civ.intel.has(c) or civ.intel[c]["turn"] <= info["turn"]:
-			civ.intel[c] = info
-
-
-## 情报传回母星系：敌人的星系、舰船、航迹显示在星图上；看到别人的星系或舰船就算发现别人（B8、T3）。
-func _apply_home(civ: Civ, report: Dictionary) -> void:
-	for c in report["cells"]:
-		var info: Dictionary = report["cells"][c]
-		var owner: Civ = civs[info["owner"]] if info["owner"] >= 0 else null
-		if owner != null and owner != civ:
-			if not civ.known.has(c) or civ.known[c] <= info["turn"]:
-				civ.known[c] = info["turn"]
-			civ.record_empty.erase(c)
-			_discover(civ, "发现了别的文明的星系（%s）" % c)
-		elif civ.known.has(c) and civ.known[c] <= info["turn"]:
-			civ.known.erase(c)
-	for sight in report["ships"]:
-		civ.sightings.append(sight)
-		if sight.get("civ_ship", false):
-			_discover(civ, "发现了别的文明的舰船")
-	for i in report["wakes"]:
-		civ.wakes_seen[i] = true
-
-
-func _deliver_reports(civ: Civ) -> void:
-	var still: Array[Dictionary] = []
-	for r in civ.reports:
-		if not r["detail_done"] and turn >= r["detail_at"]:
-			_apply_detail(civ, r)
-			r["detail_done"] = true
-		if turn >= r["home_at"]:
-			_apply_home(civ, r)
-		elif r["home_at"] != NEVER or not r["detail_done"]:
-			still.append(r)
-	civ.reports = still
-	_expire_intel(civ)
-
-
-## 太旧的目击记录删掉；预警只报这一回合的，清空。灭亡的文明不再收到新情报，旧的也照样过期。
+## 太旧的目击记录和预警删掉（还在预警范围里的目标每年至少重报一次）。
+## 灭亡的文明不再收到新情报，旧的也照样过期，预警直接清空。
 func _expire_intel(civ: Civ) -> void:
 	civ.sightings = civ.sightings.filter(func(x): return x["turn"] >= turn - Balance.SIGHTING_KEEP)
+	civ.alerts = civ.alerts.filter(func(x): return x["turn"] >= turn - Balance.SIGHTING_KEEP)
 	if not civ.alive:
 		civ.alerts.clear()
+
+
+## 只增不减的记录每回合修剪一次，长局里内存和存档不会一直变大。删的都是规则不再读的旧条目：
+## 日志、事件和命令回执只留最近的；账本把旧账并成一笔「结转」，总数不变；
+## 传感器签名过了一年本来就要重发，两年没用的删掉；很久没有新观测的当地目标删掉（星系的归属留着）。
+func _trim_records() -> void:
+	if log_lines.size() > LOG_KEEP:
+		log_lines = log_lines.slice(-LOG_KEEP)
+	if events.size() > EVENT_KEEP:
+		events = events.slice(-EVENT_KEEP)
+	for key in sensor_stamps.keys():
+		if clock - sensor_stamps[key]["time"] > 2.0:
+			sensor_stamps.erase(key)
+	for civ in civs:
+		if civ.ledger.size() > LEDGER_KEEP * 2:
+			var cut := civ.ledger.size() - LEDGER_KEEP
+			var total := [0, 0]
+			for entry in civ.ledger.slice(0, cut):
+				var delta: Array = entry.get("delta", [0, 0])
+				for i in 2:
+					total[i] += delta[i]
+			var t: float = civ.ledger[cut - 1]["t"]
+			civ.ledger = civ.ledger.slice(cut - 1)
+			civ.ledger[0] = {"t": t, "kind": "carried", "delta": total}
+		var drop := civ.command_results.size() - RESULT_KEEP
+		if drop > 0:
+			civ.command_results = civ.command_results.slice(drop)
+			civ.ai_receipt_cursor = maxi(0, civ.ai_receipt_cursor - drop)
+		for ship in civ.ships:
+			_forget_contacts(ship.local_contacts)
+		for source in civ.local_contacts_by_source.keys():
+			_forget_contacts(civ.local_contacts_by_source[source])
+			if civ.local_contacts_by_source[source].is_empty():
+				civ.local_contacts_by_source.erase(source)
+
+
+## 删掉 CONTACT_KEEP 年没有新观测的移动目标；星系归属（键是 cell:格子号）不过期。
+func _forget_contacts(contacts: Dictionary) -> void:
+	for key in contacts.keys():
+		if key is int and clock - contacts[key].get("t_received", clock) > CONTACT_KEEP:
+			contacts.erase(key)
 
 
 ## 预警系统：敌方的战舰、光粒、二向箔或单向著进入预警范围，报告它的位置（T12）。
@@ -2048,15 +1535,6 @@ func _warn(civ: Civ) -> void:
 				var names := {Ship.WARSHIP: "敌方战舰", Ship.GRAIN: "光粒", "foil": "二向箔", "line_foil": "单向著"}
 				var p: Vector3 = t[0]
 				add_log("预警：%s在 (%.1f, %.1f, %.1f)" % [names[t[1]], p.x, p.y, p.z])
-
-
-## 星系和星舰视野里的格子数（暗能量采集用，按球的体积估算）。
-func vision_cells(civ: Civ) -> int:
-	var total := 0.0
-	for o in observers(civ):
-		if o["base"]:
-			total += 4.0 / 3.0 * PI * pow(o["r"], 3)
-	return mini(int(total), DimensionSpace.COUNT)
 
 
 # ---------- 收入 ----------
@@ -2144,47 +1622,6 @@ func _launch_foil(civ: Civ, target: Vector3i, origin: Vector3i, to_line: bool) -
 	return {"error": "", "payload": payload_id}
 
 
-func _advance_foil_list(list: Array[Foil], owner: Civ) -> Array[Foil]:
-	var still_flying: Array[Foil] = []
-	for foil: Foil in list.duplicate():
-		if not foil_works(foil):
-			continue
-		if is_over() and owner != null:
-			break
-		if foil.prepare_left > 0:
-			foil.prepare_left -= 1
-			if foil.prepare_left == 0 and owner != null and not owner.is_ai:
-				add_log("%s准备完成，起飞" % ("单向著" if foil.to_line else "二向箔"))
-			still_flying.append(foil)
-			continue
-		var from_t := foil.traveled
-		foil.traveled = minf(foil.traveled + foil.speed, foil.total_distance())
-		var arrived := foil.traveled >= foil.total_distance() - 1e-6
-		var at := NO_HIT
-		if foil.to_line and not foil.precise:
-			# 多算一点点，免得浮点误差把目标格子漏掉
-			for c in Geometry.cylinder_cells_between(foil.origin, foil.direction(), from_t,
-					foil.traveled + 1e-4, 0.0, map.bounds()):
-				var o := coord_owner(c)
-				if o != null and o != owner:
-					at = c
-					break
-		if at == NO_HIT and arrived:
-			at = foil.target
-		if at == NO_HIT:
-			still_flying.append(foil)
-			continue
-		var name := "单向著" if foil.to_line else "二向箔"
-		add_log(("%s在 %s 展开" if owner != null else "一片来历不明的%s在 %s 展开") % [name, at])
-		if foil.to_line:
-			_unfold_line_foil(at)
-		elif not all_flat():
-			_unfold_foil(at)
-	if owner != null and not owner.alive:
-		return []
-	return still_flying.filter(func(f): return foil_works(f))
-
-
 ## 箔还有没有用：星图已经全部压平，二向箔就没东西可压；压成直线以后，单向著也一样。
 func foil_works(f: Foil) -> bool:
 	return not all_linear() if f.to_line else not all_flat()
@@ -2203,15 +1640,6 @@ func _flatten_cell(c: Vector3i, plane: int) -> void:
 	_compress_cell(c, false)
 	if flattened.size() == DimensionSpace.COUNT:
 		DimensionSpace.commit(self, false)
-
-
-func _linearize_cell(c: Vector3i) -> void:
-	if dimension != 2 or linearized.has(c) or not map.contains(c):
-		return
-	linearized[c] = line_y
-	_compress_cell(c, true)
-	if linearized.size() == DimensionSpace.COUNT:
-		DimensionSpace.commit(self, true)
 
 
 ## 宇宙物质保留；未自行降维的文明失去资产，存活资产暂留原坐标。
@@ -2247,14 +1675,6 @@ func all_linear() -> bool:
 ## 降维只重排坐标，不删除宇宙格子。
 func cell_exists(c: Vector3i) -> bool:
 	return map.contains(c)
-
-
-func cell_survives(civ: Civ, c: Vector3i) -> bool:
-	if dimension == 3:
-		return not flattened.has(c) or civ.reduced
-	if dimension == 2:
-		return not linearized.has(c) or civ.line_reduced
-	return civ.line_reduced
 
 
 ## 完成降维的地图里，方向只能沿剩下的轴。
@@ -2320,45 +1740,6 @@ func _unfold_line_foil(at: Vector3i) -> void:
 	_check_winner()
 
 
-## 二维里在平面上按圆形扩散，扫过的格子压到一维（U3）。
-static func line_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c) <= age
-
-
-## 箔的波前离格子 c 多远：从落点算的直线距离（三维里是球形，二维里是圆形，U3）。
-## 规则（压没哪些格子）和展开画面（DimensionSpace.frame 用的 Layout.arrivals）算法一样，两边不会对不上。
-static func zone_distance(center: Vector3i, c: Vector3i) -> float:
-	return Vector3(c - center).length()
-
-
-func _apply_line_zone(zone: Dictionary) -> void:
-	if dimension != 2:
-		return
-	_collapse_depth += 1
-	for c in map.cells():
-		if line_covers(zone["center"], zone["age"], c):
-			_linearize_cell(c)
-	_collapse_depth -= 1
-	_check_winner()
-
-
-## 波前从落点按球形推进，扫过的格子展开到二维（U3）。
-static func zone_covers(center: Vector3i, age: float, c: Vector3i) -> bool:
-	return zone_distance(center, c) <= age
-
-
-## 按波前处理整列；同时展开多片箔时只处理尚未展开的格子。
-func _apply_zone(zone: Dictionary) -> void:
-	if dimension != 3:
-		return
-	_collapse_depth += 1
-	for c in map.cells():
-		if zone_covers(zone["center"], zone["age"], c):
-			_flatten_cell(c, flat_plane)
-	_collapse_depth -= 1
-	_check_winner()
-
-
 ## 格子 c 再过几个回合会被压没（已经压没时为 0，没有展开的二向箔时为 INF）。
 func turns_until_flat(c: Vector3i) -> float:
 	var best := INF
@@ -2397,10 +1778,6 @@ func reduce_error(civ: Civ) -> String:
 
 func start_reduce(civ: Civ) -> Dictionary:
 	return prepare_conversion(civ, Conversion.known_roster(self,civ,dimension), Signals.controller(civ), false, true)
-
-
-func _advance_reduce(_civ: Civ) -> void:
-	pass # 迁维由工程完成、有限传播和逐实体转换事件推进。
 
 
 func singularity_error(civ: Civ) -> String:
@@ -2465,73 +1842,6 @@ func launch_black_domain(civ: Civ, center: Vector3i) -> Dictionary:
 	return {"error": ""}
 
 
-func _advance_domains(civ: Civ) -> void:
-	var still: Array[Dictionary] = []
-	for d in civ.pending_domains:
-		d["left"] -= 1
-		if d["left"] > 0:
-			still.append(d)
-			continue
-		var center: Vector3i = d["center"]
-		if not cell_exists(center):
-			continue
-		_ensure_light()
-		light[light_index(center)] = 0.0
-		_light_moving = true
-		black_domains = black_domains.filter(func(x): return x["center"] != center)
-		black_domains.append({"center": center, "left": Balance.BLACK_DOMAIN_TURNS})
-		add_log("%s 出现黑域：那一格的光速变成 0，保持 %d 回合，再慢慢向周围扩散" % [center, Balance.BLACK_DOMAIN_TURNS])
-	civ.pending_domains = still
-
-
-## 黑域中心倒数，然后光速向周围扩散一格。
-func _tick_domains() -> void:
-	var still: Array[Dictionary] = []
-	for d in black_domains:
-		d["left"] -= 1
-		if d["left"] > 0:
-			still.append(d)
-		else:
-			add_log("%s 的黑域中心不再保持光速为 0，开始慢慢恢复" % d["center"])
-	black_domains = still
-	_spread_light()
-
-
-## 光速扩散（G14）：每一格变成它自己和周围 26 格（星图里的）的平均，所以比周围慢的格子每回合向外扩散一格，
-## 慢的格子也被周围拉快一点。黑域中心在保持期内一直是 0。几个黑域自然叠在一起算。
-## 依次沿 x、y、z 三个方向各取一次相邻三格的平均，结果和直接取 3×3×3 的平均一样，但快得多。
-func _spread_light() -> void:
-	if not _light_moving:
-		return
-	var n := map.extent
-	var before := light
-	var a := light
-	for axis in 3:
-		var stride: int = [n.y * n.z, n.z, 1][axis]
-		var b := PackedFloat64Array()
-		b.resize(a.size())
-		for i in a.size():
-			var k := (i / stride) % n[axis]
-			var sum := a[i]
-			var count := 1
-			if k > 0:
-				sum += a[i - stride]
-				count += 1
-			if k < n[axis] - 1:
-				sum += a[i + stride]
-				count += 1
-			b[i] = sum / count
-		a = b
-	for d in black_domains:
-		a[light_index(d["center"])] = 0.0
-	light = a
-	# 扩散均匀了（没有黑域中心，各格几乎不再变化）就停下，省得每回合重算
-	var change := 0.0
-	for i in light.size():
-		change = maxf(change, absf(light[i] - before[i]))
-	_light_moving = not black_domains.is_empty() or change > 1e-6
-
-
 func _ensure_light() -> void:
 	if light.is_empty():
 		light.resize(DimensionSpace.COUNT)
@@ -2546,8 +1856,17 @@ func light_index(c: Vector3i) -> int:
 
 ## 直接设格子 c 的光速（测试用来摆出想要的局面；规则里光速只由黑域改）。
 func set_light_at(c: Vector3i, value: float) -> void:
+	var cells: Array[Vector3i] = [c]
+	Signals.before_light_change(self, cells, [])
 	_ensure_light()
 	light[light_index(c)] = value
+	light_version += 1
+
+
+## 设编号为 id 的格子的维度。规则和测试都经这里改，Hazards.uniform_light 才知道要重算。
+func set_cell_dim(id: int, dim: int) -> void:
+	cell_dims[id] = dim
+	light_version += 1
 
 
 ## 格子 c 的光速（G14），开始是 1.0，被黑域拉低。星图外的都是 1.0。
@@ -2572,54 +1891,6 @@ func light_time(a: Vector3, b: Vector3) -> float:
 	return t
 
 
-## 光从 a 走到 b 要不要超过 limit 个回合。光速最多是 1，光走的时间不会比直线距离短，
-## 直线距离已经超过 limit 的不用一段段算。
-func _light_within(a: Vector3, b: Vector3, limit: float) -> bool:
-	return a.distance_to(b) <= limit + 1e-6 and light_time(a, b) <= limit
-
-
-## 光从 p 能不能在 limit 个回合内传到文明的某个据点（星系、星舰）。
-func _light_reaches_bases(civ: Civ, p: Vector3, limit: float) -> bool:
-	for b in civ.bases():
-		if _light_within(p, b, limit):
-			return true
-	return false
-
-## 舰船以 speed 从 from 沿 direction 飞一回合，实际飞多远：每一小段的速度都乘以那里的光速（G14）。
-func _travel(from: Vector3, direction: Vector3, speed: float) -> float:
-	if light.is_empty():
-		return speed
-	var dist := 0.0
-	var time := 1.0
-	while time > 1e-9:
-		var v := speed * light_at(Vector3i((from + direction * dist).round()))
-		if v < 1e-9:
-			break
-		var step := 0.25
-		var dt := step / v
-		if dt > time:
-			step = v * time
-			dt = time
-		dist += step
-		time -= dt
-	return dist
-
-
-## 自己所有星系和星舰都被困在光速为 0 的黑域里，就算输（B4、G14）。
-func _check_hiding() -> void:
-	if light.is_empty():
-		return
-	for civ in civs:
-		if not civ.alive:
-			continue
-		var all_in := true
-		for c in civ.origins():
-			all_in = all_in and light_at(c) < Balance.SHIP_MIN_SPEED
-		if all_in:
-			add_log("%s 把自己全部困在了光速为 0 的黑域里，再也出不来，算输" % civ.name)
-			_die(civ, "黑域")
-
-
 ## 这个格子在不在黑域里：光速低到光粒没有杀伤力（G14）。在里面的星系产出只有 1/10。
 func in_black_domain(c: Vector3i) -> bool:
 	return light_at(c) < Balance.GRAIN_MIN_LIGHT
@@ -2638,20 +1909,6 @@ func blocked(a: Vector3, b: Vector3) -> bool:
 		var t := clampf((d - a).dot(ab) / len2, 0.0, 1.0) if len2 > 0.0 else 0.0
 		if (a + ab * t).distance_to(d) <= 0.9:
 			return light_time(a, b) == INF
-	return false
-
-
-## 两头都在 lo～hi 这个方盒里的路线，有没有可能被光速几乎为 0 的格子挡住。
-## 只在回合末看的时候（_view_cache）知道这些格子在哪，别的时候一律当作可能。
-## 路上取的点四舍五入到格子，不会超出方盒各半格；这些格子都在方盒外 1 格以上时，一定挡不住。
-func _may_block(lo: Vector3, hi: Vector3) -> bool:
-	if light.is_empty():
-		return false
-	if _view_cache.is_empty():
-		return true
-	for d: Vector3 in _view_cache["dark"]:
-		if d.x >= lo.x - 1.0 and d.y >= lo.y - 1.0 and d.z >= lo.z - 1.0 and d.x <= hi.x + 1.0 and d.y <= hi.y + 1.0 and d.z <= hi.z + 1.0:
-			return true
 	return false
 
 
@@ -2772,6 +2029,7 @@ func random_direction() -> Vector3:
 
 func add_log(line: String) -> void:
 	log_lines.append(line)
+	line_logged.emit(line)
 
 
 # ---------- V0.1 工程账本 ----------
@@ -2993,12 +2251,17 @@ func cancel_order(civ: Civ, id: int) -> Dictionary:
 
 func _refresh_permissions(civ: Civ) -> void:
 	Assets.ensure(self,civ)
-	var plan:=Economy.plan(self,civ)
-	var reference: Array = plan["reference"]
 	var events := [false, civ.discovered, civ.contacted, civ.conquered]
+	# 收支计划只在还有等着开放的级别时才算：每收到一条异文明观测都会走到这里，后期各级都已开放，算了也用不上。
+	var plan := {}
 	for tier in [1, 2, 3]:
+		if not events[tier] or civ.tier_turn(tier)>=0 or civ.pending_permissions.has(tier):
+			continue
+		if plan.is_empty():
+			plan=Economy.plan(self,civ)
+		var reference: Array = plan["reference"]
 		var gate: Array = Balance.TIER_NET_INCOME[str(tier)]
-		if not events[tier] or civ.tier_turn(tier)>=0 or civ.pending_permissions.has(tier) or reference[0]<gate[0] or reference[1]<gate[1]:
+		if reference[0]<gate[0] or reference[1]<gate[1]:
 			continue
 		# 账本可即时结算余额，但远端增产、停机和损失不能经权限按钮提前暴露。
 		# 同一时点冻结达标证明；来源分别走实际光路，不能用一个全局直线延时替代。
@@ -3203,11 +2466,11 @@ func ensure_cells() -> void:
 
 
 func physical_cell_size() -> float:
-	return Balance.DIMENSION_CELL_SIZE[str(dimension)]
+	return _cell_size
 
 
 func background_light() -> float:
-	return Balance.DIMENSION_LIGHT[str(dimension)]
+	return _background_light
 
 
 func relative_light(pos: Vector3) -> float:
@@ -3215,8 +2478,14 @@ func relative_light(pos: Vector3) -> float:
 
 
 func light_speed_at(pos: Vector3) -> float:
-	var dim: int = cell_dims.get(cell_ids.get(Vector3i(pos.round()), -1), dimension)
-	return 0.0 if dim == 0 else Balance.DIMENSION_LIGHT[str(dim)] * relative_light(pos)
+	var cell := Vector3i(pos.round())
+	var dim: int = cell_dims.get(cell_ids.get(cell, -1), dimension)
+	if dim == 0:
+		return 0.0
+	var c: float = _background_light if dim == dimension else Balance.DIMENSION_LIGHT[str(dim)]
+	if black_domains.is_empty() and deadlines.is_empty():
+		return c * minf(light_at(cell), 1.0) # 没有黑域和死线时 Hazards.suppression 是 1，省掉这次调用
+	return c * relative_light(pos)
 
 
 func _receive_command(message: Dictionary, exists: bool) -> void:
@@ -3355,7 +2624,7 @@ func queue_entity_command(civ: Civ, id: int, pos: Vector3, body: Dictionary, cos
 
 
 func reported_starship(civ: Civ) -> Ship:
-	for ship in Signals.reported_ships(self,civ):
+	for ship in Signals.reported_ships(self,civ,[Ship.STARSHIP,Ship.WANDERING_EARTH]):
 		if ship.kind in [Ship.STARSHIP,Ship.WANDERING_EARTH]:
 			return ship
 	return null

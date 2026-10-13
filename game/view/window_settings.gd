@@ -133,6 +133,9 @@ func default_ui_scale() -> float:
 	if DisplayServer.get_name() == "headless":
 		return 1.0
 	var system := DisplayServer.screen_get_dpi(get_window().current_screen) / 96.0
+	if OS.has_feature("macos"):
+		# Retina 的物理 DPI 不是系统界面缩放；用 backing scale 避免把大窗口误判成窄屏。
+		system = DisplayServer.screen_get_scale(get_window().current_screen)
 	return UI_TARGET * maxf(system, 1.0) / _window_stretch()
 
 
@@ -143,7 +146,7 @@ func set_ui_scale(value: float) -> void:
 	cfg.load(SETTINGS_PATH)
 	cfg.set_value("ui", "scale", ui_scale)
 	cfg.save(SETTINGS_PATH)
-	main.overlay.show_toast("界面大小 %d%%　（Ctrl + 加号 / 减号调整，Ctrl + 0 恢复）" % roundi(effective_ui_scale() * 100))
+	main.overlay.show_toast(main.shortcut_text("界面大小 %d%%　（Ctrl + 加号 / 减号调整，Ctrl + 0 恢复）") % roundi(effective_ui_scale() * 100))
 
 
 ## 用上界面大小（限制在上下限之间），不存。调试面板是单独的窗口，跟着一起变。

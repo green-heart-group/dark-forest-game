@@ -63,6 +63,7 @@ static func complete(s: GameState, civ: Civ, project: Dictionary) -> bool:
 	ship.cost = WorkOrder.salvage(project)
 	ship.carried_rocky = rocky
 	civ.ships.append(ship)
+	civ.forget_lookups()
 	for asset in civ.assets:
 		if ids.has(asset["id"]):
 			asset["carrier"] = ship.id

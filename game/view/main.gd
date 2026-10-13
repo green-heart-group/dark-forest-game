@@ -15,6 +15,8 @@ const WebFiles := preload("res://view/web_files.gd")
 const TechTree := preload("res://view/tech_tree.gd")
 const SavedGames := preload("res://view/saved_games.gd")
 const MigrationPreview := preload("res://view/migration_preview.gd")
+const UnfoldingLayout := preload("res://rules/unfolding_layout.gd")
+const DesktopMenu := preload("res://view/desktop_menu.gd")
 
 ## 游戏窗口的标题。项目名（project.godot 的 config/name）是 dark-forest，只用作存档文件夹的名字。
 const WINDOW_TITLE := "黑暗森林 · Dark Forest"
@@ -25,6 +27,7 @@ var panel := SidePanel.new()
 var overlay := Overlay.new()
 var window_settings := WindowSettings.new()
 var saves := SavedGames.new()
+var desktop_menu := DesktopMenu.new()
 var tech_tree := TechTree.new()
 var migration_preview := MigrationPreview.new()
 var panel_toggle := Button.new()
@@ -38,10 +41,18 @@ var reveal := CheckBox.new()
 var _layer := CanvasLayer.new()
 ## 自动存对局记录的位置（空：不存，画面测试用）
 var autosave_path := Replay.DIR.path_join("last.replay")
+## 结束回合时在后台线程里算一份复制品，画面不卡；算完再换上。这段时间画面照旧显示原来的局面，不能操作。
+## 画面测试设为 false，按下就算完；没有线程的网页版也只能直接算。
+var background_turns := OS.has_feature("threads")
+## 后台正在算的回合：任务号（没有时为 -1）、从哪个局面开始算、算出来的新局面。
+var _turn_task := -1
+var _turn_from: GameState = null
+var _turn_next: GameState = null
 
 
 func _ready() -> void:
 	get_window().title = WINDOW_TITLE
+	get_tree().auto_accept_quit = false
 	var seed_value := randi() % 1000000
 	# 命令行参数（写在 `--` 后面）：
 	#   seed=123            指定种子，重现同一张星图
@@ -72,8 +83,10 @@ func _ready() -> void:
 	_layer.add_child(panel)
 	add_child(saves)
 	saves.setup(self)
+	desktop_menu.setup(self)
+	_layer.add_child(desktop_menu)
 	panel_toggle.text = "收起面板"
-	panel_toggle.tooltip_text = "展开或收起操作面板（Ctrl+B）"
+	panel_toggle.tooltip_text = shortcut_text("展开或收起操作面板（Ctrl+B）")
 	panel_toggle.anchor_left = 1.0
 	panel_toggle.anchor_right = 1.0
 	panel_toggle.offset_left = -120
@@ -108,6 +121,18 @@ func _ready() -> void:
 		debug.load_replay(replay_path)
 	elif debug != null and debug.default_preset() != "":
 		debug.new_game(seed_value, false)  # 用调试面板里设的「新开一局时用的方案」
+	if DisplayServer.get_name() != "headless":
+		saves.begin_session(args.is_empty())
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and is_instance_valid(saves) and saves.main != null:
+		request_quit()
+
+
+func request_quit() -> void:
+	if saves.prepare_exit():
+		get_tree().quit()
 
 
 ## 画面显示的是哪个文明看到的（平时是玩家，调试时可以换成任意文明）。
@@ -119,6 +144,8 @@ func viewed() -> Civ:
 func locked_reason() -> String:
 	if saves.busy:
 		return "正在读取存档"
+	if turning():
+		return "正在结算这一回合，算完才能操作"
 	var reason := debug.locked_reason() if debug != null else ""
 	if reason == "" and viewed().is_ai:
 		reason = "%s 现在由 AI 控制（调试面板里可以接管）" % viewed().name
@@ -146,6 +173,7 @@ func refresh() -> void:
 	migration_preview.refresh(me)
 	if debug != null:
 		debug.refresh_panel()
+	saves.save_if_changed()
 
 
 ## 换一个局面（新开一局、回放跳到别的回合）：重画网格，不播放压平的动画。
@@ -166,7 +194,7 @@ func autosave() -> void:
 
 ## 结束回合对所有文明都一样，在看别人的视角时也可以按（回放中不行）。对局结束后变成「再来一局」。
 func end_turn() -> void:
-	if saves.busy:
+	if saves.busy or turning():
 		return
 	if debug != null and (debug.replaying() or debug.seeking):
 		return
@@ -174,7 +202,48 @@ func end_turn() -> void:
 		new_game(randi() % 1000000)
 		return
 	panel.set_feedback("")
-	state.end_turn()
+	if not background_turns:
+		state.end_turn()
+		_after_turn()
+		return
+	_finish_turn()  # 换了局面以后被丢下的上一个任务，先等它结束
+	UnfoldingLayout._build()  # 规则用到的这份表第一次用时才建，先在这里建好，线程里只读
+	_turn_from = state
+	_turn_next = StateCopy.copy(state)
+	_turn_task = WorkerThreadPool.add_task(_turn_next.end_turn, false, "结束回合")
+	refresh()
+
+
+## 后台还在算「结束回合」。
+func turning() -> bool:
+	return _turn_task >= 0 and _turn_from == state
+
+
+## 等后台的回合算完。期间没换过局面（新开一局、读档、回放跳转）就换上算出来的局面，换过就丢掉。
+func _finish_turn() -> void:
+	if _turn_task < 0:
+		return
+	WorkerThreadPool.wait_for_task_completion(_turn_task)
+	_turn_task = -1
+	var next := _turn_next
+	var current := _turn_from == state
+	_turn_from = null
+	_turn_next = null
+	if current:
+		if panel._build_state == state:
+			panel._build_state = next  # 同一局接着走，不清掉还在等完工的建造
+		state = next
+		_after_turn()
+
+
+## 关窗口时后台还在算，等它算完再退出（算出的局面不要了）。
+func _exit_tree() -> void:
+	if _turn_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_turn_task)
+		_turn_task = -1
+
+
+func _after_turn() -> void:
 	if debug != null:
 		debug.remember_turn(state)
 	autosave()
@@ -209,6 +278,8 @@ func _on_map_click(c: Vector3i) -> void:
 
 ## 压平的动画放完以后，如果胜负已分但空间还没压完，每帧再压一步（不再有回合和收入）。
 func _process(delta: float) -> void:
+	if _turn_task >= 0 and WorkerThreadPool.is_task_completed(_turn_task):
+		_finish_turn()
 	if saves.busy:
 		return
 	if map.animating():
@@ -221,6 +292,21 @@ func _process(delta: float) -> void:
 
 func _input(event: InputEvent) -> void:
 	_on_key(event, get_viewport())
+
+
+## 事件快捷键与每帧相机轮询共用，弹窗的焦点可能属于另一个 Viewport。
+func game_input_blocked() -> bool:
+	var focus := get_viewport().gui_get_focus_owner()
+	return tech_tree.visible or migration_preview.visible or saves.modal_open() or overlay._restart_dialog.visible \
+			or focus is LineEdit or focus is TextEdit
+
+
+static func command_pressed(key: InputEventKey) -> bool:
+	return key.ctrl_pressed or (OS.has_feature("macos") and key.meta_pressed)
+
+
+static func shortcut_text(text: String) -> String:
+	return text.replace("Ctrl", "⌘").replace("Alt", "Option") if OS.has_feature("macos") else text
 
 
 ## 快捷键。调试面板是单独的窗口，焦点在它上面时按键也转到这里（from 是收到按键的那个窗口）。
@@ -243,15 +329,14 @@ func _on_key(event: InputEvent, from: Viewport) -> void:
 			saves.cancel()
 		from.set_input_as_handled()
 		return
-	if from == get_viewport() and (saves._dialog.visible or overlay._restart_dialog.visible):
+	if from == get_viewport() and game_input_blocked():
 		return
 	# 只在游戏窗口接游戏操作键；输入框和弹窗保留原有键盘操作。
-	if from == get_viewport() and not from.gui_get_focus_owner() is LineEdit and not from.gui_get_focus_owner() is TextEdit \
-			and not saves._dialog.visible and not overlay._restart_dialog.visible:
+	if from == get_viewport():
 		if _game_key(key):
 			from.set_input_as_handled()
 			return
-	if key.ctrl_pressed and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
+	if command_pressed(key) and key.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT, KEY_0, KEY_KP_0]:
 		var step := 0.0 if key.keycode in [KEY_0, KEY_KP_0] else (-0.1 if key.keycode in [KEY_MINUS, KEY_KP_SUBTRACT] else 0.1)
 		window_settings.set_ui_scale(window_settings.default_ui_scale() if step == 0.0
 				else window_settings.ui_scale + step)
@@ -317,7 +402,7 @@ func update_layout() -> void:
 
 
 func _game_key(key: InputEventKey) -> bool:
-	if key.ctrl_pressed:
+	if command_pressed(key):
 		match key.keycode:
 			KEY_B:
 				toggle_panel()

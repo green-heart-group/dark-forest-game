@@ -130,7 +130,6 @@ func test_ai_protects_itself_after_hit() -> void:
 		ai.colonies.append(colony)
 		Assets.ensure(s,ai)
 		Knowledge.report_site(s,ai,colony)
-		Signals.advance(s,2.0)
 		s.clock=2.0
 		Signals.receive_due(s)
 		ai.times_hit=hit
@@ -194,7 +193,6 @@ func test_ai_turns_warship_toward_received_target() -> void:
 		var dir:=want.rotated(want.cross(Vector3.FORWARD).normalized(),deg_to_rad(degrees))
 		var ship:=_ship(s,ai,Ship.WARSHIP,pos,dir)
 		Signals.report_ship(s,ai,ship)
-		Signals.advance(s,5.0)
 		s.clock=5.0
 		Signals.receive_due(s)
 		var result:=AI._try_turn_warships(s,ai)

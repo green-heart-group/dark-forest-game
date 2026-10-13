@@ -23,7 +23,7 @@ func test_v01_physical_units_and_acceleration() -> void:
 	check_eq(m["cap_time"], 15.0, "战舰15年达到.15ly/年")
 	s.dimension = 2
 	for cell_id in s.cell_dims:
-		s.cell_dims[cell_id] = 2
+		s.set_cell_dim(cell_id, 2)
 	m = Kinematics.motion(s, me, ship, 1.0)
 	check(absf(Kinematics.position(m, 1.0).x - 0.01) < 0.000001, "二维格长.5ly，物理路程不变而逻辑格路程翻倍")
 	var probe := _ship(s, me, Ship.PROBE, Vector3.ZERO, Vector3.RIGHT)
@@ -124,3 +124,55 @@ func test_v01_simultaneous_fronts_keep_order_independent_plane() -> void:
 		s.clock+=0.2
 		SpaceEvents.unfold(s,Vector3i(8,0,8))
 		check_eq(s.flat_plane,4,"同一年内较晚到达的载荷不能重选展示平面")
+
+## 规则：一个回合里发生什么
+func test_v01_records_are_trimmed_every_turn() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	var ship := _ship(s, me, Ship.PROBE, Vector3(2, 0, 0))
+	s.clock = 10.0
+	for i in 1000:
+		s.log_lines.append("第 %d 行" % i)
+		s.events.append({"id": i, "kind": "test", "t": 0.0})
+		me.ledger.append({"t": float(i) / 100.0, "kind": "test", "delta": [1, 2]})
+	me.ledger.append({"t": 9.9, "kind": "no_delta"})
+	var sum := [0, 0]
+	for entry in me.ledger:
+		for i in 2:
+			sum[i] += entry.get("delta", [0, 0])[i]
+	for i in 100:
+		me.command_results.append({"command": i})
+	me.ai_receipt_cursor = 90
+	s.sensor_stamps["old"] = {"time": 7.0, "hash": 1}
+	s.sensor_stamps["new"] = {"time": 8.5, "hash": 1}
+	ship.local_contacts[50] = {"id": 50, "t_received": 6.0}
+	ship.local_contacts[51] = {"id": 51, "t_received": 8.0}
+	ship.local_contacts["cell:3"] = {"id": -4, "kind": "anchor", "t_received": 0.0}
+	me.local_contacts_by_source[99] = {52: {"id": 52, "t_received": 1.0}}
+	s._trim_records()
+	check_eq([s.log_lines.size(), s.log_lines[-1]], [GameState.LOG_KEEP, "第 999 行"], "日志只留最近的")
+	check_eq([s.events.size(), s.events[-1]["id"]], [GameState.EVENT_KEEP, 999], "事件只留最近的")
+	var after := [0, 0]
+	for entry in me.ledger:
+		for i in 2:
+			after[i] += entry.get("delta", [0, 0])[i]
+	check_eq([me.ledger.size(), me.ledger[0]["kind"], after], [GameState.LEDGER_KEEP + 1, "carried", sum], "旧账并成一笔结转，总数不变")
+	check_eq([me.command_results.size(), me.command_results[0]["command"], me.ai_receipt_cursor], [GameState.RESULT_KEEP, 36, 54], "回执只留最近的，AI 读到的位置跟着挪")
+	check_eq(s.sensor_stamps.keys(), ["new"], "两年没用的传感器签名删掉")
+	check_eq(ship.local_contacts.keys(), [51, "cell:3"], "很久没观测的目标删掉，星系归属留着")
+	check(not me.local_contacts_by_source.has(99), "目标全删光的来源一起删掉")
+	for i in 1000:
+		s.log_lines.append("又一行")
+	s.end_turn()
+	check(s.log_lines.size() <= GameState.LOG_KEEP + 1, "结束回合时会修剪")
+
+
+## 规则：预警系统
+func test_v01_old_alerts_expire() -> void:
+	var s := _two_civs(Vector3i(8, 8, 8))
+	var me := s.human()
+	s.turn = 20
+	me.alerts.append({"id": 1, "pos": Vector3.ZERO, "kind": Ship.WARSHIP, "turn": 20 - Balance.SIGHTING_KEEP - 1})
+	me.alerts.append({"id": 2, "pos": Vector3.ZERO, "kind": Ship.WARSHIP, "turn": 19})
+	s._expire_intel(me)
+	check_eq(me.alerts.map(func(a): return a["id"]), [2], "太旧的预警和目击记录一样过期")

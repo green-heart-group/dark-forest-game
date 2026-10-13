@@ -5,7 +5,7 @@ extends RefCounted
 ## AI 的操作不用记，重算时 AI 会做出同样的决定。
 ## 每结束一回合还存一个校验值，重算时对比，发现不一样（比如改了规则或数值）就记下是第几回合。
 
-const VERSION := 3
+const VERSION := 8
 const DIR := "user://replays"
 
 var seed_value := 0

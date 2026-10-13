@@ -19,7 +19,7 @@ func _space(dim: int = 3) -> GameState:
 		s.line_anchor = s.map.origin
 		DimensionSpace.commit(s,true)
 	for id in s.cell_dims:
-		s.cell_dims[id] = dim
+		s.set_cell_dim(id, dim)
 	for civ in s.civs:
 		for asset in civ.assets:
 			asset["entity_dim"] = dim
@@ -210,7 +210,6 @@ func test_v01_speed_remote_command_does_not_skip_light_delay() -> void:
 	var ship := _ship(s,me,Ship.DEVOURER,Vector3(4,0,0),Vector3.RIGHT)
 	ship.speed = 0.3
 	Signals.report_ship(s,me,ship)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	check_eq(s.turn_ship(me,ship.id,Vector3.LEFT)["error"],"","根据已收遥测发送远程转向")

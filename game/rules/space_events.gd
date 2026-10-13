@@ -61,13 +61,129 @@ static func next_change(s: GameState) -> float:
 			next = minf(next, maxf(0.0, payload["activate_at"] - s.clock))
 		else:
 			next = minf(next, motion(s, payload)["arrival"])
+	return next
+
+
+## 降维前沿扫到每个还没降维的格子的时刻：{格子: 时刻}，几个前沿取最早的。
+static func front_times(s: GameState) -> Dictionary:
+	var times := {}
 	for zone in zones(s):
 		for cell in s.cell_ids:
 			if s.cell_dims[s.cell_ids[cell]] < s.dimension:
 				continue
 			var time: float = zone["created"] + cell_distance(s, Vector3(zone["center"]), cell) / (Balance.FOIL_SPREAD * s.background_light())
-			next = minf(next, maxf(0.0, time - s.clock))
-	return next
+			times[cell] = minf(times.get(cell, INF), time)
+	return times
+
+
+## 降维前沿下一次非停不可是什么时候，最多看 dt 年。motions 是这一步各个东西的运动。
+## 前沿扫到的格子里没有东西、这一步也没有东西会进去、也没有光波正好经过时，不用为它停下：
+## 等下一次因为别的事停下时再补上（resolve），记的仍是前沿扫到的准确时刻，消息也按那个时刻重算。
+## 扫完最后一批格子以后要换图，那一批照旧准时停。
+static func next_front(s: GameState, motions: Dictionary, dt: float) -> float:
+	var times := front_times(s)
+	var batches := _batches(times, s.clock + dt)
+	if batches.is_empty():
+		return INF
+	var left := times.size()
+	var boxes := _moving_boxes(s, motions, dt)
+	for batch in batches:
+		left -= batch["cells"].size()
+		if left <= 0 or _front_matters(s, batch, boxes, s.clock + dt):
+			return maxf(0.0, batch["at"] - s.clock)
+	return INF
+
+
+## 把不晚于 until 的格子按时刻分批（同一时刻扫到的一批），按时刻先后排好。
+static func _batches(times: Dictionary, until: float) -> Array:
+	var due := []
+	var n := 0
+	for cell in times:
+		if times[cell] <= until:
+			due.append([times[cell], n, cell])
+		n += 1
+	due.sort_custom(func(a, b): return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1]))
+	var batches := []
+	for item in due:
+		if batches.is_empty() or item[0] - batches[-1]["at"] > 1e-9:
+			batches.append({"at": item[0], "cells": []})
+		batches[-1]["cells"].append(item[2])
+	return batches
+
+
+## 这一步里各个东西可能到的范围（格坐标的方框）：舰船、隐藏舰船、载荷、弹在这一步的轨迹，设施和殖民地的位置。
+static func _moving_boxes(s: GameState, motions: Dictionary, dt: float) -> Array[AABB]:
+	var boxes: Array[AABB] = []
+	for id in motions:
+		var m: Dictionary = motions[id]
+		boxes.append(_sweep(m["pos"], Kinematics.position(m, dt), m["acceleration"].length() * dt * dt / 8.0))
+	for shot in s.projectiles:
+		if not shot["dead"]:
+			var m := Combat.projectile_motion(s, shot)
+			boxes.append(_sweep(shot["pos"], shot["pos"] + m["velocity"] * dt, 0.0))
+	for owner in s.civs.size():
+		for asset in s.civs[owner].assets:
+			var physical := Signals.entity(s, owner, asset["id"])
+			if not physical.is_empty():
+				boxes.append(_sweep(physical["pos"], physical["pos"], 0.0))
+	return boxes
+
+
+static func _sweep(a: Vector3, b: Vector3, bow: float) -> AABB:
+	var margin := Vector3.ONE * (bow + 1e-3)
+	var low := a.min(b) - margin
+	return AABB(low, a.max(b) + margin - low)
+
+
+## 这一批格子在 [batch.at, until] 里有没有用处：有东西可能在里面，或者有光波（广播、扫描）的波前可能正经过。
+static func _front_matters(s: GameState, batch: Dictionary, boxes: Array[AABB], until: float) -> bool:
+	var cells: Array[Vector3i] = []
+	cells.assign(batch["cells"])
+	for cell_box in Geometry.cell_boxes(cells):
+		for box in boxes:
+			if cell_box.intersects(box):
+				return true
+	var waves := Information.waves(s)
+	if waves.is_empty():
+		return false
+	# 光在任何格子里都不比 fastest 快、不比 slowest 慢（黑域里可以慢到 0，这时只看波前到没到）。
+	var fastest := maxf(s.background_light(), 1.0)
+	var slowest := s.background_light()
+	for value in Balance.DIMENSION_LIGHT.values():
+		fastest = maxf(fastest, value)
+		slowest = minf(slowest, value)
+	var dim := 1.0
+	var bright := 1.0
+	for value in s.light:
+		if value > 0.0:
+			dim = minf(dim, value)
+			bright = maxf(bright, value)
+	fastest *= bright
+	slowest *= dim
+	if not s.deadlines.is_empty():
+		slowest *= Balance.DEADLINE_FACTOR
+	if not s.black_domains.is_empty():
+		slowest = 0.0
+	var size := s.physical_cell_size()
+	for wave in waves:
+		var p: Dictionary = wave["propagation"]
+		for event in p["events"]:
+			if not event.has("environment"):
+				return true # 换过图的波，起点不在现在的坐标里，不细算
+		for cell in cells:
+			var near := cell_distance(s, p["origin"], cell)
+			var far := 0.0
+			for corner in 8:
+				var at := Vector3(cell) - Vector3.ONE * Geometry.CELL_HALF
+				for axis in 3:
+					if corner & (1 << axis):
+						at[axis] += 2.0 * Geometry.CELL_HALF
+				far = maxf(far, p["origin"].distance_to(at) * size)
+			var enters: float = p["sent"] + near / fastest
+			var leaves: float = p["sent"] + far / slowest if slowest > 0.0 else INF
+			if enters <= until and leaves >= batch["at"]:
+				return true
+	return false
 
 
 static func advance(s: GameState, dt: float) -> void:
@@ -97,15 +213,21 @@ static func resolve(s: GameState) -> void:
 			Hazards.activate(s, payload["pos"], payload["id"])
 		elif payload["from_dim"] == s.dimension:
 			unfold(s, Vector3i(payload["pos"].round()), payload["id"])
-	var cells := s.cell_ids.keys()
-	var active_zones := zones(s).duplicate()
-	for zone in active_zones:
+	for zone in zones(s):
 		zone["age"] = radius(s, zone, s.clock) / s.physical_cell_size()
+	# 前沿已经扫到的格子按扫到的时刻先后降维。早于现在的是 next_front 没为它停下的：把时钟拨回那一刻再降维，事件记那一刻。
+	# 路过那里的消息先按旧光速挪到那一刻，降维后再按新光速重算（Signals.before_cells_change、after_cells_change），
+	# 不会把那一刻之前走的路也算慢。
+	var now := s.clock
+	for batch in _batches(front_times(s), now + Balance.TIME_EPSILON):
+		var cells: Array[Vector3i] = []
+		cells.assign(batch["cells"])
+		s.clock = batch["at"] if batch["at"] < now - Balance.TIME_EPSILON else now
+		Signals.before_cells_change(s, cells)
 		for cell in cells:
-			if s.cell_dims[s.cell_ids[cell]] < s.dimension:
-				continue
-			if cell_distance(s, Vector3(zone["center"]), cell) <= radius(s, zone, s.clock) + Balance.TIME_EPSILON:
-				convert_cell(s, cell)
+			convert_cell(s, cell)
+		Signals.after_cells_change(s, cells)
+		s.clock = now
 	# 只有全部格子检查完后换图，避免同刻实体在新旧坐标中混合求交。
 	var completed := s.cell_dims.values().all(func(dim): return dim < s.dimension)
 	if completed and s.dimension > 1:
@@ -141,7 +263,8 @@ static func convert_cell(s: GameState, cell: Vector3i) -> void:
 	var id: int = s.cell_ids[cell]
 	if s.cell_dims[id] < s.dimension:
 		return
-	s.cell_dims[id] = s.dimension - 1
+	s.set_cell_dim(id, s.dimension - 1)
+	s.converted_cells.append(cell)
 	if s.dimension == 3:
 		s.flattened[cell] = s.flat_plane
 	elif s.dimension == 2:

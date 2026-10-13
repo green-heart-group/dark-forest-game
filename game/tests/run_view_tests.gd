@@ -89,8 +89,9 @@ func run_tests() -> void:
 	panel_script.set("prefs_path", "user://_test_debug.cfg")
 	DirAccess.remove_absolute("user://_test_debug.cfg")
 	view = load("res://view/main.tscn").instantiate()
-	root.add_child(view)
 	view.autosave_path = ""  # 不覆盖玩家自己的 last.replay
+	view.background_turns = false  # 按下结束回合就算完，后面的检查马上能看到新回合
+	root.add_child(view)
 	map = view.map
 	panel = view.panel
 	actions = view.panel.actions
@@ -98,6 +99,7 @@ func run_tests() -> void:
 	await process_frame
 	await run(test_panel_layout)
 	await run(test_panel_width)
+	await run(test_locked_options)
 	await run(test_ui_helpers)
 	await capture("start")
 	await run(test_research)
@@ -115,6 +117,7 @@ func run_tests() -> void:
 	await run(test_hover_intel)
 	await run(test_hover_stored_grain)
 	await run(test_camera)
+	await run(test_trackpad_and_action_footer)
 	await run(test_selection)
 	await run(test_grid_modes)
 	await run(test_ship_paths)
@@ -128,7 +131,9 @@ func run_tests() -> void:
 	await run(test_flat_and_line)
 	await run(test_fast_line_collapse_frames_home)
 	await run(test_post_victory_collapse)
+	await run(test_redraw_after_space_change_keeps_presentation)
 	await run(test_restart)
+	await run(test_end_turn_in_background)
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
@@ -137,6 +142,9 @@ func run_tests() -> void:
 	await run(test_debug_presets)
 	await run(test_debug_after_death)
 	await run(test_save_load)
+	await run(test_continue_and_quit_protection)
+	await run(test_modal_input_isolation)
+	await run(test_desktop_file_controls)
 	await run(test_save_across_dimensions)
 	await run(test_game_shortcuts_and_compact_layout)
 	await capture("debug")
@@ -207,6 +215,128 @@ func test_save_load() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func test_continue_and_quit_protection() -> void:
+	view.debug.pause()
+	view.debug.replay = null
+	view.debug.view_idx = 0
+	var saves = view.saves
+	var original_path: String = saves.continue_path
+	var path := "user://_test_continue.forest"
+	saves.continue_path = path
+	DirAccess.remove_absolute(path)
+	view.autosave_path = "user://_test_continue.replay"
+	show_state(GameState.new_game(1))
+	saves.begin_session()
+	view.state.build(view.state.human(), "probe")
+	view.refresh()
+	var expected: int = view.state.checksum()
+	check(FileAccess.file_exists(path), "回合内操作自动保存")
+	# 模拟重新启动：尚未选择继续时刷新新星图不能覆盖旧存档。
+	saves._session_ready = false
+	show_state(GameState.new_game(2))
+	saves.begin_session()
+	check(saves._resume_dialog.visible, "重新打开时提供继续")
+	saves._resume_dialog.hide()
+	await saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "继续恢复回合内已造好的探测器")
+	view.end_turn()
+	expected = view.state.checksum()
+	check(saves.prepare_exit(), "退出前保存成功才允许退出")
+	saves._session_ready = false
+	show_state(GameState.new_game(3))
+	var prior_save := FileAccess.get_file_as_bytes(path)
+	saves.slice_msec = 0
+	saves.load_file(path)
+	check(saves.busy, "启动继续也支持分帧读档")
+	saves.cancel()
+	await process_frame
+	check(saves._resume_dialog.visible and saves.modal_open(), "取消启动读档返回继续选择，不能进入未启用自动存档的新局")
+	check_eq(FileAccess.get_file_as_bytes(path), prior_save, "取消启动读档不覆盖原存档")
+	saves._resume_dialog.hide()
+	saves.slice_msec = 50
+	await saves.load_file(path)
+	check_eq(view.state.checksum(), expected, "退出后的继续包含最新回合")
+	saves.continue_path = path.path_join("cannot-write.forest")
+	check(not saves.prepare_exit(), "写入失败阻止退出")
+	check(saves._quit_dialog.visible, "保存失败可返回游戏或重试")
+	saves._quit_dialog.hide()
+	saves.continue_path = original_path
+	saves._session_ready = false
+	view.autosave_path = ""
+	DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute("user://_test_continue.replay")
+
+
+func test_modal_input_isolation() -> void:
+	show_state(GameState.new_game(1))
+	view.debug.visible = false
+	map.reset_view(true)
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.physical_keycode = KEY_T
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	for dialog in [view.saves._dialog, view.saves._resume_dialog, view.saves._quit_dialog, overlay._restart_dialog]:
+		dialog.popup_centered()
+		await process_frame
+		check(view.game_input_blocked(), "弹窗统一阻止底层游戏输入")
+		var pitch: float = map._goal_pitch
+		var distance: float = map._goal_distance
+		check(not map._camera_key(key), "弹窗里按视角字母不旋转星图")
+		map._unhandled_input(wheel)
+		check_eq(map._goal_pitch, pitch, "弹窗不改变镜头角度")
+		check_eq(map._goal_distance, distance, "弹窗不改变镜头距离")
+		map._drag_button = MOUSE_BUTTON_LEFT
+		map._poll_camera_keys(1.0)
+		check_eq(map._drag_button, MOUSE_BUTTON_NONE, "弹窗打断旧拖动，关窗后不继续拖")
+		dialog.hide()
+	var edit := TextEdit.new()
+	overlay.add_child(edit)
+	edit.grab_focus()
+	check(view.game_input_blocked() and not map._camera_key(key), "多行文本也不触发相机键")
+	edit.release_focus()
+	edit.queue_free()
+	await process_frame
+	check(not view.game_input_blocked(), "关闭弹窗和文本输入后恢复游戏操作")
+	check(map._camera_key(key), "恢复视角快捷键")
+	map.reset_view(true)
+
+
+func test_desktop_file_controls() -> void:
+	var saves = view.saves
+	var original_prefs: String = saves.prefs_path
+	saves.prefs_path = "user://_test_save_settings.cfg"
+	DirAccess.remove_absolute(saves.prefs_path)
+	var folder := ProjectSettings.globalize_path("user://")
+	saves._remember_directory(folder)
+	check_eq(saves._default_directory(), folder, "文件选择记住用户选的目录")
+	var key := InputEventKey.new()
+	key.pressed = true
+	key.meta_pressed = OS.has_feature("macos")
+	key.ctrl_pressed = not key.meta_pressed
+	key.keycode = KEY_S
+	view._on_key(key, root)
+	check(saves.modal_open() and saves._dialog.file_mode == FileDialog.FILE_MODE_SAVE_FILE, "平台主快捷键打开保存")
+	check_eq(saves._dialog.current_dir.trim_suffix("/"), folder.trim_suffix("/"), "保存打开上次目录")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	key.keycode = KEY_O
+	view._on_key(key, root)
+	check(saves.modal_open() and saves._dialog.file_mode == FileDialog.FILE_MODE_OPEN_FILE, "平台主快捷键打开读取")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	view.desktop_menu._activate(2)
+	check_eq(saves._dialog.current_dir, ProjectSettings.globalize_path(saves.DIR), "旧存档菜单仍可找到原来的文件")
+	saves._dialog.hide()
+	saves._dialog.canceled.emit()
+	check(not saves.modal_open(), "取消原生文件选择后恢复游戏输入")
+	if OS.has_feature("macos"):
+		check_eq(view.shortcut_text("Ctrl+S / Alt+1"), "⌘+S / Option+1", "Mac 帮助使用本机键名")
+	DirAccess.remove_absolute(saves.prefs_path)
+	saves.prefs_path = original_prefs
+
+
 func test_game_shortcuts_and_compact_layout() -> void:
 	show_state(GameState.new_game(1))
 	map.reset_view(true)
@@ -221,10 +351,13 @@ func test_game_shortcuts_and_compact_layout() -> void:
 	key.keycode = KEY_RIGHT
 	view._on_key(key, root)
 	check_eq(panel._tabs.current_tab, 2, "选择行动快捷键打开行动页")
+	panel.show_locked.button_pressed = true  # 开局只有「派出」已解锁，显示全部才有别的行动可切
 	var action_before: int = actions._action
 	key.keycode = KEY_LEFT
 	view._on_key(key, root)
 	check(actions._action != action_before, "左右快捷键切换行动")
+	panel.show_locked.button_pressed = false
+	actions._action = action_before
 	key.alt_pressed = false
 	key.ctrl_pressed = true
 	key.keycode = KEY_B
@@ -360,6 +493,40 @@ func test_panel_width() -> void:
 
 
 ## 悬停说明限宽换行；行动说明不占面板，放在悬停说明里；界面大小有上下限。
+func test_locked_options() -> void:
+	var s := fixture()
+	show_state(s)
+	panel.show_locked.button_pressed = false
+	actions._action = actions.Action.DISPATCH
+	view.refresh()
+	check(panel._build_tiles["probe"].visible and not panel._build_tiles["warship"].visible,
+			"开局显示已解锁建造，收起未解锁建造")
+	check(not actions._action_tiles[actions.Action.GRAIN].visible and not panel._reduce_box.visible,
+			"开局收起高级行动和降维")
+	panel.show_locked.button_pressed = true
+	check(panel._build_tiles["warship"].visible and actions._action_tiles[actions.Action.GRAIN].visible,
+			"显示开关能查看未解锁项目")
+	check(panel._build_tiles["warship"].disabled, "显示不会绕过规则解锁")
+	panel.show_locked.button_pressed = false
+	s.human().techs["warship"] = true
+	s.human().techs["grain"] = true
+	s.human().mineral = 0
+	view.refresh()
+	check(panel._build_tiles["warship"].visible and panel._build_tiles["warship"].disabled,
+			"获得科技后出现，缺资源仍可见")
+	check(actions._action_tiles[actions.Action.GRAIN].visible, "解锁后即使未备弹也显示行动")
+	for i in 8:
+		actions.cycle_action(1)
+		check(actions._action_tiles[actions._action].visible and s.human().has_tech(actions.ACTION_TECH[actions._action]),
+				"快捷键只遍历显示的已解锁行动")
+	actions._action = actions.Action.DOMAIN
+	view.refresh()
+	check(actions._action_tiles[actions.Action.DOMAIN].visible and actions._go.disabled,
+			"当前选中项保留并解释不能执行的原因")
+	actions._action = actions.Action.DISPATCH
+	show_state(fixture())
+
+
 func test_ui_helpers() -> void:
 	var tile: Button = actions._action_tiles[actions.Action.DISPATCH]
 	check(tile.get_script() == view.Tip, "面板里的按钮挂上了限宽的悬停说明")
@@ -455,7 +622,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	s.system_cells.append(at)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,at)
-	Signals.advance(s,4.0)
 	s.clock=4.0
 	Signals.receive_due(s)
 	show_state(s)
@@ -465,7 +631,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	view.refresh()
 	panel._origin_pick.select(1)
 	panel._build_tiles["probe"].pressed.emit()
-	Signals.advance(s,4.0)
 	s.clock=8.0
 	Signals.receive_due(s)
 	WorkOrder.advance(me.pending[0],100.0)
@@ -473,7 +638,6 @@ func test_v01_completed_build_selection_waits_for_receipt() -> void:
 	view.refresh()
 	check(panel._build_tiles["probe"].disabled,"远端真实完工未回报前，建造按钮仍等待确认")
 	check(actions._selected_unit()!=null and actions._selected_unit().id==existing.id,"远端真实完工未回报时保留现有选择")
-	Signals.advance(s,4.0)
 	s.clock=12.0
 	Signals.receive_due(s)
 	view.refresh()
@@ -594,6 +758,77 @@ func test_camera() -> void:
 
 
 ## 只有星图上画出来的东西点得中；选中圈贴着东西的轮廓，东西小圈也小，不闪；点到空处、换局面时取消。
+func test_trackpad_and_action_footer() -> void:
+	show_state(fixture())
+	map.reset_view(true)
+	var pan := InputEventPanGesture.new()
+	pan.delta = Vector2(1.0, 0.5)
+	var before: Vector3 = map._goal_focus
+	var yaw: float = map._goal_yaw
+	map._unhandled_input(pan)
+	check(map._goal_focus.distance_to(before) > 0.01 and map._goal_yaw == yaw, "双指滑动只平移，不旋转")
+	var pinch := InputEventMagnifyGesture.new()
+	pinch.factor = 1.25
+	map._unhandled_input(pinch)
+	check(is_equal_approx(map._goal_distance, map.CAM_DISTANCE / 1.25), "双指张开拉近")
+	pinch.factor = 0.8
+	map._unhandled_input(pinch)
+	check(is_equal_approx(map._goal_distance, map.CAM_DISTANCE), "双指合拢拉远")
+	view.saves._dialog.visible = true
+	before = map._goal_focus
+	map._unhandled_input(pan)
+	map._unhandled_input(pinch)
+	check(map._goal_focus == before and is_equal_approx(map._goal_distance, map.CAM_DISTANCE), "弹窗隔离触控板手势")
+	view.saves._dialog.hide()
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.shift_pressed = true
+	press.pressed = true
+	press.position = Vector2(100, 100)
+	map._unhandled_input(press)
+	var motion := InputEventMouseMotion.new()
+	motion.position = Vector2(150, 120)
+	map._unhandled_input(motion)
+	check(map._goal_focus.distance_to(before) > 0.01 and map._goal_yaw == yaw, "Shift 加单键拖动平移，不旋转")
+	press.position = motion.position
+	press.pressed = false
+	map._unhandled_input(press)
+	check(panel._first_probe.visible, "开局给出第一艘探测器的操作提示")
+	panel._first_probe.pressed.emit()
+	check_eq(panel._tabs.current_tab, 1, "提示打开建造页")
+	panel._build_tiles["probe"].pressed.emit()
+	for i in int(ceilf(Construction.work("probe"))):
+		panel._end.pressed.emit()
+	view.refresh()
+	check_eq(panel._tabs.current_tab, 2, "造好单位自动进入行动页")
+	check(not panel._first_probe.visible and not actions._go.disabled, "造好探测器后可立即派出，不再显示建造提示")
+	var old_size := root.size
+	var old_scale: float = view.window_settings.ui_scale
+	for window_size in [Vector2i(1280, 800), Vector2i(1000, 650), Vector2i(600, 900)]:
+		root.size = window_size
+		view.window_settings._responsive_size()
+		view.window_settings.apply_ui_scale(1.3)
+		await process_frame
+		view.show_panel(2)
+		await process_frame
+		await process_frame
+		var scroll := panel._tabs.get_child(2) as ScrollContainer
+		for position in [0, 10000]:
+			scroll.scroll_vertical = position
+			await process_frame
+			var rect: Rect2 = actions._go.get_global_rect()
+			check(rect.position.y >= 0 and rect.end.y <= root.get_visible_rect().end.y,
+					"%s 窗口滚动到 %d 时执行按钮仍在屏幕里" % [window_size, position])
+			check(rect.end.y <= panel._end.get_global_rect().position.y, "执行与结束回合不重叠")
+		panel._tabs.current_tab = 1
+		check(not actions.footer.visible, "其他页隐藏行动按钮")
+	root.size = old_size
+	view.window_settings._responsive_size()
+	view.window_settings.apply_ui_scale(old_scale)
+	await process_frame
+	view.show_panel(2)
+
+
 func test_selection() -> void:
 	var s := fixture()
 	show_state(s)
@@ -1178,6 +1413,45 @@ func test_post_victory_collapse() -> void:
 	await capture("post-victory-collapse")
 
 
+## 规则：界面和操作
+## 空间刚变过时重画：过渡动画清掉选中，但不在重画中途再重画一次。
+## 再重画会换掉投影，外层正在画的舰船在新投影里找不到主人，画航线时报空值。
+func test_redraw_after_space_change_keeps_presentation() -> void:
+	view.debug.view_idx = 0
+	view.reveal.button_pressed = false
+	show_state(GameState.new_game(1))
+	var before: GameState = map._presentation
+	check(before != null, "不是上帝视角，画面用的是投影")
+	map.selected = {"key": "test"}
+	map._layout_epoch = map.state.space_epoch - 1
+	map._shape = []
+	map._animate_flattening()
+	check(map._presentation == before, "过渡动画清掉选中时不再重画，投影不换")
+	check(map.selected.is_empty(), "选中已清掉")
+
+
+## 规则：界面和操作
+## 结束回合在后台算：算的时候画面照旧、不能操作，算完换上新局面，结果和直接算的一样。
+func test_end_turn_in_background() -> void:
+	var s := fixture()
+	show_state(s)
+	view.background_turns = true
+	panel._end.pressed.emit()
+	check(view.turning() and panel._end.disabled and view.locked_reason() != "", "后台结算时按钮变灰、不能操作")
+	check(view.state == s, "算完之前画面还是原来的局面")
+	# 后台在算时调试面板也不能改局面：改到旧局面上，换上新局面就丢了；改数值还会让后台这一回合前后不一致。
+	var energy := s.human().energy
+	view.debug._dev(func(state: GameState): return state.dev_set(state.human(), "energy", energy + 50))
+	check_eq(s.human().energy, energy, "后台结算时调试面板的改动被拒绝")
+	var started := Time.get_ticks_msec()
+	while view.turning() and Time.get_ticks_msec() - started < 60000:
+		await process_frame
+	view.background_turns = false
+	check(not view.turning() and view.state != s and not panel._end.disabled, "算完换上新局面，按钮恢复")
+	s.end_turn()
+	check_eq([view.state.turn, view.state.checksum()], [s.turn, s.checksum()], "后台算出的和直接算的一样")
+
+
 ## 重开一局：对局中途要先确认；结束以后「结束回合」变成「再来一局」。
 func test_restart() -> void:
 	show_state(GameState.new_game(5))
@@ -1517,7 +1791,6 @@ func test_v01_shared_information_view() -> void:
 	me.ships.append(ship)
 	Knowledge.report_site(a,me,remote)
 	Signals.report_ship(a,me,ship)
-	Signals.advance(a,5.0)
 	a.clock=5.0
 	Signals.receive_due(a)
 	var b:=StateCopy.copy(a)
@@ -1574,7 +1847,6 @@ func test_v01_ui_resource_preview() -> void:
 	me.miners[remote] = 1
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,remote)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	show_state(s)
@@ -1632,8 +1904,11 @@ func test_v01_ui_pointer_build_feedback() -> void:
 	await pointer_click(panel._end)
 	check_eq(me.count(Ship.PROBE),2,"鼠标结束回合同时完成两个探测器工程")
 	check(not panel._build_tiles["warning"].disabled,"当地工程完成后按钮恢复")
+	check_eq(panel._tabs.current_tab,2,"收到完工回报后自动进入行动页")
 	me.mineral = 0
-	view.refresh()
+	view.show_panel(1)
+	await process_frame
+	await process_frame
 	await pointer_click(panel._build_tiles["probe"])
 	check(panel._feedback.visible and panel._feedback.text.contains("矿石不足"),"资源不足的真实点击给出具体原因")
 	check_eq(me.count(Ship.PROBE),2,"失败点击不建造也不扣费")

@@ -63,6 +63,8 @@ static func commit(s: GameState, to_line: bool) -> void:
 	var mapping := {}
 	for cell in old.cells():
 		mapping[cell] = map_cell(cell, anchor, to_line)
+	Information.settle(s)
+	Signals.rebase(s)
 	LightFront.remap(s,anchor,to_line,old,mapping)
 	for field in ["stars", "rocky", "gas", "habitable"]:
 		var data: Dictionary = old.get(field).duplicate(true)
@@ -129,10 +131,12 @@ static func commit(s: GameState, to_line: bool) -> void:
 	_keys(s.cell_ids, mapping)
 	s.map = next
 	s.light = remapped_light
+	s.light_version += 1
 	s.system_cells.clear()
 	for cell in old_systems:
 		s.system_cells.append(mapping.get(cell, cell))
 	s._view_cache.clear()
+	s.view_cells.clear()
 	s.last_mapping = mapping
 	var zones := s.line_zones if to_line else s.foil_zones
 	if not zones.is_empty():
@@ -195,14 +199,6 @@ static func _migrate_value(value: Variant, anchor: Vector3i, to_line: bool, old:
 			value[key] = Vector3i(mapped.round()) if value[key] is Vector3i else mapped
 		elif (not key is String or key != "propagation") and (value[key] is Array or value[key] is Dictionary):
 			_migrate_value(value[key], anchor, to_line, old, speed_scale)
-
-
-## 换坐标后的方向：进二维去掉 z，进一维只留 x。正好沿压掉的轴飞的变成零（停下）。
-static func flatten_direction(direction: Vector3, to_line: bool) -> Vector3:
-	direction.z = 0.0
-	if to_line:
-		direction.y = 0.0
-	return direction.normalized() if direction.length() > 1e-6 else Vector3.ZERO
 
 
 ## 所有键均为本阶段的逻辑坐标；渲染的位置绝不写回规则。

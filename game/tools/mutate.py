@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # ///
 """变异测试：故意给规则代码造一个小错，看测试能不能发现。
 
@@ -25,6 +25,10 @@
 每份副本用自己的存档目录（user://），几份同时写测试文件时不会互相删掉。
 没抓到的错里可能有「改了也不影响结果」的（比如两个值永远不会相等时，< 和 <= 一样），要人看一眼再决定补不补测试。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import argparse
 import os

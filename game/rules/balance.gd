@@ -145,12 +145,8 @@ static var AI_FOIL_ENERGY: int
 
 # ---------- 黑域（游戏设计 §7） ----------
 static var COST_BLACK_DOMAIN: int
-static var BLACK_DOMAIN_PREPARE_TURNS: int
-static var BLACK_DOMAIN_TURNS: int
-static var DOMAIN_INCOME: float
 static var GRAIN_MIN_LIGHT: float
 static var SHIP_MIN_SPEED: float
-static var SHIP_STUCK_TURNS: int
 
 # ---------- 广播和隐藏文明（游戏设计 §8） ----------
 static var COST_BROADCAST: int
@@ -200,6 +196,7 @@ static var MODULE_WORK: Dictionary
 static var DROPLET_MOVE: Array
 static var WANDERING_EARTH_MOVE: Array
 static var PHYSICS_MAX_DT: float
+static var ROUGH_DT: float
 static var TIME_EPSILON: float
 static var COLLISION_EPSILON: float
 static var SOPHON_VISION: float

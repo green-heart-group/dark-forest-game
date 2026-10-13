@@ -210,7 +210,7 @@ static func _try_warship(s: GameState, ai: Civ, target: Vector3i) -> bool:
 	var ship := _docked(s, ai, Ship.WARSHIP)
 	if ship == null:
 		var flying := Knowledge.pending(ai,"warship")
-		for sh in Signals.reported_ships(s, ai):
+		for sh in Signals.reported_ships(s, ai, [Ship.WARSHIP]):
 			if sh.kind == Ship.WARSHIP and (not sh.docked or s.ship_command_pending(ai, sh.id)):
 				flying += 1
 		if flying >= 2:
@@ -228,7 +228,7 @@ static func _try_warship_hit_dir(s: GameState, ai: Civ) -> bool:
 	var h: Dictionary = ai.hit_dirs[-1]
 	if s.turn - h["turn"] > 20:
 		return false
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.WARSHIP]):
 		if sh.kind == Ship.WARSHIP and (not sh.docked or s.ship_command_pending(ai, sh.id)):
 			return false
 	var ship := _docked(s, ai, Ship.WARSHIP)
@@ -241,7 +241,7 @@ static func _try_warship_hit_dir(s: GameState, ai: Civ) -> bool:
 
 ## 在飞的战舰偏离已知目标太多时转向。
 static func _try_turn_warships(s: GameState, ai: Civ) -> bool:
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.WARSHIP]):
 		if sh.kind != Ship.WARSHIP or sh.docked or sh.direction == Vector3.ZERO or sh.work_locked or sh.dormant \
 				or s.ship_command_pending(ai, sh.id):
 			continue
@@ -291,7 +291,7 @@ static func _try_sophon(s: GameState, ai: Civ) -> bool:
 	if best == GameState.NO_HIT:
 		return false
 	var ship: Ship = null
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.SOPHON]):
 		if sh.kind == Ship.SOPHON and sh.waiting() and not sh.work_locked and not sh.dormant \
 				and not s.ship_command_pending(ai, sh.id):
 			ship = sh
@@ -393,7 +393,7 @@ static func _try_colonize(s: GameState, ai: Civ) -> bool:
 	if origins.is_empty():
 		var mobile:=s.reported_starship(ai)
 		if mobile!=null: origins.append(mobile.cell())
-	for transport in Signals.reported_ships(s, ai):
+	for transport in Signals.reported_ships(s, ai, [Ship.COLONY]):
 		if transport.kind == Ship.COLONY and transport.waiting() and not transport.work_locked \
 				and not transport.dormant and not s.ship_command_pending(ai, transport.id) \
 				and habitable.has(transport.cell()) and s.landing_error(ai, transport.id) == "":
@@ -425,7 +425,7 @@ static func _try_colonize(s: GameState, ai: Civ) -> bool:
 
 ## 能派的殖民船：停在星系里的，或者上次到了没能殖民、停在外面的（没有时为 null）。
 static func _idle_colony_ship(s: GameState, ai: Civ) -> Ship:
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.COLONY]):
 		if sh.kind == Ship.COLONY and not sh.work_locked and not sh.dormant and sh.waiting() \
 				and not s.ship_command_pending(ai, sh.id):
 			return sh
@@ -434,7 +434,7 @@ static func _idle_colony_ship(s: GameState, ai: Civ) -> Ship:
 
 ## 停在星系里、还没派出的某种单位（没有时为 null）。
 static func _docked(s: GameState, ai: Civ, kind: String) -> Ship:
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [kind]):
 		if sh.kind == kind and sh.docked and not sh.work_locked and not sh.dormant \
 				and not s.ship_command_pending(ai, sh.id):
 			return sh
@@ -443,7 +443,7 @@ static func _docked(s: GameState, ai: Civ, kind: String) -> Ship:
 
 static func _reported_count(s: GameState, ai: Civ, kind: String) -> int:
 	var count := 0
-	for ship in Signals.reported_ships(s, ai):
+	for ship in Signals.reported_ships(s, ai, [kind]):
 		if ship.kind == kind:
 			count += 1
 	return count
@@ -454,7 +454,7 @@ static func _reported_count(s: GameState, ai: Civ, kind: String) -> int:
 static func _try_probe(s: GameState, ai: Civ) -> bool:
 	var flying := Knowledge.pending(ai,"probe") + Knowledge.pending(ai,"nuclear_probe")
 	var docked: Ship = null
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.PROBE, Ship.NUCLEAR_PROBE]):
 		if sh.kind in [Ship.PROBE, Ship.NUCLEAR_PROBE]:
 			if s.ship_command_pending(ai, sh.id):
 				flying += 1
@@ -471,7 +471,7 @@ static func _try_probe(s: GameState, ai: Civ) -> bool:
 	if not ai.hit_dirs.is_empty() and s.rng.randf() < 0.5:
 		dir = ai.hit_dirs[-1]["dir"]
 	elif not ai.sightings.is_empty() and s.rng.randf() < 0.5:
-		dir = ai.sightings[-1]["pos"] - docked.pos
+		dir = Combat.predicted(s, ai.sightings[-1]) - docked.pos
 	if not _worth_probing(s, ai, docked.pos, dir):
 		dir = _random_probe_direction(s, ai, docked.pos)
 		slow = true
@@ -513,7 +513,7 @@ static func _random_probe_direction(s: GameState, ai: Civ, from: Vector3) -> Vec
 static func _try_devourer(s: GameState, ai: Civ) -> bool:
 	if not ai.has_tech("devourer"):
 		return false
-	for sh in Signals.reported_ships(s, ai):
+	for sh in Signals.reported_ships(s, ai, [Ship.DEVOURER]):
 		if sh.kind == Ship.DEVOURER:
 			if sh.docked and not sh.work_locked and not sh.dormant and not s.ship_command_pending(ai, sh.id):
 				return s.dispatch(ai, sh.id, s.random_direction())["error"] == ""
@@ -537,7 +537,7 @@ static func _nearest_colony(s: GameState, ai: Civ, p: Vector3) -> Vector3i:
 static func _starship_turn(s: GameState, ai: Civ) -> void:
 	if _try_colonize(s,ai): return
 	var ship: Ship = null
-	for known in Signals.reported_ships(s, ai):
+	for known in Signals.reported_ships(s, ai, [Ship.STARSHIP, Ship.WANDERING_EARTH]):
 		if known.kind in [Ship.STARSHIP, Ship.WANDERING_EARTH]:
 			ship = known
 			break
@@ -545,7 +545,7 @@ static func _starship_turn(s: GameState, ai: Civ) -> void:
 		return
 	if ship.direction != Vector3.ZERO and not ship.docked:
 		return  # 还在飞
-	if Knowledge.pending(ai,"colony")>0 or Signals.reported_ships(s,ai).any(func(unit):return unit.kind==Ship.COLONY):
+	if Knowledge.pending(ai,"colony")>0 or not Signals.reported_ships(s,ai,[Ship.COLONY]).is_empty():
 		return # 运输/落地进行中，不能靠旧免费定居入口消耗生存锚点。
 	var best := GameState.NO_HIT
 	var best_d := INF
@@ -570,7 +570,7 @@ static func _flat_near(s: GameState, ai: Civ) -> bool:
 	if not ai.has_tech("dimension"):
 		return false
 	var origins := Knowledge.colonies(s,ai).duplicate()
-	for ship in Signals.reported_ships(s, ai):
+	for ship in Signals.reported_ships(s, ai, [Ship.STARSHIP, Ship.WANDERING_EARTH]):
 		if ship.kind in [Ship.STARSHIP, Ship.WANDERING_EARTH]:
 			origins.append(ship.cell())
 	for c in origins:

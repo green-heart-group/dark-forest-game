@@ -18,6 +18,7 @@
 | --- | --- |
 | `game_state.gd` | 一局状态与统一行动入口；连续计算由下列专门模块协作 |
 | `world_time.gd`、`kinematics.gd` | 连续时钟、加速、限速、到达和分段运动 |
+| `event_queue.gd`、`view_marks.gd` | 连续结算的事件表（取最早的一件，把世界推到那一刻）；看视野时只重看变了的东西和预测会进入视野的几对。都不存档、不算进校验值 |
 | `economy.gd`、`work_order.gd`、`construction.gd`、`order_control.gd` | 千分资源、维护休眠、工程托管、远程开工和取消回执 |
 | `assets.gd`、`earth_transform.gd`、`conversion.gd` | 永久实体、流浪地球、冻结名册与逐实体迁维收据 |
 | `navigation_preview.gd` | 用已知位置、介质和已收威胁比较当前与下一维的距离、航时、射程和准备余量；不修改对局 |
@@ -57,24 +58,36 @@
     不要自己 `get` / `set` 脚本，类型检查只写在这一处。Python 工具读 `balance.cfg` 都用 `sync_balance.py` 的 `read_cfg()`。
   - 数值方案只存和 `balance.cfg` 不一样的值。
 - **行动要花多少、为什么不能做，只写一次**，写在 `GameState` 里：
-  - 花费：`action_cost(规则函数名)`、`dispatch_cost(单位)`、`upgrade_cost(种类)`、`build_cost(文明, 种类)`（战舰带的武器也算上），
-    科技是 `Tech.cost()`，自身降维是 `Civ.reduce_cost()`（按带上的单位数算）；
+  - 花费：`action_cost(规则函数名)`、`command_cost(文明, 单位)`（派出和转向共用，探测器、殖民船和有暗能量时免费，聚变、反物质收集有折扣）、
+    `build_cost(文明, 种类)`（战舰带的武器也算上），科技是 `Tech.cost()`，自身降维是 `Conversion.quote()`（按冻结名册里的实体数算）；
   - 不能做的原因：每个行动一个 `xxx_error()`，能做时返回空字符串。行动函数自己先调用它，画面也调用它来显示按钮能不能按、为什么。
   - 目标还没选时传 `GameState.ANY_TARGET`，只检查和目标无关的条件（钱、行动点、科技）。
   - AI 也用这些函数，不自己写花费和条件。AI 要挑「钱不够、攒够了就能升」的科技时用 `research_block_error()`（除了钱以外的原因）。
 - **对局记录**靠「同样的种子 + 同样的玩家操作 = 同样的对局」，规则代码要守的几条
   （随机数只用 `GameState.rng`、操作成功时 `_record()` 等）见 [调试模式：写规则代码时要注意](debug-tools.md#写规则代码时要注意)。
-- **提速**不能改变规则的结果。先用平衡模拟的 `PROFILE=1` 找出慢在哪；改完以后，同样的 `RUNS` 跑出来的统计和最后一行「所有对局的校验值」都要和改之前一模一样。
-  现在有的几处捷径：回合末所有文明看一遍之前，`_begin_view_cache()` 先把这段时间里不会变的东西算好
-  （星系格子按位置分好、光速几乎为 0 的格子、星系快照），看完就清空；光走的时间不会比直线距离短，所以直线距离已经太远的不细算（`_light_within`）；
-  `Geometry._along` 只扫线段附近的小方盒。`test_speedups_match_plain_checks` 检查这些捷径和直接算的结果一样。
+- **提速**可以用近似、可以改变结果，标准是玩家看不出来。有三条不能破：
+  情报只许晚到、不许早到（不然就是泄露）；AI 和玩家拿到的近似一样；同一版本里「同样的种子 + 同样的操作 = 同样的对局」照旧成立（上一条的对局记录靠它）。
+  先用平衡模拟的 `PROFILE=1` 找出慢在哪；改完以后，同样的 `RUNS` 跑出来的胜率、对局长度等统计要和改之前差不多（在多跑几次本来就有的波动范围内），校验值可以变。
+  现在有的几处捷径：`Geometry._along` 只扫线段附近的小方盒；`_begin_view_cache()`（星系格子按位置分好、光速几乎为 0 的格子、星系快照）
+  现在只在 `test_speedups_match_plain_checks` 里用来和直接算的结果对照，连续结算时看视野走下面的分桶和 `view_marks.gd`。
+  一次回合推进里文明的星系、舰船、设施和科技个数都没变时，沿用上次的运营包（`Economy._cached_packages`）；
+  在途消息按到达的刻度分组，收消息时只看到时候的那几组（`Signals._indexed`）；只有几个格子降了维时，只重算路线穿过它们的消息和广播光线（`Signals.retime`、`Information._swap_medium`）。
+  按 ID 找舰船、设施先看上次的位置（`Civ.ship_by_id`、`Civ.asset_by_id`）；只关心附近星系时用 `Geometry.cells_near` 先粗筛，顺序和全部看一遍一样。
+  看视野时目标按位置分桶、不动的观察者记住看得到哪些星系（`Signals._entity_buckets`、`Signals._cells_in_view`）。
+  这些缓存不进存档，规则见[调试模式](debug-tools.md#写规则代码时要注意)。
+- **只增不减的记录**（日志、事件、账本、回执、传感器签名、舰上目标等）由 `GameState._trim_records()` 每回合修剪，各留多少写在 `GameState` 开头的 `XXX_KEEP`。
+  新加这类记录时，想好它最多会有多少条、什么时候删，一起加进去，并在 `test_v01_records_are_trimmed_every_turn` 里补一项。
+- **结束回合在后台线程里算**（画面复制一份局面交给线程，算完再换上），所以 `end_turn()` 走到的规则代码不能碰画面、节点和别的全局可变状态。
+  第一次用时才建的静态表（比如 `unfolding_layout.gd` 的映射表）要在 `view/main.gd` 开线程前先建好，线程里只读。
 - **空间阶段**由 `GameState.dimension` 和 `StarMap.extent/origin` 管理，不能再用固定 `StarMap.SIZE`
   检查对局中的坐标。几何扫描（`Geometry` 的函数、`Ship.outside()`）都要传 `map.bounds()`，这个参数没有默认值，免得忘了传时悄悄按 9³ 算；
   `SIZE` 只用于生成 9³ 的初始地图。
 - **降维换坐标**只在 `DimensionSpace.commit()` 里做，一次换掉所有存坐标的地方。展开的过程中规则里的坐标不动，
   画面从 `frame()` 读展开到一半的样子；换完以后用 `last_mapping` 查一格换之前在哪。画面算出来的位置不能写回规则。
 - **对局记录**使用 V0.1 的独立版本号；旧规则版本显式拒绝，避免按新规则重算成另一局。
-
+- **连续信息**：传感、维护和时间步缓存只在同一物理状态内有效，不能消耗随机数或泄露未回传信息。
+  波前保存实际介质历史及换图时刻，只有向前推进期间的相交才能生成新报告；跨维度历史不能重新从原点套半径。
+  提速时的近似（比如消息发出时就按途经光速算好到达时刻，收件者在飞时瞄准相遇点，它改航向了再追一段）也要守上面「提速」那三条。
 
 ## 画面代码（`game/view/`）
 
@@ -90,7 +103,8 @@
 | `action_page.gd` | 右侧面板的「行动」页：选行动、给方向或目标、执行 |
 | `angle_dial.gd` | 「行动」页上调方向的两个圆盘（水平角、俯仰角）。目标 = 发射源 + 方向 × 距离 |
 | `overlay.gd` | 盖在星图左边的一层：回合状态、重开、图例、视角操作说明、网格画法、日志、短暂提示 |
-| `saved_games.gd` | 普通游戏存读档界面：对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
+| `saved_games.gd` | 普通游戏存读档界面：自动存档和继续、退出保护、对局记录重建、分帧进度与取消、校验失败回滚数值，桌面选文件和网页上传下载 |
+| `desktop_menu.gd` | Mac 原生文件菜单，复用存读档和重开入口 |
 | `window_settings.gd` | 窗口位置和大小、界面大小，存在 `user://settings.cfg`；网页版改用随游戏带的字体 |
 | `debug_panel.gd` | 开发者调试面板（用法见 [调试模式](debug-tools.md)） |
 | `web_files.gd` | 网页版专用：读网址里的参数（`?debug&seed=123`），把文件下载到电脑、让玩家上传文件 |
@@ -116,7 +130,7 @@
 - **调试面板**放在一个单独的系统窗口里（`window`，`force_native`）。焦点在那个窗口上时，按键交给 `main.gd` 的 `_on_key` 处理。
 - **快捷键**：Ctrl / Alt 组合键、Shift+Enter 和调试面板的键（空格、左右方向键、Home、End、数字键）在 `main.gd` 的 `_on_key`；
   视角键在 `map_view.gd`（按住的 WASD 等每帧查，H、V、T、G 在 `_camera_key`）。新加快捷键前先看这两处，别撞键；
-  认键的位置（`physical_keycode`），在输入框里打字时不响应。
+  认键的位置（`physical_keycode`），在输入框里打字时不响应。事件和每帧相机轮询都通过 `main.game_input_blocked()` 检查弹窗、读档和单行/多行输入，不各自维护不同的判断。
 - **界面大小**：按 1280×800 等比缩放（项目设置 `canvas_items` + `expand`），再乘上 `ui_scale`
   （Ctrl + 加号 / 减号，0.6～1.3）。`ui_scale` 不超过 1 时界面坐标至少有 1280×800，不用为更小的窗口另排版；
   玩家自己放大时（最大 1.3 倍，界面坐标约 985×615）面板要滚动才看得全。
@@ -136,9 +150,22 @@
 
 ## 导出
 
-- 导出设置有三个：`Windows Desktop`（普通版 exe）、`Windows Desktop (dev)`（开发者版 exe）、`Web`。
+- 本地和 GitHub 发布都调用 `game/tools/export.py`，用法只写在[导出和发布](export.md)。
+  工具负责数值声明同步、网页字体、导入、导出、ZIP 打包和网页开发者入口；发布流程只负责上传和发布。
+  GitHub 测试流程在 Windows、macOS、Linux 上检查工具逻辑；发布流程在 Linux 上实际导出游戏。
+  Godot 预设仍在 `game/export_presets.cfg` 中维护，不在脚本里重复平台设置。
+  共用的 CI 环境固定 Python 3.12；发布前检查测试生成的文档和数值声明已提交，导出到 `build/release/`，缺少产物时上传失败。
+  手动运行只保存导出产物；版本标签触发 Release 和网页版部署，含连字符的标签标为预发布。Release 元数据使用触发标签的提交作为来源。
+  Actions 下载产物按运行编号命名，避免分支名中的斜杠导致上传失败；uv 缓存按 Python 工具中的脚本依赖声明更新。
+
+- 导出设置有五个：`Windows Desktop`（普通版 exe）、`Windows Desktop (dev)`（开发者版 exe）、`Web`、`macOS (Intel)`、`macOS (Apple Silicon)`。
   开发者版和普通版只差一个 `dev` 标记（导出设置的「自定义特性」），`main.gd` 看到它就打开调试面板，等于带了 `-- debug`。
   网页版只导出一份，开发者入口 `/dev/` 是发布时生成的一个小网页，转到 `?debug`。
+
+- macOS 按 Intel（`x86_64`）和 Apple Silicon（`arm64`）分成两个包，项目同时启用 S3TC/BPTC 和 ETC2/ASTC 纹理导入，以支持从各平台导出这两个版本。
+  应用标识为 `org.greenheartgroup.darkforest`，带上 `balance.cfg` 和数值方案；系统字体包含 macOS 的苹方，桌面版不带网页字体。
+  官方模板内只有 Universal 程序，`make_macos_templates.py` 先提取对应芯片的程序到 `build/macos_templates/`，两个预设分别使用生成的自定义模板。
+  使用内置临时签名、关闭 Apple 公证，导出 ZIP 保留 `.app` 的执行权限；工具检查应用清单、芯片架构、可执行文件权限和游戏资源包，复制 Godot 原始 ZIP，不重新打包。
 
 - 导出设置（`game/export_presets.cfg`）里脚本按原文导出（`script_export_mode=0`）。运行时已经不读原文（见上面「数值」），
   改成编译成二进制也能用，但没必要改，免得这个文件来回变。
@@ -151,6 +178,13 @@
 
 | 文件 | 做什么 |
 | --- | --- |
+| `game/tools/export.py` | Windows、macOS、Linux 共用的导出入口，准备资源、导出和打包；失败时不复制临时产物，用法见 [导出和发布](export.md) |
+| `game/tools/make_macos_templates.py` | 从已安装的官方通用模板提取 Intel、Apple Silicon 模板，输出到被忽略的构建目录；导出工具自动调用，也能为编辑器手动导出准备模板 |
+| `game/tools/sign_macos.py` | Mac 发布包的 Developer ID 签名、公证、票据和 Gatekeeper 验证；凭据从钥匙串读取，成功后生成新 ZIP，不覆盖输入或自动发布 |
+| `game/tests/tools/test_sign_macos.py` | 不使用真实 Apple 凭据，检查签名顺序、拒绝与超时、验证失败中止和原包保留 |
+| `game/tools/godot.py` | 测试、导出和动图录制共用的 Godot 查找方式；指定路径无效时直接报错，避免悄悄使用另一个版本 |
+| `game/tools/uv_check.py` | 工具脚本直接用 `python` 跑时，按脚本开头 `# /// script` 块查 Python 版本和依赖，不对就提示改用 `uv run` 并退出。新加要直接运行的脚本时，写上这个块（`requires-python = ">=3.12"`），并在所有导入之前照其他脚本加上调用；被别的脚本导入时不查 |
+| `game/tests/tools/test_export.py` | 用 Python 标准库检查导出失败处理、完整产物、ZIP 内容和 Godot 路径；完整 `test.py` 会先跑它 |
 | `game/tools/test.py` | 一条命令跑全部测试：先按 `balance.cfg` 生成 `balance.gd` 的数值声明，再导入，然后同时开几个 Godot 进程，规则测试分成几份，画面测试、展开演示测试各一份。本地和 GitHub 上跑的都是它。每个规则测试用了多久记在 `game/.godot/test_times.json`（不进 git），下次照着分，让每份的总时间差不多。全部跑、全部通过时更新文档里由代码决定的部分：测试个数写进 `docs/status.md`，再调用 `update_docs.py`（GitHub 上跑完 `docs/` 变了就算失败） |
 | `game/tools/mutate.py` | 变异测试：在 `game/` 的副本里给规则文件每次改一处（比如 `<` 改成 `<=`），跑规则测试（加 `--view` 再跑画面测试），统计有几处出错时测试能发现，列出发现不了的。遇到第一个失败就停，快的测试先跑。很慢，只在本地跑 |
 | `game/tests/run_tests.gd` | 规则测试的运行器：找出 `game/tests/rules/` 里每个 `test_*.gd`，跑里面每个 `test_` 开头的函数；给了 `tests=` 时按列表的顺序跑 |
@@ -224,7 +258,3 @@ README 的四段演示动图保存在 GitHub 的 [README 演示素材](https://g
 - Godot 给每个脚本生成的 `*.uid` 文件要提交（Godot 靠它找文件）。
 - `game/.godot/` 是缓存，不提交。
 - 测试自动生成或更新的文件一起提交，包括 `balance.gd` 的数值声明和文档里生成的部分；GitHub 上跑完测试，`docs/` 或 `balance.gd` 有变化就算失败。
-
-### 连续信息和物理回归
-
-传感、维护和时间步缓存只在同一物理状态内有效，不能消耗随机数或泄露未回传信息。波前保存实际介质历史及换图时刻，只有向前推进期间的相交才能生成新报告；跨维度历史不能重新从原点套半径。性能优化须用相同状态逐步校验，不改变时间步、AI、规则或采样策略。

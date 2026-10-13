@@ -4,32 +4,49 @@ extends RefCounted
 ## 本地自动战斗使用舰上已收到的传感历史，不更新玩家的远方地图。
 
 
-static func targets(s: GameState, include_grain := false) -> Array[Dictionary]:
+## observe：要不要带上实际运动的速度和加速度（传感观测用，航位推算靠它）。不带时速度照旧按舰速算，加速度为零，省掉逐艘计算运动。
+static func targets(s: GameState, include_grain := false, observe := false) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for civ in s.civs:
 		var owner := s.civs.find(civ)
 		for ship in civ.ships:
 			if ship.dead or (ship.kind == Ship.GRAIN and not include_grain):
 				continue
+			var motion := _motion(s, civ, ship, observe)
 			result.append({"id": ship.id, "kind": ship.kind, "owner": owner, "pos": ship.pos,
-					"velocity": ship.direction * ship.speed / s.physical_cell_size(),
+					"velocity": motion["velocity"], "acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF),
 					"hp": ship.max_hp() - ship.damage, "ship": ship})
 		for asset in civ.assets:
 			if asset["kind"] not in ["miner", "advanced_miner"]:
 				continue
+			var carrier := civ.ship_by_id(asset["carrier"]) if asset["carrier"] >= 0 else null
+			var motion := {"velocity": Vector3.ZERO, "acceleration": Vector3.ZERO} if carrier == null else _motion(s, civ, carrier, observe)
+			# 和 Signals.entity 的位置一样：船上的在船那里，否则在所在的格子（矿机的编号不会是船的编号，不用先当船找一遍）。
 			result.append({"id": asset["id"], "kind": asset["kind"], "owner": owner,
-					"pos": Signals.entity(s,owner,asset["id"])["pos"], "velocity": Vector3.ZERO if asset["carrier"] < 0 else civ.ship_by_id(asset["carrier"]).direction*civ.ship_by_id(asset["carrier"]).speed/s.physical_cell_size(), "hp": 1, "asset": asset})
+					"pos": carrier.pos if carrier != null else Vector3(asset["at"]), "velocity": motion["velocity"],
+					"acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF), "hp": 1, "asset": asset})
 	for payload in s.payloads:
 		if not payload.get("dead", false):
 			result.append({"id": payload["id"], "kind": "payload", "owner": payload["owner"],
-					"pos": payload["pos"], "velocity": payload.get("velocity", Vector3.ZERO),
+					"pos": payload["pos"], "velocity": payload.get("velocity", Vector3.ZERO), "acceleration": Vector3.ZERO,
 					"hp": Balance.HULL_HP["payload"] - payload.get("damage", 0), "payload": payload})
 	if include_grain:
 		for ship in s.hidden_ships:
 			if not ship.dead:
+				var motion := _motion(s, null, ship, observe)
 				result.append({"id": ship.id, "kind": ship.kind, "owner": -1, "pos": ship.pos,
-						"velocity": ship.direction * ship.speed / s.physical_cell_size(), "hp": 0, "ship": ship})
+						"velocity": motion["velocity"], "acceleration": motion["acceleration"], "accel_until": motion.get("accel_until", INF), "hp": 0, "ship": ship})
 	return result
+
+
+## 速度和加速度取实际运动用的那一组（已按当地限速），航位推算才对得上。
+## accel_until 是加速到这种船最高速度的时刻，之后不再加速；最高速度人人知道，带上它不泄露什么。
+static func _motion(s: GameState, civ: Civ, ship: Ship, observe: bool) -> Dictionary:
+	if observe:
+		var motion := Kinematics.motion(s, civ, ship, 0.0)
+		motion["accel_until"] = s.clock + motion["cap_time"]
+		return motion
+	return {"velocity": ship.direction * ship.speed / s.physical_cell_size(), "acceleration": Vector3.ZERO}
 
 
 static func legal(weapon: String, kind: String) -> bool:
@@ -149,7 +166,7 @@ static func fire_ready(s: GameState) -> void:
 			var speed: float = data["speed"] * s.light_speed_at(ship.pos)
 			if speed <= 0.0:
 				continue
-			var direction := aim(ship.pos, predicted(s,target), target["velocity"], speed / s.physical_cell_size())
+			var direction := aim(ship.pos, predicted(s,target), observed(s,target)["velocity"], speed / s.physical_cell_size())
 			var shot := {"id": s.next_id(), "owner": s.civs.find(civ), "source": ship.id,
 					"weapon": ship.channel, "pos": ship.pos, "direction": direction,
 					"remaining": float(data["range"]), "distance": 0.0, "created": s.clock,
@@ -162,8 +179,45 @@ static func fire_ready(s: GameState) -> void:
 			s.events.append({"id": shot["id"], "t": s.clock, "kind": "fire", "source": ship.id, "target": target["id"], "weapon": ship.channel})
 
 
+## 收件方此刻能知道的目标状态：观测只在加速度、航向等变了时才重发（Signals._emit），
+## 中间按观测时的速度和加速度推算。只推算到「现在减去这条观测的传播时间」那一刻，
+## 也就是假如每次采样都重发、此刻最新能收到的那次观测；不替收件方预知更晚的变化。
+## 返回那一刻的位置、速度和时刻。
+## 推算最多推到观测之后 stale_after() 年，见 stale()。
+static func observed(s: GameState,contact: Dictionary) -> Dictionary:
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	var t := clampf(s.clock-delay-t0,0.0,stale_after())
+	var velocity: Vector3 = contact.get("velocity",Vector3.ZERO)
+	var acceleration: Vector3 = contact.get("acceleration",Vector3.ZERO)
+	# 加速到最高速度（accel_until）就不再加速，之后匀速。不封顶的话，看不见以后会一直推算到超过最高速度。
+	var speeding_up := clampf(contact.get("accel_until",INF)-t0,0.0,t)
+	return {"pos":contact["pos"]+velocity*t+acceleration*speeding_up*(t-0.5*speeding_up),"velocity":velocity+acceleration*speeding_up,"t":t0+t}
+
+
+## 从 observed 那一刻起，按那时的速度直线推算现在的位置。凡是用别人位置的地方都要先推算，
+## 不能直接用观测那一刻的位置。最多再推一段传播时间（过时的观测就停在那里），也不推出地图。
 static func predicted(s: GameState,contact: Dictionary) -> Vector3:
-	return contact["pos"]+contact["velocity"]*maxf(0.0,s.clock-contact.get("t_observed",s.clock))
+	var known := observed(s,contact)
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	var pos: Vector3 = known["pos"]+known["velocity"]*clampf(s.clock-known["t"],0.0,delay)
+	var bounds := s.map.bounds()
+	var half := Vector3.ONE*Geometry.CELL_HALF
+	return pos.clamp(bounds.position-half,bounds.end-half)
+
+
+## 目标还在视野里时，观测最晚隔一次心跳再加一个子步（采样在子步末）就会重发。
+## 过了这么久还没收到新的，说明它已离开视野、停下或没了，不能再往前推算。
+static func stale_after() -> float:
+	return Signals.HEARTBEAT+Balance.PHYSICS_MAX_DT
+
+
+## 这条观测之后本该收到新的却没收到：推算已经停住，画面画淡一些。
+static func stale(s: GameState,contact: Dictionary) -> bool:
+	var t0: float = contact.get("t_observed",s.clock)
+	var delay: float = maxf(0.0,contact.get("t_received",t0)-t0)
+	return s.clock-delay-t0 > stale_after()
 
 
 static func projectile_motion(s: GameState, shot: Dictionary) -> Dictionary:
@@ -209,7 +263,13 @@ static func events_in(s: GameState, motions: Dictionary, duration: float) -> Arr
 					ship.contact_ids.erase(target["id"])
 				if ship.contact_ids.has(target["id"]):
 					continue
-				var t := Kinematics.relative_contact(motions[ship.id], target_motion(target, motions), radius / s.physical_cell_size(), duration)
+				var mine: Dictionary = motions[ship.id]
+				var other := target_motion(target, motions)
+				# 两边这一步里最多靠近多少：起点离得比这再加半径还远（多留一点浮点误差），就碰不上（relative_contact 也是 INF），不用算。
+				var closing: float = (mine["velocity"] - other["velocity"]).length() * duration + 0.5 * (mine["acceleration"] - other["acceleration"]).length() * duration * duration
+				if mine["pos"].distance_to(other["pos"]) > radius / s.physical_cell_size() + closing + 1e-4:
+					continue
+				var t := Kinematics.relative_contact(mine, other, radius / s.physical_cell_size(), duration)
 				if t != INF:
 					found.append({"after": t, "kind": "contact", "ship": ship, "owner": civ, "target": target})
 	return found

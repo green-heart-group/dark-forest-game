@@ -57,7 +57,7 @@ func setup(p_main: Node) -> void:
 	for spec in [["保存", true], ["读取", false]]:
 		var button := Button.new()
 		button.text = spec[0]
-		button.tooltip_text = "保存当前对局（Ctrl+S）" if spec[1] else "读取存档并接着玩（Ctrl+O）"
+		button.tooltip_text = main.shortcut_text("保存当前对局（Ctrl+S）" if spec[1] else "读取存档并接着玩（Ctrl+O）")
 		button.pressed.connect(func(): main.saves.open_dialog(spec[1]))
 		if not spec[1]:
 			main.WebFiles.make_pick_button(button)
@@ -85,7 +85,7 @@ func setup(p_main: Node) -> void:
 	top.add_child(_legend)
 	# 视角操作说明，平时收起
 	var controls := Label.new()
-	controls.text = MapView.CONTROLS_TEXT + "\n操作：Alt+1 科技树；Alt+2～4 切页；Alt+←/→ 选行动\nCtrl+Enter 执行；Shift+Enter 结束回合\nCtrl+B 收起面板；Ctrl+S 保存；Ctrl+O 读取"
+	controls.text = MapView.CONTROLS_TEXT + main.shortcut_text("\n操作：Alt+1 科技树；Alt+2～4 切页；Alt+←/→ 选行动\nCtrl+Enter 执行；Shift+Enter 结束回合\nCtrl+B 收起面板；Ctrl+S 保存；Ctrl+O 读取")
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_font_size_override("font_size", 13)
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE

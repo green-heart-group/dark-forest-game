@@ -66,7 +66,6 @@ func test_v01_progress_remote_hidden_state_pair() -> void:
 	me.colonies.append(remote)
 	Assets.ensure(s,me)
 	Knowledge.report_site(s,me,remote)
-	Signals.advance(s,4.0)
 	s.clock = 4.0
 	Signals.receive_due(s)
 	var result := s.build(me,"miner",remote)
@@ -93,6 +92,7 @@ func test_v01_old_replay_retains_order_report_cadence() -> void:
 	var s := _local()
 	var me := s.human()
 	var result := s.build(me,"miner")
-	s.end_turn()
-	check_eq(me.order_reports[result["order"]]["done"],50,"旧记录保留原周期，不能改变已冻结历史校验")
-	check(absf(me.order_reports[result["order"]]["t_observed"]-0.05)<1e-8,"旧记录保留原报告时刻")
+	WorldTime.advance(s,0.5)
+	# 没有这项设置时，本地工程也是每年才报一次：开工那一刻报过，半年时看到的还是那时的进度。
+	check_eq(me.order_reports[result["order"]]["done"],0,"没有本地即时回报设置时保留每年一次的周期")
+	check(absf(me.order_reports[result["order"]]["t_observed"])<1e-8,"半年时看到的是开工那一刻的报告")

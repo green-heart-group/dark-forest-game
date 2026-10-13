@@ -10,6 +10,10 @@ extends RefCounted
 ## 每个类里可能放着对象的变量。其余变量只有数字、坐标、字符串和装着它们的数组、字典，直接交给 var_to_bytes。
 const LINKS := {"GameState": ["map", "rng", "civs", "hidden_ships", "hidden_foils", "broadcasts", "zero_winner"],
 		"Civ": ["ships", "foils"]}
+## 只为算得快的缓存，不打包，恢复后是空的，用到时重新算。
+const SKIP := {"GameState": ["package_cache", "message_index", "environment_cache", "_cell_size", "_background_light", "step_start", "step_motions", "view_cells",
+		"view_marks", "uniform_cache", "view_until", "view_check", "view_dry", "view_missed", "view_missed_total"],
+		"Civ": ["_ship_slots", "_asset_slots", "_not_ships", "_not_ships_mark", "_open_orders", "_open_orders_size"]}
 
 
 static func pack(s: GameState) -> PackedByteArray:
@@ -45,9 +49,10 @@ static func _encode(v: Variant, ids: Dictionary) -> Variant:
 		ids[o] = id
 		var kind: String = o.get_script().get_global_name()
 		var links: Array = LINKS.get(kind, [])
+		var skip: Array = SKIP.get(kind, [])
 		var props := {}
 		for p in o.get_property_list():
-			if p["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			if p["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE and not skip.has(p["name"]):
 				var value = o.get(p["name"])
 				props[p["name"]] = _encode(value, ids) if links.has(p["name"]) else value
 		return {"#obj": kind, "#id": id, "p": props}

@@ -10,7 +10,24 @@ static func begin(s: GameState, origin: Vector3) -> Dictionary:
 		"size":s.physical_cell_size(),"speed":s.background_light()}
 
 
-static func environment(s: GameState) -> Dictionary:
+## uniform：调用方已确认全图光速处处相同（Hazards.uniform_light）。这时逐格算出来的就是这份空表，不用再扫一遍地图。
+static func environment(s: GameState, uniform := false) -> Dictionary:
+	if uniform and s.domain_cells.is_empty():
+		return {"size":s.physical_cell_size(),"speed":s.background_light(),"speeds":{},
+			"immunity":{},"domains":[],"lines":[],"epoch":s.space_epoch}
+	# 没有黑域、死线和黑域留下的格子时，光速表只跟各格维度和光速有关：这些没变就沿用上次那份（不要改动返回的表）。
+	var key := []
+	if s.domain_cells.is_empty() and not Hazards.any(s):
+		key = [s.space_epoch, s.dimension, s.light_version, s.cell_ids.size()]
+		if s.environment_cache.get("key", []) == key:
+			return s.environment_cache["env"]
+	var env := _environment(s)
+	if not key.is_empty():
+		s.environment_cache = {"key": key, "env": env}
+	return env
+
+
+static func _environment(s: GameState) -> Dictionary:
 	var speeds := {}
 	var immunity := {}
 	for cell in s.cell_ids:
@@ -70,6 +87,20 @@ static func _speed(env: Dictionary, at: Vector3, time: float) -> float:
 		if time<line["expires"] and Hazards.segment_distance(at,line["a"],line["b"])*env["size"]<=Balance.DEADLINE_RADIUS:
 			factor=minf(factor,Balance.DEADLINE_FACTOR)
 	return speed*factor
+
+
+## 光从 a 走向 b、时间从 start 到 end 的这一段里偏慢的光速：两端、以及线段上离各黑域中心最近的点，
+## 在开始和结束两个时刻各看一次，取最小的。单个黑域里光速在离中心最近处最慢、黑域越大越慢，所以不会比实际快。
+static func _slowest(env: Dictionary, a: Vector3, b: Vector3, start: float, end: float, speed: float) -> float:
+	var points: Array[Vector3]=[a,b]
+	var d:=b-a
+	for field in env["domains"]:
+		var part:=clampf((field["pos"]-a).dot(d)/d.length_squared(),0.0,1.0) if d.length_squared()>1e-15 else 0.0
+		points.append(a+d*part)
+	for at in points:
+		for time in [start,end]:
+			speed=minf(speed,_speed(env,at,time))
+	return speed
 
 
 static func _boundary(env: Dictionary, motion: Dictionary, at: float, dt: float) -> float:
@@ -133,11 +164,19 @@ static func _trace(ray: Dictionary, env: Dictionary, start: float, end: float) -
 		return
 	while t<end-1e-12:
 		var speed:=_speed(env,ray["pos"],t)
-		var dt:=minf(Balance.PHYSICS_MAX_DT,end-t)
+		# 没有黑域时，光速只在格子和死线边界变（_boundary 会切开），一段可以走到底。
+		# 有黑域时光速随位置和时间连续变：每段最长 ROUGH_DT 年，取这一段里偏慢的光速（_slowest），只会晚到。
+		var dt:=end-t if env["domains"].is_empty() else minf(Balance.ROUGH_DT,end-t)
 		if speed>0.0:
 			var remaining: float=ray["pos"].distance_to(ray["goal"])*env["size"]
 			var motion: Dictionary={"pos":ray["pos"],"velocity":direction*speed/env["size"],"acceleration":Vector3.ZERO}
 			dt=minf(dt,maxf(_boundary(env,motion,t,dt),Balance.TIME_EPSILON))
+			if not env["domains"].is_empty():
+				speed=_slowest(env,ray["pos"],Kinematics.position(motion,dt),t,t+dt,speed)
+				if speed<=0.0:
+					t+=dt
+					continue
+				motion["velocity"]=direction*speed/env["size"]
 			if remaining/speed<=dt:
 				ray["arrival"]=t+remaining/speed
 				ray["pos"]=ray["goal"]
@@ -146,10 +185,10 @@ static func _trace(ray: Dictionary, env: Dictionary, start: float, end: float) -
 		t+=dt
 
 
-static func events_in(s: GameState, motions: Dictionary, dt: float) -> Array[Dictionary]:
+static func events_in(s: GameState, motions: Dictionary, dt: float, uniform := false) -> Array[Dictionary]:
 	var out: Array[Dictionary]=[]
 	if (s.broadcasts.is_empty() and s.scans.is_empty()) or s.clock<s.remap_until: return out
-	var env:=environment(s)
+	var env:=environment(s,uniform)
 	for wave in Information.waves(s):
 		if not wave.has("propagation"): continue
 		for owner in s.civs.size():
@@ -193,7 +232,7 @@ static func resolve(s: GameState, events: Array[Dictionary], dt: float) -> void:
 			if wave["id"]!=event["wave"]: continue
 			wave["propagation"]["received"][ship.id]=s.clock
 			if wave.has("sender"):
-				Information._hear(s,wave,civ,ship.pos)
+				Information._hear(s,wave,civ,ship.pos,s.clock)
 			else:
 				Signals.send(s,wave["owner"],ship.pos,wave["source_id"],"sensor",{
 					"type":"entity","scan":wave["id"],"source_id":wave["source_id"],"t_observed":s.clock,"epoch":s.space_epoch,

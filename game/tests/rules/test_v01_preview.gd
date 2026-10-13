@@ -42,7 +42,7 @@ func test_v01_preview_scales_distances_and_capped_eta() -> void:
 	s.fold_anchor=Vector3i.ZERO
 	DimensionSpace.commit(s,false)
 	for id in s.cell_dims:
-		s.cell_dims[id]=s.dimension
+		s.set_cell_dim(id,s.dimension)
 	for civ in s.civs:
 		for asset in civ.assets:
 			asset["entity_dim"]=s.dimension
@@ -70,6 +70,7 @@ func test_v01_preview_hidden_truth_pair_and_received_threats() -> void:
 	remote.pos=Vector3(7,7,7)
 	remote.dormant=true
 	s.light[s.light_index(Vector3i(5,0,0))]=0.0
+	s.light_version+=1
 	s.cell_dims[s.cell_ids[Vector3i(4,0,0)]]=1
 	s.foil_zones.append({"id":9002,"center":Vector3i(7,7,7),"age":4.0})
 	_ship(s,s.civs[1],Ship.WARSHIP,Vector3(2,0,0))
@@ -94,7 +95,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	me.techs["dimension"]=true
 	var remote:=_ship(s,me,Ship.WARSHIP,Vector3(2,0,0))
 	Signals.report_ship(s,me,remote)
-	Signals.advance(s,2.0)
 	s.clock=2.0
 	Signals.receive_due(s)
 	var result:=s.prepare_conversion(me,Conversion.known_roster(s,me,3),Signals.controller(me),false,true)
@@ -107,7 +107,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	var rows: Array=conversion.known_ready(s,me,id)
 	check_eq([rows[0]["ready_at"],rows[0]["received_at"]],[7.0,7.0],"本地实体同刻确认准备到达")
 	check(not rows[1].has("ready_at"),"完工并不等于远方实体ready")
-	Signals.advance(s,2.0)
 	s.clock=9.0
 	Signals.receive_due(s)
 	check_eq(remote.ready["3>2"]["at"],9.0,"后端逐实体ready已有真实两年传播")
@@ -117,7 +116,6 @@ func test_v01_preview_ready_times_wait_for_round_trip_receipts() -> void:
 	remote.dead=true
 	check_eq(conversion.known_ready(s,me,id),pending,"未收到的失败或死亡不能改变准备展示")
 	remote.dead=false
-	Signals.advance(s,2.0)
 	s.clock=11.0
 	Signals.receive_due(s)
 	rows=conversion.known_ready(s,me,id)
@@ -182,7 +180,7 @@ func test_v01_preview_parked_pause_and_outside_destination() -> void:
 	s.fold_anchor=Vector3i.ZERO
 	DimensionSpace.commit(s,false)
 	for id in s.cell_dims:
-		s.cell_dims[id]=s.dimension
+		s.set_cell_dim(id,s.dimension)
 	Assets.get_id(me,Signals.controller(me))["entity_dim"]=2
 	me.techs["dimension"]=true
 	var host:=_ship(s,me,Ship.STARSHIP,Vector3.ZERO)

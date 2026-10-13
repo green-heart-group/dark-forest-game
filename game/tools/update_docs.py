@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["cogapp"]
 # ///
 """更新文档里由代码决定的部分，免得手抄的数字和代码对不上：
@@ -15,6 +15,10 @@
 数值取自 balance.cfg，科技取自 tech.gd。
 test.py 跑全部测试、全部通过时也会调用这里，GitHub 上跑完测试以后 docs/ 有变化就算失败。
 """
+
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
 
 import argparse
 import ast

@@ -95,7 +95,7 @@ const KEY_TURN_SPEED := 90.0
 const KEY_PAN_SPEED := 0.6
 const KEY_ZOOM_SPEED := 1.8
 ## 视角操作说明（星图左上角「操作」里显示）
-const CONTROLS_TEXT := "左键拖动：旋转　右键 / 中键拖动：平移　滚轮：缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格\n一维时：拖动和 A / D 沿直线走，V 回到自己的据点"
+const CONTROLS_TEXT := "拖动：旋转　Shift + 拖动 / 右键 / 中键：平移　滚轮：缩放\n触控板：双指滑动平移，捏合缩放　双击格子：移到中心\nWASD：平移　Q / E：旋转　R / F：俯仰　Z / X：缩放　按住 Shift 更快\nH：回到母星　V：重置视角　T：俯视　G：切换网格\n一维时：拖动和 A / D 沿直线走，V 回到自己的据点"
 
 ## 网格怎么画（F4.2）：点阵；视野内画网格线；点阵加视野内的网格线；完整网格线
 enum Grid { DOTS, VISION_LINES, DOTS_AND_VISION, ALL_LINES }
@@ -153,6 +153,7 @@ var _goal_pitch := CAM_PITCH
 var _goal_distance := CAM_DISTANCE
 ## 正在用哪个鼠标键拖动（没在拖动时为 MOUSE_BUTTON_NONE）：左键旋转，右键、中键平移
 var _drag_button := MOUSE_BUTTON_NONE
+var _drag_pan := false
 var _last_pointer := Vector2.ZERO
 ## 网格画法（Grid 里的一个）
 var grid_mode := Grid.DOTS
@@ -367,9 +368,10 @@ func _process(delta: float) -> void:
 
 ## 按住不放的视角键（WASD、Q/E、R/F、Z/X）。在输入框里打字、按着 Ctrl 或 Alt、焦点在别的窗口时不管。
 func _poll_camera_keys(delta: float) -> void:
-	if main.tech_tree.visible or main.migration_preview.visible:
+	if main.game_input_blocked():
+		_drag_button = MOUSE_BUTTON_NONE
 		return
-	if not get_window().has_focus() or get_viewport().gui_get_focus_owner() is LineEdit \
+	if not get_window().has_focus() \
 			or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META):
 		return
 	var held := func(key: Key) -> float: return 1.0 if Input.is_physical_key_pressed(key) else 0.0
@@ -390,9 +392,9 @@ func _poll_camera_keys(delta: float) -> void:
 
 ## 一次性的视角键：H 回到母星、V 重置、T 俯视、G 切换网格。在输入框里打字时不管。
 func _camera_key(key: InputEventKey) -> bool:
-	if main.tech_tree.visible or main.migration_preview.visible:
+	if main.game_input_blocked():
 		return false
-	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed or get_viewport().gui_get_focus_owner() is LineEdit:
+	if key.ctrl_pressed or key.alt_pressed or key.meta_pressed:
 		return false
 	match key.physical_keycode:
 		KEY_H:
@@ -427,11 +429,21 @@ func _over_ui() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if main.tech_tree.visible or main.migration_preview.visible:
+	if main.game_input_blocked():
+		_drag_button = MOUSE_BUTTON_NONE
 		return
 	if event is InputEventKey:
 		var key := event as InputEventKey
 		if key.pressed and not key.echo and _camera_key(key):
+			get_viewport().set_input_as_handled()
+	elif event is InputEventPanGesture:
+		if not _over_ui():
+			# Godot 的双指滚动单位约为鼠标滚轮的一格，换成画面像素。
+			_pan(-event.delta.x * 20.0, event.delta.y * 20.0)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMagnifyGesture:
+		if not _over_ui() and event.factor > 0.0:
+			_zoom(1.0 / event.factor)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -444,9 +456,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.pressed:
 			if _drag_button == MOUSE_BUTTON_NONE:
 				_drag_button = mb.button_index
+				_drag_pan = mb.button_index != MOUSE_BUTTON_LEFT or mb.shift_pressed
 				_press_pos = mb.position
 				_last_pointer = mb.position
-			if mb.button_index == MOUSE_BUTTON_LEFT and mb.double_click:
+			if mb.button_index == MOUSE_BUTTON_LEFT and not _drag_pan and mb.double_click:
 				var obj := _pick_object(mb.position)
 				var c := _nearest_cell(mb.position)
 				if not obj.is_empty():
@@ -455,7 +468,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					focus_on(Vector3(c))
 		elif mb.button_index == _drag_button:
 			_drag_button = MOUSE_BUTTON_NONE
-			if mb.button_index == MOUSE_BUTTON_LEFT and mb.position.distance_to(_press_pos) < 5.0:
+			if mb.button_index == MOUSE_BUTTON_LEFT and not _drag_pan and mb.position.distance_to(_press_pos) < 5.0:
 				# 点中东西才算选中；点到空处取消选中，但还是可以瞄准那一格
 				var obj := _pick_object(mb.position)
 				select_object(obj)
@@ -466,7 +479,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var mm := event as InputEventMouseMotion
 		var movement := mm.position - _last_pointer
 		_last_pointer = mm.position
-		if _drag_button == MOUSE_BUTTON_LEFT:
+		if not _drag_pan:
 			_turn(-movement.x * 0.3, -movement.y * 0.3)
 			_yaw = _goal_yaw  # 拖动旋转直接跟手，不用追
 			_pitch = _goal_pitch
@@ -579,10 +592,11 @@ func _pickables() -> Array[Dictionary]:
 					if not s.dead and not s.docked:
 						add.call("s%d" % s.id, s.position(), 0.24, "%s的%s" % [civ.name, s.label()])
 	# 看到的别人的舰船、预警报告的东西
+	# 画在按观测速度推算的现在位置（观测只在航向、速度变了时才重发）
 	for sight in me.sightings:
-		add.call("v%s%d" % [sight["pos"], sight["turn"]], sight["pos"], 0.18, "第 %d 回合看到的舰船" % sight["turn"])
+		add.call("v%s%d" % [sight["pos"], sight["turn"]], Combat.predicted(state, sight), 0.18, "第 %d 回合看到的舰船" % sight["turn"])
 	for alert in me.alerts:
-		add.call("a%s" % alert["pos"], alert["pos"], 0.29, "预警")
+		add.call("a%s" % alert["pos"], Combat.predicted(state, alert), 0.29, "预警（已过时）" if Combat.stale(state, alert) else "预警")
 	return list
 
 
@@ -973,7 +987,9 @@ func _animate_flattening() -> void:
 		current = translated
 		_layout_epoch = state.space_epoch
 		_trails.clear()
-		select_object({})
+		# 这里在 refresh 中间，接下来本来就要重画；再调 main.refresh() 会换掉投影，
+		# 外层手里的文明和舰船就不属于新的投影了（画航线时找不到舰船主人）。
+		select_object({}, false)
 	var frame := DimensionSpace.frame(state)
 	_layout_old = current
 	_layout_new = frame["positions"]
@@ -1404,12 +1420,13 @@ func _draw_intel(me: Civ) -> void:
 	var sizes: Array[float] = []
 	for sight in me.sightings:
 		var age := state.turn - int(sight["turn"])
-		points.append(sight["pos"])
+		points.append(Combat.predicted(state, sight))
 		colors.append(Color(COLOR_SIGHTING, clampf(1.0 - float(age) / Balance.SIGHTING_KEEP, 0.15, 1.0)))
 		sizes.append(1.0)
+	# 过时的预警（目标离开预警范围、停下或没了）停在最后推到的地方，画淡一些
 	for alert in me.alerts:
-		points.append(alert["pos"])
-		colors.append(COLOR_ALERT)
+		points.append(Combat.predicted(state, alert))
+		colors.append(Color(COLOR_ALERT, 0.35) if Combat.stale(state, alert) else COLOR_ALERT)
 		sizes.append(1.6)
 	var diamond := SphereMesh.new()
 	diamond.radius = 0.18
@@ -1517,7 +1534,7 @@ func _colony_candidates(me: Civ) -> Node3D:
 
 ## 图例：星图上每种标记的颜色和意思。
 static func legend_text() -> String:
-	return "[color=#4d99ff]■ / ▲[/color] 己方星系 / 飞行单位；停泊舰队按数量合并。\n" + 			"[color=#ff5959]■ / ◆[/color] 已知敌方星系 / 舰船；[color=#ff991a]◆[/color] 当前预警。旧情报越旧越淡。\n" + 			"[color=#b8c4d9]●[/color] 已探索星系；[color=#ff80cc]□ / ○[/color] 广播目标 / 最近三条传播波前。\n" + 			"[color=#fff259]○[/color] 当前选择；悬停看详情，选中看航线与设施；详细星图显示全部。\n" + 			"白片是降维箔，淡紫区域是降维或黑域；黑域中心有框。x / y / z 是坐标轴。"
+	return "[color=#4d99ff]■ / ▲[/color] 己方星系 / 飞行单位；停泊舰队按数量合并。\n" + 			"[color=#ff5959]■ / ◆[/color] 已知敌方星系 / 舰船；[color=#ff991a]◆[/color] 预警，过时的变淡。旧情报越旧越淡。\n" + 			"[color=#b8c4d9]●[/color] 已探索星系；[color=#ff80cc]□ / ○[/color] 广播目标 / 最近三条传播波前。\n" + 			"[color=#fff259]○[/color] 当前选择；悬停看详情，选中看航线与设施；详细星图显示全部。\n" + 			"白片是降维箔，淡紫区域是降维或黑域；黑域中心有框。x / y / z 是坐标轴。"
 
 
 # ---------- 绘图小工具 ----------

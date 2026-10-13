@@ -30,7 +30,7 @@ static func submit(s: GameState, civ: Civ, project: Dictionary) -> void:
 		project["host_id"]=known["id"]
 	if Balance.HOME_BUILD_SLOTS>Balance.BUILD_SLOTS:
 		project["queue_id"]=s.construction_queue_id(civ,project["at"],project["host_ship"])
-	civ.order_reports[project["id"]] = project.duplicate(true)
+	civ.record_order(project["id"], project.duplicate(true))
 	if not known.is_empty():
 		s.queue_entity_command(civ,known["id"],known["pos"],{"name":"activate_project","project":project["id"]},[0,0],false)
 
@@ -163,10 +163,28 @@ static func cancel(s: GameState, civ: Civ, id: int) -> Array:
 
 
 static func visible(s: GameState,civ: Civ) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for id in civ.order_reports:
-		var report: Dictionary = civ.order_reports[id]
-		if report.get("status","") not in ["completed","cancelled","failed","destroyed"]:
-			result.append(report)
+	var result := open_reports(civ)
 	result.sort_custom(func(a,b):return a["id"]<b["id"])
+	return result
+
+
+## 完结了的工程回报的状态。完结的回报不会再打开（收到更晚的「工作中」回报也不改，见 Signals._deliver）。
+const CLOSED := ["completed","cancelled","failed","destroyed"]
+
+
+## 还没完结的工程回报，按收到的先后（不排序）。用 Civ 记下的编号表，只看还开着的那些。
+static func open_reports(civ: Civ) -> Array[Dictionary]:
+	if civ._open_orders_size != civ.order_reports.size():
+		civ._open_orders = {}
+		for id in civ.order_reports:
+			if civ.order_reports[id].get("status","") not in CLOSED:
+				civ._open_orders[id] = true
+		civ._open_orders_size = civ.order_reports.size()
+	var result: Array[Dictionary] = []
+	for id in civ._open_orders.keys():
+		var report: Dictionary = civ.order_reports.get(id, {})
+		if report.is_empty() or report.get("status","") in CLOSED:
+			civ._open_orders.erase(id)
+			continue
+		result.append(report)
 	return result

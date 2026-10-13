@@ -58,6 +58,17 @@ static func in_owned_system_vision(s: GameState, civ: Civ, pos: Vector3) -> bool
 	return false
 
 
+## 按 motion 走，最多看 dt 年，下一次进出己方星系视野（in_owned_system_vision 的那些球）是什么时候。
+static func next_vision_edge(s: GameState, civ: Civ, motion: Dictionary, dt: float) -> float:
+	var best := INF
+	if civ == null or motion["velocity"].length_squared() + motion["acceleration"].length_squared() < 1e-20:
+		return best
+	for at in civ.colonies:
+		var radius := (Balance.VISION_HOME if at == civ.home else Balance.VISION_COLONY) + civ.vision_bonus()
+		best = minf(best, Hazards._surface(motion, {"a": Vector3(at), "b": Vector3(at), "r": radius / s.physical_cell_size(), "growth": 0.0}, minf(dt, best)))
+	return best
+
+
 ## 返回逻辑格上的二次轨迹；在cap_time处必须分段，再读取当地光速。
 static func motion(s: GameState, civ: Civ, ship: Ship, duration: float) -> Dictionary:
 	var velocity := Vector3.ZERO
@@ -98,14 +109,25 @@ static func first_contact(r: Vector3, v: Vector3, a: Vector3, radius: float, dur
 	if r.length_squared() <= radius * radius:
 		return 0.0
 	if a.length_squared() < 1e-18:
-		var vv := v.length_squared()
+		# 先找最近点，再按最近距离算进球的时刻。不用「rv² − vv·(r² − 半径²)」：坐标是单精度，
+		# 离得远时两个大数相减的误差比碰撞半径的平方还大，会把正对着的碰撞算漏。各分量取出来按双精度算。
+		var rx := r.x
+		var ry := r.y
+		var rz := r.z
+		var vx := v.x
+		var vy := v.y
+		var vz := v.z
+		var vv := vx * vx + vy * vy + vz * vz
 		if vv < 1e-18:
 			return INF
-		var rv := r.dot(v)
-		var discriminant := rv * rv - vv * (r.length_squared() - radius * radius)
-		if discriminant < 0.0:
+		var closest := -(rx * vx + ry * vy + rz * vz) / vv
+		var cx := rx + vx * closest
+		var cy := ry + vy * closest
+		var cz := rz + vz * closest
+		var miss := cx * cx + cy * cy + cz * cz
+		if miss > radius * radius:
 			return INF
-		var hit := (-rv - sqrt(discriminant)) / vv
+		var hit := closest - sqrt((radius * radius - miss) / vv)
 		return hit if hit >= 0.0 and hit <= duration else INF
 	return _curved_contact(r, v, a, radius, 0.0, duration)
 
@@ -132,7 +154,7 @@ static func relative_contact(first: Dictionary, second: Dictionary, radius: floa
 			first["acceleration"] - second["acceleration"], radius, duration)
 
 
-## 对直线推进在每个格界硬分段，进入已转换格、硬到期格和图外边界不会等到年末。
+## 下一次走到格子边界是什么时候。结算时只在规则不同的格子边界停下（Hazards.next_cell_change），这里只管找边界。
 static func next_cell_boundary(motion: Dictionary) -> float:
 	var best := INF
 	for axis in 3:
@@ -146,4 +168,21 @@ static func next_cell_boundary(motion: Dictionary) -> float:
 		var boundary := cell + (0.5 if sign_value > 0 else -0.5)
 		var distance_to_edge := absf(boundary - x)
 		best = minf(best, time_to_distance(distance_to_edge, absf(v), absf(a)))
+	return best
+
+
+## 匀速直线（没有加速度）时的 next_cell_boundary，结果相同。光和消息分段时每个子步要算几十万次，所以单独写一份不建字典的。
+static func straight_cell_exit(pos: Vector3, velocity: Vector3) -> float:
+	var best := INF
+	for axis in 3:
+		var v: float = velocity[axis]
+		if absf(v) <= 1e-15:
+			continue
+		var x: float = pos[axis]
+		var boundary := floorf(x + 0.5 + signf(v) * 1e-7) + (0.5 if v > 0.0 else -0.5)
+		var edge := absf(boundary - x)
+		if edge > 0.0:
+			best = minf(best, edge / absf(v))
+		else:
+			best = 0.0
 	return best

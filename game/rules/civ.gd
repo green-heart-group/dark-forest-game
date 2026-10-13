@@ -191,10 +191,80 @@ func has_starship() -> bool:
 
 
 func ship_by_id(id: int) -> Ship:
-	for s in ships:
-		if s.id == id:
-			return s
+	var i: int = _ship_slots.get(id, -1)
+	if i >= 0 and i < ships.size() and ships[i].id == id:
+		return ships[i]
+	var same_list := _not_ships_mark == _ships_mark()
+	if same_list and _not_ships.has(id):
+		return null
+	for k in ships.size():
+		if ships[k].id == id:
+			_ship_slots = _slots(ships)
+			return ships[k]
+	if not same_list:
+		forget_lookups()
+		_not_ships_mark = _ships_mark()
+	_not_ships[id] = true
 	return null
+
+
+## 资产 ID 对应的资产（Assets.get_id 用），找不到时为空字典。
+func asset_by_id(id: int) -> Dictionary:
+	var i: int = _asset_slots.get(id, -1)
+	if i >= 0 and i < assets.size() and assets[i]["id"] == id:
+		return assets[i]
+	for k in assets.size():
+		if assets[k]["id"] == id:
+			_asset_slots = _slots(assets)
+			return assets[k]
+	return {}
+
+
+## 记下每个 ID 在列表里的位置，下次先看那个位置还是不是它，是就不用从头找。
+## 列表改了也没关系：位置上不是它时照旧从头找，找到后重记。
+## 只为算得快，不打包（StateCopy.SKIP）。
+var _ship_slots: Dictionary = {}
+var _asset_slots: Dictionary = {}
+## 从头找过、不是船的编号（多半是据点和设施），连同那时 ships 的条数和首尾两艘的编号：这三样变了就作废。
+## 规则里 ships 只追加、删掉或滤掉死船，条数都会变；只有流浪地球会沿用旧编号，造出来时调用 forget_lookups。
+var _not_ships: Dictionary = {}
+var _not_ships_mark: Array = []
+
+
+func _ships_mark() -> Array:
+	if ships.is_empty():
+		return [0]
+	return [ships.size(), ships[0].id, ships[-1].id]
+
+
+## 还没完结的工程回报的编号（OrderControl.open_reports 用，完结的回报越攒越多，不用每次都扫一遍）。
+## order_reports 的条数和记下时不同（别处直接改过）就从头重数。只为提速，不打包。
+var _open_orders: Dictionary = {}
+var _open_orders_size := -1
+
+
+## 记下一份工程回报（规则里都经这里写 order_reports），顺便更新上面的编号表。
+func record_order(id: int, report: Dictionary) -> void:
+	var in_step := _open_orders_size == order_reports.size()
+	order_reports[id] = report
+	if in_step:
+		if report.get("status", "") not in OrderControl.CLOSED:
+			_open_orders[id] = true
+		_open_orders_size = order_reports.size()
+
+
+## 忘掉「不是船」的记录（造出沿用旧编号的船以后调用）。
+func forget_lookups() -> void:
+	_not_ships = {}
+	_not_ships_mark = []
+
+
+static func _slots(items: Array) -> Dictionary:
+	var slots := {}
+	for k in range(items.size() - 1, -1, -1): # 倒着记，同一个 ID 出现两次时记前面那个，和从头找的结果一样
+		var item = items[k]
+		slots[item.id if item is Ship else item["id"]] = k
+	return slots
 
 
 ## 某种单位（不算光粒）有几个，含停着的。
@@ -204,17 +274,6 @@ func count(kind: String) -> int:
 		if s.kind == kind and not s.dead:
 			n += 1
 	return n
-
-
-## 据点的位置：自己的星系，加上星舰。
-func bases() -> Array[Vector3]:
-	var result: Array[Vector3] = []
-	for c in colonies:
-		result.append(Vector3(c))
-	var ss := starship()
-	if ss != null:
-		result.append(ss.pos)
-	return result
 
 
 ## 可以作为发射源的格子：自己的星系，加上星舰所在的格子。
@@ -304,10 +363,6 @@ func reduce_cost() -> int:
 ## 实体当前维度。全球几何阶段不改变尚未迁维实体的产出。
 func entity_dimension() -> int:
 	return 1 if line_reduced else (2 if reduced else 3)
-
-
-func work_factor() -> float:
-	return Balance.DIMENSION_WORK[str(entity_dimension())]
 
 
 ## 产能Q、光速c和工作倍率分别读取，不能互相代用。

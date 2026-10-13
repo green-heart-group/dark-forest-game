@@ -26,10 +26,7 @@ static func at(civ: Civ, kind: String, cell: Vector3i) -> Array[Dictionary]:
 
 
 static func get_id(civ: Civ, id: int) -> Dictionary:
-	for asset in civ.assets:
-		if asset["id"] == id:
-			return asset
-	return {}
+	return civ.asset_by_id(id)
 
 
 static func dimension(civ: Civ, kind: String, cell: Vector3i) -> int:

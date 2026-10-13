@@ -3,9 +3,15 @@ extends RefCounted
 ## 决策/界面可用的己方状态。远端据点只读回报；真实状态只供发报和命令抵达结算。
 
 static func local(s: GameState, civ: Civ, pos: Vector3) -> bool:
+	return _at(s,_center(s,civ),pos)
+
+## 控制锚点现在在哪。初始化夹具尚未分配永久ID时，母星仍是本地控制地点。
+## 下面一次要看很多处的函数先找好它，再用 _at 判断哪处是本地，不用每处都重新找。
+static func _center(s: GameState, civ: Civ) -> Vector3:
 	var control := Signals.entity(s,s.civs.find(civ),Signals.controller(civ))
-	# 初始化夹具尚未分配永久ID时，母星仍是本地控制地点。
-	var center: Vector3 = control.get("pos",Vector3(civ.home))
+	return control.get("pos",Vector3(civ.home))
+
+static func _at(s: GameState, center: Vector3, pos: Vector3) -> bool:
 	return center.distance_to(pos)*s.physical_cell_size()<=Balance.COLLISION_EPSILON
 
 static func actual_site(s: GameState,civ: Civ,cell: Vector3i) -> Dictionary:
@@ -17,33 +23,54 @@ static func actual_site(s: GameState,civ: Civ,cell: Vector3i) -> Dictionary:
 		"warning":civ.warnings.get(cell,-1),"grain":civ.grains.has(cell),"colonial":civ.colonial.get(cell,false)}
 
 static func site(s: GameState,civ: Civ,cell: Vector3i) -> Dictionary:
-	if local(s,civ,Vector3(cell)):
+	return _site(s,civ,cell,_center(s,civ))
+
+static func _site(s: GameState,civ: Civ,cell: Vector3i,center: Vector3) -> Dictionary:
+	if _at(s,center,Vector3(cell)):
 		return actual_site(s,civ,cell)
 	return civ.site_reports.get(cell,{}).get("data",{})
 
+## site(...) 里的一项。本地的直接读真实状态，不用拼出整份 actual_site；结果和 site(...).get(field, fallback) 一样。
+static func _site_field(s: GameState,civ: Civ,cell: Vector3i,center: Vector3,field: String,fallback: Variant) -> Variant:
+	if not _at(s,center,Vector3(cell)):
+		return civ.site_reports.get(cell,{}).get("data",{}).get(field,fallback)
+	match field:
+		"owned": return civ.owns(cell)
+		"miners": return civ.miners.get(cell,0)
+		"advanced_miners": return civ.advanced_miners.get(cell,0)
+		"dysons": return civ.dysons.get(cell,0)
+		"assets": return civ.assets.filter(func(a):return a["at"]==cell and a["carrier"]<0).duplicate(true)
+	return actual_site(s,civ,cell).get(field,fallback)
+
 static func colonies(s: GameState,civ: Civ) -> Array[Vector3i]:
+	return _colonies(s,civ,_center(s,civ))
+
+static func _colonies(s: GameState,civ: Civ,center: Vector3) -> Array[Vector3i]:
 	var result: Array[Vector3i]=[]
 	for cell in civ.site_reports:
-		if site(s,civ,cell).get("owned",false):
+		if _site_field(s,civ,cell,center,"owned",false):
 			result.append(cell)
 	for cell in civ.colonies:
-		if local(s,civ,Vector3(cell)) and not result.has(cell):
+		if _at(s,center,Vector3(cell)) and not result.has(cell):
 			result.append(cell)
 	result.sort()
 	return result
 
 static func owns(s: GameState,civ: Civ,cell: Vector3i) -> bool:
-	return site(s,civ,cell).get("owned",false)
+	return _site_field(s,civ,cell,_center(s,civ),"owned",false)
 
 static func snapshot(s: GameState,civ: Civ,cell: Vector3i) -> Dictionary:
 	return site(s,civ,cell).get("snapshot",civ.intel.get(cell,{}))
 
 static func assets(s: GameState,civ: Civ) -> Array[Dictionary]:
+	return _assets(s,civ,_center(s,civ))
+
+static func _assets(s: GameState,civ: Civ,center: Vector3) -> Array[Dictionary]:
 	var result: Array[Dictionary]=[]
-	for cell in colonies(s,civ):
-		result.append_array(site(s,civ,cell).get("assets",[]))
+	for cell in _colonies(s,civ,center):
+		result.append_array(_site_field(s,civ,cell,center,"assets",[]))
 	for ship in Signals.reported_ships(s,civ):
-		if local(s,civ,ship.pos):
+		if _at(s,center,ship.pos):
 			result.append_array(civ.assets.filter(func(a):return a["carrier"]==ship.id))
 		else:
 			result.append_array(civ.telemetry.get(ship.id,{}).get("data",{}).get("assets",[]))
@@ -64,41 +91,41 @@ static func entity(s: GameState,civ: Civ,id: int) -> Dictionary:
 	return {}
 
 static func anchor(s: GameState,civ: Civ,cell: Vector3i) -> Dictionary:
-	for asset in site(s,civ,cell).get("assets",[]):
+	for asset in _site_field(s,civ,cell,_center(s,civ),"assets",[]):
 		if asset["kind"]=="anchor":
 			return {"id":asset["id"],"pos":Vector3(cell),"asset":asset}
 	return {}
 
 static func count(s: GameState,civ: Civ,kind: String) -> int:
 	if kind in Ship.NAMES:
-		return Signals.reported_ships(s,civ).filter(func(ship):return ship.kind==kind).size()
+		return Signals.reported_ships(s,civ,[kind]).size()
 	return assets(s,civ).filter(func(asset):return asset["kind"]==kind).size()
 
 static func miners(s: GameState,civ: Civ) -> int:
+	var center:=_center(s,civ)
 	var total:=0
-	for cell in colonies(s,civ):
-		var data:=site(s,civ,cell)
-		total+=data.get("miners",0)+data.get("advanced_miners",0)
-	for asset in assets(s,civ):
+	for cell in _colonies(s,civ,center):
+		total+=_site_field(s,civ,cell,center,"miners",0)+_site_field(s,civ,cell,center,"advanced_miners",0)
+	for asset in _assets(s,civ,center):
 		if asset["carrier"]>=0 and asset["kind"] in ["miner","advanced_miner"]:
 			total+=1
 	return total
 
 static func pending(civ: Civ,kind: String,cell:=GameState.ANY_TARGET) -> int:
 	var total:=0
-	for report in civ.order_reports.values():
-		if report["category"]!="research" and report["kind"]==kind and report.get("status","") not in ["completed","failed","destroyed","cancelled"] and (cell==GameState.ANY_TARGET or report["at"]==cell):
+	for report in OrderControl.open_reports(civ):
+		if report["category"]!="research" and report["kind"]==kind and (cell==GameState.ANY_TARGET or report["at"]==cell):
 			total+=1
 	return total
 
 static func flag_cells(s: GameState,civ: Civ,flag: String) -> Array[Vector3i]:
+	var center:=_center(s,civ)
 	var result: Array[Vector3i]=[]
-	for cell in colonies(s,civ):
-		var value=site(s,civ,cell).get(flag,false)
+	for cell in _colonies(s,civ,center):
+		var value=_site_field(s,civ,cell,center,flag,false)
 		if (value is bool and value) or (value is int and value>=0):
 			result.append(cell)
 	return result
-
 static func report_site(s: GameState,civ: Civ,cell: Vector3i) -> void:
 	var data:=actual_site(s,civ,cell)
 	data["snapshot"]["turn"]=0
@@ -107,19 +134,62 @@ static func report_site(s: GameState,civ: Civ,cell: Vector3i) -> void:
 	Signals.send(s,s.civs.find(civ),Vector3(cell),Signals.controller(civ),"report",{"type":"own_site","data":data,
 		"t_observed":s.clock,"source_id":data["assets"][0]["id"] if not data["assets"].is_empty() else -1,"epoch":s.space_epoch})
 
-static func sample(s: GameState,civ: Civ) -> void:
+## 每一刀都要看每处据点变了没有，所以不逐处调用 actual_site（它每处都要扫一遍全部设施和别人的全部舰船），
+## 而是先按格子分好设施、找出有水滴停着的格子，再拼出和 actual_site 一样的内容（签名才对得上）。
+## look 是 Signals.sample 这一次的上下文：给了就用里面拍好的星系快照（和 actual_site 里的一样）。
+static func sample(s: GameState,civ: Civ,look:={}) -> void:
+	if civ.colonies.is_empty():
+		return
+	var assets:={}
+	for asset in civ.assets:
+		if asset["carrier"]<0:
+			if not assets.has(asset["at"]):
+				assets[asset["at"]]=[]
+			assets[asset["at"]].append(asset)
+	var jammed:={}
+	for other in s.civs:
+		if other==civ or not other.alive:
+			continue
+		for ship in other.ships:
+			if ship.kind==Ship.DROPLET and ship.parked and not ship.dead and not ship.dormant:
+				jammed[ship.cell()]=true
+	# 星系的事实（ViewMarks.begin 算的签名）和下面用到的己方记录都没变，各处据点的样子就都没变，只要补上到了心跳的。只为提速。
+	var guard:=0
+	var owner:=s.civs.find(civ)
+	if look.get("facts",0)!=0:
+		guard=hash([look["facts"],civ.colonies,assets,jammed,civ.dormant_colonies,civ.miners,civ.advanced_miners,civ.warnings,civ.colonial])
+		if s.view_marks.get("sites",{}).get(owner,0)==guard:
+			for cell in civ.colonies:
+				if s.clock-s.sensor_stamps.get("site:%d:%d"%[owner,s.cell_ids.get(cell,-1)],{}).get("time",-INF)>=1.0:
+					report_site(s,civ,cell)
+			return
 	for cell in civ.colonies:
-		var data:=actual_site(s,civ,cell)
-		data["snapshot"]["turn"]=0
-		var stamp: Dictionary=s.sensor_stamps.get("site:%d:%d"%[s.civs.find(civ),s.cell_ids.get(cell,-1)],{})
+		var snapshot: Dictionary
+		if look.is_empty():
+			snapshot=s.snapshot(cell)
+			snapshot["turn"]=0
+		else:
+			snapshot=ViewMarks.snapshot(s,look,cell)["data"]
+		var data:={"cell":cell,"owned":civ.owns(cell),"assets":assets.get(cell,[]),
+			"snapshot":snapshot,"dormant":civ.dormant_colonies.has(cell),"jammed":jammed.has(cell),
+			"relative_light":s.relative_light(Vector3(cell)),"miners":civ.miners.get(cell,0),"advanced_miners":civ.advanced_miners.get(cell,0),
+			"dysons":civ.dysons.get(cell,0),"bunker":civ.bunkers.has(cell),"broadcaster":civ.broadcasters.has(cell),
+			"warning":civ.warnings.get(cell,-1),"grain":civ.grains.has(cell),"colonial":civ.colonial.get(cell,false)}
+		var key:="site:%d:%d"%[owner,s.cell_ids.get(cell,-1)]
+		var stamp: Dictionary=s.sensor_stamps.get(key,{})
 		if stamp.get("hash",-1)!=hash(data) or s.clock-stamp.get("time",-INF)>=1.0:
 			report_site(s,civ,cell)
+	if guard!=0:
+		if not s.view_marks.has("sites"):
+			s.view_marks["sites"]={}
+		s.view_marks["sites"][owner]=guard
 
 static func maintenance(s: GameState,civ: Civ) -> Array[Dictionary]:
 	var result: Array[Dictionary]=[]
-	for cell in colonies(s,civ):
+	var center:=_center(s,civ)
+	for cell in _colonies(s,civ,center):
 		result.append({"key":Economy.package_key("anchor",cell),"kind":"anchor","at":cell})
-		for i in site(s,civ,cell).get("dysons",0):
+		for i in _site_field(s,civ,cell,center,"dysons",0):
 			result.append({"key":Economy.package_key("dyson",cell,i),"kind":"dyson","at":cell})
 	for ship in Signals.reported_ships(s,civ):
 		if Balance.BUILD_UPKEEP.has(ship.kind):
@@ -250,7 +320,8 @@ static func presentation(s: GameState,civ: Civ) -> GameState:
 			view.map.habitable[cell]=true
 		view.system_cells.append(cell)
 		view.light[view.light_index(cell)]=info.get("relative_light",1.0)
-		view.cell_dims[view.cell_ids.get(cell,-1)]=info.get("cell_dim",s.dimension)
+		view.light_version+=1
+		view.set_cell_dim(view.cell_ids.get(cell,-1),info.get("cell_dim",s.dimension))
 		if info.get("cell_dim",s.dimension)<s.dimension:
 			if s.dimension==3:
 				view.flattened[cell]=0
@@ -304,7 +375,8 @@ static func predict_path(s: GameState,civ: Civ,ship: Ship,years: int) -> Array[V
 				moving.slow_start=false
 			var motion:=Kinematics.motion(view,me,moving,remaining)
 			# 和正式时钟一样跨过有限精度的限速边界；不能在 cap_time≈0 时永久停住预览。
-			var dt:=minf(remaining,maxf(Balance.TIME_EPSILON,minf(Balance.PHYSICS_MAX_DT,minf(motion["cap_time"],motion["arrival"]))))
+			# 出己方视野（慢速起步结束）、进黑域这些速度变化不单独找时刻，每段最长 ROUGH_DT 年，预览只求大致准。
+			var dt:=minf(remaining,maxf(Balance.TIME_EPSILON,minf(Balance.ROUGH_DT,minf(motion["cap_time"],motion["arrival"]))))
 			moving.pos=Kinematics.position(motion,dt)
 			moving.speed=motion["speed"]+motion["acceleration"].length()*view.physical_cell_size()*dt
 			view.clock+=dt

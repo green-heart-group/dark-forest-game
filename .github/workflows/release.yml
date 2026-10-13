@@ -1,5 +1,5 @@
-# 发布游戏：推送 v 开头的标签（如 v0.1.0）时，跑测试，导出 Windows exe 和网页版，
-# 把 exe 打包挂到 Release 页面，网页版发到 GitHub Pages。
+# 发布游戏：推送 v 开头的标签（如 v0.1.0）时，跑测试，导出 Windows、macOS 和网页版，
+# 把桌面版 ZIP 挂到 Release 页面，网页版发到 GitHub Pages。
 # exe 和网页版各有一个开发者版（一打开就有调试面板）：dark-forest-windows-dev.zip 和网页的 /dev/。
 # 标签里带「-」（如 v0.1.0-test）的算试用版：Release 标成预发布。
 # 也可以在 Actions 页面手动运行：只跑测试和导出，结果在运行页面底部下载，不发布。
@@ -21,6 +21,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -32,38 +33,23 @@ jobs:
       - name: 导入并跑测试
         run: uv run game/tools/test.py
 
-      - name: 导出
-        run: |
-          mkdir -p build/web
-          godot --headless --path game --export-release "Windows Desktop" ../build/dark-forest.exe
-          godot --headless --path game --export-release "Windows Desktop (dev)" ../build/dark-forest-dev.exe
-          godot --headless --path game --export-release "Web" ../build/web/index.html
-          test -s build/dark-forest.exe && test -s build/dark-forest-dev.exe && test -s build/web/index.html
-          cd build
-          zip -q dark-forest-windows.zip dark-forest.exe
-          zip -q dark-forest-windows-dev.zip dark-forest-dev.exe
+      - name: 检查生成文件已提交
+        run: git diff --exit-code -- docs/ game/rules/balance.gd
 
-      - name: 网页版的开发者入口（/dev/ 转到 ?debug，打开调试面板）
-        run: |
-          mkdir -p build/web/dev
-          cat > build/web/dev/index.html <<'EOF'
-          <!DOCTYPE html>
-          <meta charset="utf-8">
-          <title>黑暗森林（开发者调试）</title>
-          <script>
-            var extra = location.search ? "&" + location.search.slice(1) : "";
-            location.replace("../?debug" + extra);
-          </script>
-          EOF
+      - name: 导出
+        run: uv run game/tools/export.py --out-dir build/release
 
       - name: 保存导出结果（运行页面底部可下载）
         uses: actions/upload-artifact@v4
         with:
-          name: dark-forest-${{ github.ref_name }}
+          name: dark-forest-${{ github.run_id }}
+          if-no-files-found: error
           path: |
-            build/dark-forest-windows.zip
-            build/dark-forest-windows-dev.zip
-            build/web
+            build/release/dark-forest-windows.zip
+            build/release/dark-forest-windows-dev.zip
+            build/release/dark-forest-macos-intel.zip
+            build/release/dark-forest-macos-apple-silicon.zip
+            build/release/web
 
       - name: 发 Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -72,13 +58,28 @@ jobs:
         run: |
           flag=""
           case "$GITHUB_REF_NAME" in *-*) flag="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" build/dark-forest-windows.zip build/dark-forest-windows-dev.zip --generate-notes $flag
+          cat > build/release-notes.md <<EOF
+          ## 直接玩
+
+          无需安装 Godot。下载下方 Assets 中与电脑对应的 ZIP，解压后打开游戏。
+
+          - Mac M 系列（macOS 13+）：dark-forest-macos-apple-silicon.zip
+          - Mac Intel（macOS 11+）：dark-forest-macos-intel.zip
+          - Windows 普通版：dark-forest-windows.zip
+          - 开发者调试版：dark-forest-windows-dev.zip（普通试玩不需要）
+
+          Mac 把解压得到的 dark-forest.app 拖到「应用程序」。本流程生成的 Mac 包使用临时签名，尚未经过 Apple 公证。
+          [安装与运行说明](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md#快速开始) · [本版本操作说明](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/guides/controls.md)
+
+          桌面版自动保存，重新打开可继续上次对局；Mac 支持 Command 快捷键、原生文件菜单和触控板操作。
+          EOF
+          gh release create "$GITHUB_REF_NAME" build/release/dark-forest-windows.zip build/release/dark-forest-windows-dev.zip build/release/dark-forest-macos-intel.zip build/release/dark-forest-macos-apple-silicon.zip --target "$GITHUB_SHA" --verify-tag --generate-notes --notes-file build/release-notes.md $flag
 
       - name: 准备网页版
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build/web
+          path: build/release/web
 
   pages:
     if: startsWith(github.ref, 'refs/tags/')

@@ -1,8 +1,8 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = ["cogapp"]
 # ///
-"""一条命令跑全部测试：先按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
+"""一条命令跑全部测试：先检查 Python 工具，再按 balance.cfg 生成 balance.gd 里的数值声明（sync_balance.py），再导入（新加了 class_name 时要导入一次），
 最后跑规则、画面和展开演示测试。
 本地和 GitHub 上都用它，所以两边跑的东西一样。
 
@@ -26,11 +26,14 @@ GitHub 上跑完以后 docs/ 变了就算失败，说明提交的文档是旧的
 有失败时退出码为 1。
 """
 
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
+
 import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +42,7 @@ import time
 from pathlib import Path
 
 import sync_balance  # 同一目录下的 sync_balance.py
+from godot import find_godot
 
 GAME = Path(__file__).resolve().parents[1]
 SUITES = {
@@ -51,13 +55,6 @@ TIMES = GAME / ".godot" / "test_times.json"
 STATUS = GAME.parent / "docs" / "status.md"
 # 没有记录的测试，当它要这么多毫秒
 DEFAULT_MS = 100
-
-
-def find_godot() -> str:
-    for name in [os.environ.get("GODOT"), "godot_console", "godot"]:
-        if name and shutil.which(name):
-            return name
-    sys.exit("找不到 Godot：把 godot_console 或 godot 放进 PATH，或者用环境变量 GODOT 指定")
 
 
 def rule_tests(game: Path = GAME) -> list[str]:
@@ -108,6 +105,13 @@ def main() -> int:
     parser.add_argument("--no-import", action="store_true", help="不先导入")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8), help="规则测试分几个进程跑")
     args = parser.parse_args()
+
+    if args.which == "all" and not args.only:
+        if subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", str(GAME / "tests" / "tools")],
+                          cwd=GAME.parent).returncode:
+            print("工具测试失败")
+            return 1
+        print("工具测试：0 个失败", flush=True)
 
     if sync_balance.sync(write=True):
         print("已按 balance.cfg 更新 game/rules/balance.gd 里的数值声明，记得一起提交")

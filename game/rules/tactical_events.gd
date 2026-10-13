@@ -34,6 +34,7 @@ static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 
 static func next_change(s: GameState, motions: Dictionary, duration: float) -> float:
 	var next := INF
+	var shapes := []
 	for civ in s.civs:
 		for ship in civ.ships:
 			if ship.dead or not motions.has(ship.id):
@@ -42,10 +43,29 @@ static func next_change(s: GameState, motions: Dictionary, duration: float) -> f
 				next = minf(next, maxf(0.0, Balance.SUPPRESSION_DURATION - ship.suppression["progress"]))
 			if ship.kind != Ship.WARSHIP:
 				continue
-			for other in s.civs:
-				for cell in other.colonies:
-					for radius in [Balance.SUPPRESSION_RANGE, Balance.SUPPRESSION_DEFENDER_RANGE]:
-						next = minf(next, Hazards._surface(motions[ship.id], {"a": Vector3(cell), "b": Vector3(cell), "r": radius / s.physical_cell_size(), "growth": 0.0}, duration))
+			var motion: Dictionary = motions[ship.id]
+			# 不动的战舰不会越过压制范围的边界（对不动的点 _surface 总是 INF），不用逐个星系算。
+			if motion["velocity"] == Vector3.ZERO and motion["acceleration"] == Vector3.ZERO:
+				continue
+			if shapes.is_empty():
+				for other in s.civs:
+					for cell in other.colonies:
+						for radius in [Balance.SUPPRESSION_RANGE, Balance.SUPPRESSION_DEFENDER_RANGE]:
+							shapes.append({"a": Vector3(cell), "b": Vector3(cell), "r": radius / s.physical_cell_size(), "growth": 0.0})
+			# 这一步走过的路的方框（弦的方框，四周放宽弯曲的余量 |a|t²/8，再多留一点浮点误差）。
+			# 离方框都比半径远的星系，整段路都在它的球外面，不会越过表面（_surface 也是 INF），不用算。
+			var low := Vector3.ONE * -INF
+			var high := Vector3.ONE * INF
+			if is_finite(duration):
+				var end := Kinematics.position(motion, duration)
+				var bend: float = motion["acceleration"].length() * duration * duration / 8.0 + 1e-4
+				low = motion["pos"].min(end) - Vector3.ONE * bend
+				high = motion["pos"].max(end) + Vector3.ONE * bend
+			for shape in shapes:
+				var point: Vector3 = shape["a"]
+				if point.distance_to(point.clamp(low, high)) > shape["r"]:
+					continue
+				next = minf(next, Hazards._surface(motion, shape, duration))
 	return next
 
 
@@ -68,44 +88,40 @@ static func integrate(s: GameState, civ: Civ, plan: Dictionary, dt: float) -> Ar
 	return due
 
 
-static func box_entry(motion: Dictionary, cell: Vector3i, duration: float) -> float:
-	var near := 0.0
-	var far := duration
-	for axis in 3:
-		var lo := float(cell[axis]) - Geometry.CELL_HALF
-		var hi := float(cell[axis]) + Geometry.CELL_HALF
-		var v: float = motion["velocity"][axis]
-		var x: float = motion["pos"][axis]
-		if absf(v) < 1e-12:
-			if x < lo or x > hi:
-				return INF
-			continue
-		var a := (lo - x) / v
-		var b := (hi - x) / v
-		near = maxf(near, minf(a, b))
-		far = minf(far, maxf(a, b))
-	return near if near <= far and far >= 0.0 else INF
+## 到了目标星系会自己停下的几种船（events_in 的 arrival_stop）。
+const STOP_KINDS := [Ship.COLONY, Ship.DEVOURER, Ship.DROPLET, Ship.SOPHON]
+## events_in 只看这几种船：会停下的，加上光粒。别的船跳过，不用逐艘查。
+const EVENT_KINDS := [Ship.COLONY, Ship.DEVOURER, Ship.DROPLET, Ship.SOPHON, Ship.GRAIN]
 
 
 static func events_in(s: GameState, motions: Dictionary, duration: float) -> Array[Dictionary]:
 	var due: Array[Dictionary] = []
 	if s.clock < s.remap_until:
 		return due
-	var all: Array = s.hidden_ships.map(func(ship): return [ship, -1])
+	var all: Array = []
+	for ship in s.hidden_ships:
+		if ship.kind in EVENT_KINDS:
+			all.append([ship, -1])
 	for civ in s.civs:
+		var owner := s.civs.find(civ)
 		for ship in civ.ships:
-			all.append([ship, s.civs.find(civ)])
+			if ship.kind in EVENT_KINDS:
+				all.append([ship, owner])
+	var index := Geometry.cell_index(s.system_cells) if not all.is_empty() else {}
 	for pair in all:
 		var ship: Ship = pair[0]
 		if ship.dead or not motions.has(ship.id):
+			continue
+		var stops: bool = ship.kind in STOP_KINDS and ship.moving()
+		if not stops and ship.kind != Ship.GRAIN:
 			continue
 		var motion: Dictionary=motions[ship.id]
 		# 任一二次轨迹的位移不超过 |v|dt+|a|dt²/2；远于此球的格子不可能相交。
 		# 只做保守剔除，近处仍使用原来的连续轨迹精确判定。
 		var travel_bound: float=motion["velocity"].length()*duration+0.5*motion["acceleration"].length()*duration*duration
-		if ship.kind in [Ship.COLONY,Ship.DEVOURER,Ship.DROPLET,Ship.SOPHON] and ship.moving():
+		if stops:
 			var bound: float=travel_bound+Balance.COLLISION_EPSILON/s.physical_cell_size()+1e-7
-			for cell in s.system_cells:
+			for cell in Geometry.cells_near(s.system_cells, index, motion["pos"], bound):
 				if motion["pos"].distance_squared_to(Vector3(cell))>bound*bound:
 					continue
 				var owner:=s.coord_owner(cell)
@@ -121,7 +137,7 @@ static func events_in(s: GameState, motions: Dictionary, duration: float) -> Arr
 			ship.dead = true
 			continue
 		var grain_bound: float=travel_bound+Balance.GRAIN_RADIUS/s.physical_cell_size()+1e-7
-		for cell in s.system_cells:
+		for cell in Geometry.cells_near(s.system_cells, index, motion["pos"], grain_bound):
 			if motion["pos"].distance_squared_to(Vector3(cell))>grain_bound*grain_bound:
 				continue
 			if s.coord_owner(cell) == null or s.map.star_at(cell) == StarMap.Star.NONE or s.cell_ids.get(cell, -1) == ship.origin_cell_id:

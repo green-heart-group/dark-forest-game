@@ -49,6 +49,22 @@ func test_beam_destroys_warship_after_local_observation_and_flight() -> void:
 
 
 ## 规则：交战
+func test_armed_ship_reacts_when_observation_arrives() -> void:
+	# 子步放宽到一整年也一样：带武器的船收到观测就切开，写进舰上目标表，接着就能开火。
+	var keep:=Balance.PHYSICS_MAX_DT
+	Balance.PHYSICS_MAX_DT=1.0
+	var s:=_two_civs(Vector3i(8,8,8))
+	var mine:=_ship(s,s.human(),Ship.WARSHIP,Vector3(3,0,0))
+	mine.weapons=["beam"]
+	var victim:=_ship(s,s.civs[1],Ship.WARSHIP,Vector3(3.4,0,0))
+	WorldTime.advance(s,0.5)
+	Balance.PHYSICS_MAX_DT=keep
+	var contact: Dictionary=mine.local_contacts.get(victim.id,{})
+	check(absf(contact.get("t_received",-1.0)-0.4)<1e-6,"观测走 0.4 光年，0.4 年时写进舰上目标表")
+	check_eq(mine.fired_turn,s.turn,"观测到达后当年就开火，不等子步结束")
+
+
+## 规则：交战
 func test_torpedo_three_damage_hits_after_flight() -> void:
 	var s:=_two_civs(Vector3i(8,8,8))
 	var mine:=_ship(s,s.human(),Ship.WARSHIP,Vector3(3,0,0))

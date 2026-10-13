@@ -19,6 +19,35 @@ static func charge(s: GameState,civ: Civ,cost: Array,reason: String) -> void:
 
 
 static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
+	var result := _base_packages(s, civ)
+	result.append_array(TacticalEvents.packages(s, civ))
+	result.append_array(Signals.coverage_packages(s, civ))
+	return result
+
+
+## 回合推进时用：这一回合里文明的星系、舰船、设施和科技的个数都没变，就沿用上次算好的运营包；
+## 只有压制（跟着舰船进出目标格）每次照算。观测覆盖、舰船所在格这些随时间变的东西，下一回合才反映到收支上。
+## 每次回合推进开始时清空缓存（WorldTime.advance），所以推进以外的调用不会影响结果。
+static func _cached_packages(s: GameState, civ: Civ) -> Array[Dictionary]:
+	var dead := 0
+	for ship in civ.ships:
+		if ship.dead:
+			dead += 1
+	var key := [s.space_epoch, civ.colonies.size(),
+			civ.ships.size(), dead, civ.assets.size(), civ.techs.size()]
+	var index := s.civs.find(civ)
+	var hit: Array = s.package_cache.get(index, [])
+	if hit.is_empty() or hit[0] != key:
+		hit = [key, _base_packages(s, civ), Signals.coverage_packages(s, civ)]
+		s.package_cache[index] = hit
+	var result: Array[Dictionary] = hit[1].duplicate()
+	result.append_array(TacticalEvents.packages(s, civ))
+	result.append_array(hit[2])
+	return result
+
+
+## 星系、戴森球和舰船的产出与维护。
+static func _base_packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for at in civ.colonies:
 		var e := 0.0
@@ -46,8 +75,6 @@ static func packages(s: GameState, civ: Civ) -> Array[Dictionary]:
 				"upkeep": Construction.upkeep(ship.kind), "parent": ""})
 		if ship.kind == Ship.WANDERING_EARTH:
 			result[-1].merge(EarthTransform.gross(civ,ship),true)
-	result.append_array(TacticalEvents.packages(s, civ))
-	result.append_array(Signals.coverage_packages(s, civ))
 	return result
 
 
@@ -71,28 +98,25 @@ static func _totals(items: Array[Dictionary], active: Dictionary) -> Dictionary:
 	return {"net": net, "reference": reference}
 
 
-## 优先级数组前面的包先保留；未排序的按稳定生成顺序处理。
-static func plan(s: GameState, civ: Civ, duration := 1.0) -> Dictionary:
+## 优先级数组前面的包先保留；未排序的按稳定生成顺序处理。cached 只在回合推进里用（见 _cached_packages）。
+static func plan(s: GameState, civ: Civ, duration := 1.0, cached := false) -> Dictionary:
 	var phase:=Time.get_ticks_usec() if s.profiling else 0
-	var items := packages(s, civ)
+	var items := _cached_packages(s, civ) if cached else packages(s, civ)
 	if s.profiling: phase=s._lap("经济/运营包",phase)
+	# 运营包、停用表和优先表都没变时，下面排好的顺序和合计也不变，回合推进里沿用上次的（只为提速）。
+	var memo_key := hash([items, civ.stopped_packages, civ.maintenance_priority]) if cached else 0
+	var memo: Array = s.package_cache.get("plan:%d" % s.civs.find(civ), []) if cached else []
 	var active := {}
-	for p in items:
-		active[p["key"]] = not civ.stopped_packages.has(p["key"])
-	for p in items:
-		if p["parent"] != "" and not active.get(p["parent"], false):
-			active[p["key"]] = false
 	var ordered: Array[String] = []
-	var ordered_keys: Dictionary={}
-	for key in civ.maintenance_priority:
-		if active.has(key):
-			ordered.append(key)
-			ordered_keys[key]=true
-	for p in items:
-		if not ordered_keys.has(p["key"]):
-			ordered.append(p["key"])
-			ordered_keys[p["key"]]=true
-	var totals := _totals(items, active)
+	var totals := {}
+	if not memo.is_empty() and memo[0] == memo_key:
+		active = memo[1].duplicate()
+		ordered = memo[2]
+		totals = {"net": memo[3]["net"].duplicate(), "reference": memo[3]["reference"].duplicate()}
+	else:
+		totals = _order(items, civ, active, ordered)
+		if cached:
+			s.package_cache["plan:%d" % s.civs.find(civ)] = [memo_key, active.duplicate(), ordered, {"net": totals["net"].duplicate(), "reference": totals["reference"].duplicate()}]
 	if s.profiling: phase=s._lap("经济/优先级和合计",phase)
 	while civ.energy_millis + floori(totals["net"][0] * duration * WorkOrder.SCALE + civ.flow_remainder[0] + 1e-8) < 0 or civ.mineral_millis + floori(totals["net"][1] * duration * WorkOrder.SCALE + civ.flow_remainder[1] + 1e-8) < 0:
 		var removed := false
@@ -117,6 +141,25 @@ static func plan(s: GameState, civ: Civ, duration := 1.0) -> Dictionary:
 	totals["active"] = active
 	if s.profiling: s._lap("经济/支付方案",phase)
 	return totals
+
+
+## plan 的前一半：哪些包开着（停用的和父包停用的关掉，填进 active）、按什么顺序停（填进 ordered），返回合计。
+static func _order(items: Array[Dictionary], civ: Civ, active: Dictionary, ordered: Array[String]) -> Dictionary:
+	for p in items:
+		active[p["key"]] = not civ.stopped_packages.has(p["key"])
+	for p in items:
+		if p["parent"] != "" and not active.get(p["parent"], false):
+			active[p["key"]] = false
+	var ordered_keys: Dictionary={}
+	for key in civ.maintenance_priority:
+		if active.has(key):
+			ordered.append(key)
+			ordered_keys[key]=true
+	for p in items:
+		if not ordered_keys.has(p["key"]):
+			ordered.append(p["key"])
+			ordered_keys[p["key"]]=true
+	return _totals(items, active)
 
 
 static func set_operating(civ: Civ, p: Dictionary) -> void:

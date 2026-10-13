@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # ///
 """重新录 README 里的四段动图（build/readme_gifs/*.gif，不进仓库）。画面改了以后跑一次：
 
@@ -11,10 +11,14 @@
 重录后上传到 GitHub 的 README 演示素材 Issue，再更新 README 的图片链接，见 docs/guides/code.md。
 """
 
+if __name__ == "__main__":
+    import uv_check  # 同一目录下的 uv_check.py：不是用 uv 跑、版本或依赖不对时，先说清楚怎么跑
+    uv_check.require(__file__)
+
 import subprocess
 from pathlib import Path
 
-from test import find_godot  # 同一目录下的 test.py
+from godot import find_godot
 
 ROOT = Path(__file__).resolve().parents[2]
 FRAMES = ROOT / "build" / "readme_frames"
