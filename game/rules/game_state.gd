@@ -91,6 +91,8 @@ var package_cache: Dictionary = {}
 ## 用它找出收件者在到达那一刻的位置（Signals.position_at）。只为算得准，复制局面和存档时不带（StateCopy.SKIP）。
 var step_start := 0.0
 var step_motions: Dictionary = {}
+## 子步开始时实体的身份和血量；只给途中历史观测用，不能拿段末的损伤回填过去。
+var step_facts: Dictionary = {}
 ## 不动的观察者看得到哪些星系（Signals._cells_in_view）。只为算得快，同样不打包。
 var view_cells: Dictionary = {}
 ## 看视野时「什么变了」的记录和预测（ViewMarks），算到哪一刻为止（WorldTime.advance 记下这一回合结算到哪里）。

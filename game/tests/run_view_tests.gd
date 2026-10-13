@@ -134,6 +134,13 @@ func run_tests() -> void:
 	await run(test_redraw_after_space_change_keeps_presentation)
 	await run(test_restart)
 	await run(test_end_turn_in_background)
+	await run(test_base_fix_load_waits_for_background_and_isolates_balance)
+	await run(test_base_fix_cancel_load_discards_old_background_result)
+	await run(test_base_fix_failed_load_preserves_state_and_balance)
+	await run(test_base_fix_seek_cancels_background_and_isolates_balance)
+	await run(test_base_fix_repeated_seek_and_load_do_not_cross_commit)
+	await run(test_base_fix_failed_seek_restores_live_state)
+	await run(test_base_fix_replay_and_restart_drain_turn)
 	await run(test_debug_view_other_civ)
 	await run(test_debug_take_over_ai)
 	await run(test_debug_playback)
@@ -1450,6 +1457,247 @@ func test_end_turn_in_background() -> void:
 	check(not view.turning() and view.state != s and not panel._end.disabled, "算完换上新局面，按钮恢复")
 	s.end_turn()
 	check_eq([view.state.turn, view.state.checksum()], [s.turn, s.checksum()], "后台算出的和直接算的一样")
+
+
+## 不靠线程抢跑：旧回合停在信号量上，直到测试明确允许它读取 Balance 并继续。
+func _base_fix_hold_turn(s: GameState) -> Dictionary:
+	var gate := Semaphore.new()
+	var ready := Semaphore.new()
+	var used: Array = []
+	view._turn_from = s
+	view._turn_next = StateCopy.copy(s)
+	var next: GameState = view._turn_next
+	view._turn_task = WorkerThreadPool.add_task(func():
+		ready.post()
+		gate.wait()
+		used.append(Balance.values())
+		next.end_turn())
+	ready.wait()
+	return {"gate": gate, "used": used}
+
+
+func _base_fix_wait_idle() -> void:
+	var started := Time.get_ticks_msec()
+	while (view._turn_task >= 0 or view.saves.busy or view.debug.seeking) and Time.get_ticks_msec() - started < 20000:
+		await process_frame
+	check(view._turn_task < 0 and not view.saves.busy and not view.debug.seeking, "短回归中的计算已全部收尾")
+
+
+## 两回合、不同数值的真实记录；保存后恢复测试正在用的参数。
+func _base_fix_record(path := "") -> GameState:
+	var before := Balance.values()
+	Balance.set_value("ACTION_BASE", 7)
+	Balance.set_value("ENERGY_PER_STAR", Balance.ENERGY_PER_STAR + 7)
+	var s := GameState.new_game(41, 1)
+	s.set_autoplay(s.civs[1], false)
+	for i in 2:
+		s.end_turn()
+	if path != "":
+		var f := FileAccess.open(path, FileAccess.WRITE)
+		f.store_var({"version": view.saves.VERSION, "replay": Replay.from_state(s).to_dict(),
+			"checksum": s.checksum(), "collapse": view.saves.collapse_stamp(s)})
+		f.close()
+	Balance.apply(before)
+	return s
+
+
+func _base_fix_show_live(s: GameState) -> void:
+	view.debug.pause()
+	view.debug.replay = null
+	view.debug.snapshots.clear()
+	view.debug.view_idx = 0
+	show_state(s)
+	view.saves.slice_msec = 0
+	view.debug.seek_slice = 0
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_load_waits_for_background_and_isolates_balance() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_load.forest"
+	var saved := _base_fix_record(path)
+	var kept := fixture()
+	_base_fix_show_live(kept)
+	var pending := _base_fix_hold_turn(kept)
+	view.saves.load_file(path)
+	check(view.saves.busy, "读档先锁住交互，等待旧线程")
+	check_eq(Balance.values(), before, "旧线程结束以前不能改成存档的参数")
+	view.saves.load_file(path)
+	view.debug.seek(0)
+	view.debug.new_game(999, false)
+	check(view.state == kept and not view.debug.seeking, "重复读取和调试跳转不能抢占读档")
+	pending["gate"].post()
+	while view.saves.busy:
+		await process_frame
+		if view.saves.busy:
+			check_eq(Balance.values(), before, "读档每次让出界面时仍使用当前局面参数")
+	await _base_fix_wait_idle()
+	check_eq(pending["used"], [before], "旧回合全过程只使用原参数")
+	check_eq(view.state.checksum(), saved.checksum(), "读档成功只提交重建出的局面")
+	check_eq(Balance.ACTION_BASE, 7, "成功时参数与恢复后的局面一起提交")
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	view.debug.seek_slice = 100
+	DirAccess.remove_absolute(path)
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_cancel_load_discards_old_background_result() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_cancel.forest"
+	_base_fix_record(path)
+	var kept := fixture()
+	_base_fix_show_live(kept)
+	var checksum := kept.checksum()
+	var pending := _base_fix_hold_turn(kept)
+	view.saves.load_file(path)
+	view.saves.cancel()
+	view.saves.cancel()
+	pending["gate"].post()
+	await _base_fix_wait_idle()
+	check(view.state == kept and view.state.checksum() == checksum, "取消后旧线程不能再接回新一回合")
+	check_eq(pending["used"], [before], "取消期间旧线程也没有读到存档参数")
+	check_eq(Balance.values(), before, "取消恢复完整参数状态")
+	# 这次旧线程已不存在，在重建让出界面以后取消，仍保留同一局面和参数。
+	view.saves.load_file(path)
+	check(view.saves.busy, "仍可重新读档")
+	check_eq(Balance.values(), before, "重建中的参数不留在活动局面上")
+	view.saves.cancel()
+	await process_frame
+	check(view.state == kept, "分帧重建取消也保留原局面")
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	DirAccess.remove_absolute(path)
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_failed_load_preserves_state_and_balance() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_failed.forest"
+	_base_fix_record(path)
+	var f := FileAccess.open(path, FileAccess.READ)
+	var data: Dictionary = f.get_var()
+	f.close()
+	data["checksum"] += 1
+	f = FileAccess.open(path, FileAccess.WRITE)
+	f.store_var(data)
+	f.close()
+	var kept := fixture()
+	_base_fix_show_live(kept)
+	var checksum := kept.checksum()
+	var pending := _base_fix_hold_turn(kept)
+	view.saves.load_file(path)
+	pending["gate"].post()
+	await _base_fix_wait_idle()
+	check(view.state == kept and view.state.checksum() == checksum, "校验失败完整保留原局面")
+	check_eq(pending["used"], [before], "校验失败前旧线程只读原参数")
+	check_eq(Balance.values(), before, "失败恢复全部参数")
+	check(overlay._toast.text.contains("校验"), "失败明确显示校验原因")
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	DirAccess.remove_absolute(path)
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_seek_cancels_background_and_isolates_balance() -> void:
+	var defaults := Balance.values()
+	var kept := _base_fix_record()
+	kept.dev_balance("ACTION_BASE", 3)
+	kept.dev_balance("ENERGY_PER_STAR", defaults["ENERGY_PER_STAR"])
+	var before := Balance.values()
+	_base_fix_show_live(kept)
+	var checksum := kept.checksum()
+	var pending := _base_fix_hold_turn(kept)
+	view.debug.seek(1)
+	check(view.debug.seeking, "跳转先锁住交互并等待旧线程")
+	check_eq(Balance.values(), before, "跳转不能让旧线程使用历史参数")
+	view.debug.cancel_seek()
+	view.debug.cancel_seek()
+	pending["gate"].post()
+	await _base_fix_wait_idle()
+	check(view.state == kept and view.state.checksum() == checksum, "取消跳转不接回旧线程结果")
+	check_eq(pending["used"], [before], "旧线程参数保持隔离")
+	view.debug.snapshots.clear()
+	view.debug.seek(1)
+	check_eq(Balance.values(), before, "历史补算让出界面时恢复当前参数")
+	await _base_fix_wait_idle()
+	check_eq([view.state.steps, Balance.ACTION_BASE], [1, 7], "跳转成功同时提交历史局面和参数")
+	Balance.apply(defaults)
+	view.debug.seek_slice = 100
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_repeated_seek_and_load_do_not_cross_commit() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_repeat.forest"
+	var kept := _base_fix_record(path)
+	kept.dev_balance("ACTION_BASE", before["ACTION_BASE"])
+	kept.dev_balance("ENERGY_PER_STAR", before["ENERGY_PER_STAR"])
+	_base_fix_show_live(kept)
+	view.debug.seek(1)
+	view.debug.seek(0)
+	await _base_fix_wait_idle()
+	check_eq([view.state.steps, Balance.ACTION_BASE], [0, 7], "第二次跳转取代第一次，旧协程不得迟到提交")
+	view.debug.seek(2)
+	check(view.debug.seeking, "再次向前跳转正常分帧")
+	view.saves.load_file(path)
+	await _base_fix_wait_idle()
+	check_eq(view.state.steps, 2, "读取存档可以安全接替分帧跳转")
+	check(not view.debug.replaying(), "读取之后仍可继续操作")
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	view.debug.seek_slice = 100
+	DirAccess.remove_absolute(path)
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_failed_seek_restores_live_state() -> void:
+	var before := Balance.values()
+	var kept := _base_fix_record()
+	kept.dev_balance("ACTION_BASE", before["ACTION_BASE"])
+	kept.dev_balance("ENERGY_PER_STAR", before["ENERGY_PER_STAR"])
+	_base_fix_show_live(kept)
+	var r := Replay.from_state(kept)
+	r.checksums[0] += 1
+	view.debug.replay = r
+	var checksum := kept.checksum()
+	view.debug.seek(1)
+	await _base_fix_wait_idle()
+	check(view.state == kept and view.state.checksum() == checksum, "跳转校验失败不提交偏离历史的局面")
+	check_eq(Balance.values(), before, "跳转失败恢复活动局面全部参数")
+	check(view.debug.replay == r and r.desync_step == -1, "失败恢复原回放记录状态")
+	check(view.debug._note.contains("失败"), "跳转失败显示原因")
+	Balance.apply(before)
+	view.debug.replay = null
+	view.debug.seek_slice = 100
+
+
+## 规则：存档和回放，界面和操作
+func test_base_fix_replay_and_restart_drain_turn() -> void:
+	var before := Balance.values()
+	var path := "user://_test_base_fix_open.replay"
+	var saved := _base_fix_record()
+	Replay.from_state(saved).save(path)
+	_base_fix_show_live(fixture())
+	view.background_turns = true
+	view.end_turn()
+	view.debug.load_replay(path)
+	check_eq([view._turn_task, view.state.seed_value, Balance.ACTION_BASE], [-1, 41, 7], "打开调试回放先收尾旧线程，再切换记录参数")
+	view.debug.resume_here()
+	view.end_turn()
+	view.debug.new_game(43, false)
+	check_eq([view._turn_task, view.state.seed_value, Balance.ACTION_BASE], [-1, 43, 3], "调试重开先收尾旧线程，再恢复默认参数")
+	var debug = view.debug
+	view.debug = null
+	view.end_turn()
+	view.new_game(44)
+	check_eq([view._turn_task, view.state.seed_value], [-1, 44], "普通重开也先收尾旧线程")
+	view.debug = debug
+	view.background_turns = false
+	Balance.apply(before)
+	view.saves.slice_msec = 50
+	view.debug.seek_slice = 100
+	DirAccess.remove_absolute(path)
 
 
 ## 重开一局：对局中途要先确认；结束以后「结束回合」变成「再来一局」。
